@@ -2,7 +2,7 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: Phase 1 — core pipeline modules.
+Current: Phase 2 — gate 2 verification (batch, presets, edit re-render, thumbnails, upload guidance).
 
 ## Phase 0 — Scaffold
 - [x] git init + local identity (builder/builder@local), GIT_TERMINAL_PROMPT=0
@@ -19,18 +19,18 @@ Current: Phase 1 — core pipeline modules.
 - [x] GATE 0 PASSED: `import llm` w/o provider SDKs; mock valid for all 7 schemas; auto→mock keyless; initial commit
 
 ## Phase 1 — Core pipeline
-- [ ] ingest.py (+smoke) — file/URL → normalized mp4 + 16k wav
-- [ ] transcribe.py (+smoke) — words/sentences, disk cache by file+model+config hash
-- [ ] scenes.py (+smoke)
-- [ ] highlights.py (+smoke) — LLM scoring, schema validation, retry→repair→rule-based fallback, 30–60s, sentence snapping, hook-first-3s criteria
-- [ ] cut.py (+smoke) — frame-accurate re-encode
-- [ ] reframe.py (+smoke) — face+mesh mouth-variance, motion fallback, center fallback, EMA+lookahead+velocity clamp, scene resets, 1080x1920, measurable smoothness, DEBUG frames
-- [ ] captions.py (+smoke) — ASS karaoke, 3–4 words/line, 220px margin, bundled font via fontsdir
-- [ ] metadata.py (+smoke) — strict JSON, template fallback always valid
-- [ ] pipeline.py — orchestration, markers/resume/--force, --sample (mirrors→synthetic), --provider
-- [ ] rescore: weighted score, drop bottom 30%, keep ≥3 (note if ≤3 candidates)
-- [ ] app.py — Gradio bg threads, live progress, ranked gallery, download
-- [ ] GATE 1 keyless: ≥3 vertical captioned clips + valid metadata; Gradio bg/poll/kill; sentence bounds; smoothness pass; DEBUG frames checked. Tag phase-1.
+- [x] ingest.py (+smoke) — file/URL → normalized mp4 + 16k wav
+- [x] transcribe.py (+smoke) — words/sentences, disk cache by file+model+config hash
+- [x] scenes.py (+smoke)
+- [x] highlights.py (+smoke) — LLM scoring, schema validation, retry→repair→rule-based fallback, 30–60s, sentence snapping, hook-first-3s criteria
+- [x] cut.py (+smoke) — frame-accurate re-encode
+- [x] reframe.py (+smoke) — face+mesh mouth-variance, motion fallback, center fallback, EMA+lookahead+velocity clamp, scene resets, 1080x1920, measurable smoothness, DEBUG frames
+- [x] captions.py (+smoke) — ASS karaoke, 3–4 words/line, 220px margin, bundled font via fontsdir
+- [x] metadata.py (+smoke) — strict JSON, template fallback always valid
+- [x] pipeline.py — orchestration, markers/resume/--force, --sample (mirrors→synthetic), --provider
+- [x] rescore: weighted score, drop bottom 30%, keep ≥3 (note if ≤3 candidates)
+- [x] app.py — Gradio bg threads, live progress, ranked gallery, download
+- [x] GATE 1 PASSED (5 kept clips, tagged phase-1): ≥3 vertical captioned clips + valid metadata; Gradio bg/poll/kill; sentence bounds; smoothness pass; DEBUG frames checked. Tag phase-1.
 
 ## Phase 2 — Creator features
 - [ ] A. 4 caption presets + per-run UI dropdown + .srt export
@@ -66,6 +66,6 @@ Current: Phase 1 — core pipeline modules.
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
 - mediapipe pinned to 0.10.14: 0.10.35 removed the legacy `solutions` API (rule 6 substitution, documented in PLAN.md Decisions).
 - pip reports a protobuf conflict (mediapipe 0.10.14 wants protobuf<5, google-api-core wants >=5.29). Verified harmless: the YouTube client is REST/JSON (no protobuf at runtime); covered by unit tests.
-- google-genai SDK intentionally NOT installed (keyless guarantee); gemini path raises a clean "pip install google-genai" LLMError and is unit-tested without the SDK. Users who set GEMINI_API_KEY must `pip install google-genai` (documented in README).
+- google-genai SDK is intentionally NOT installed in the build venv (gate 0 requires `import llm` with zero provider SDKs; the missing-SDK path raises a clean LLMError and is unit-tested). It IS pinned in requirements.txt so end-user installs get Gemini support out of the box.
 - Sample film is 320×240 (archive.org 512kb derivative) → vertical output is upscaled; fine for gates, users should feed ≥720p sources for quality.
 - Host FFmpeg is 8.1.2 (winget gyan.dev build), verified at setup; Docker image pins its own FFmpeg.
