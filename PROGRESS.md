@@ -2,7 +2,7 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: Phase 2 — gate 2 verification (batch, presets, edit re-render, thumbnails, upload guidance).
+Current: Phase 3 — final QA (clean venv keyless re-run) then v1.0.0.
 
 ## Phase 0 — Scaffold
 - [x] git init + local identity (builder/builder@local), GIT_TERMINAL_PROMPT=0
@@ -33,20 +33,20 @@ Current: Phase 2 — gate 2 verification (batch, presets, edit re-render, thumbn
 - [x] GATE 1 PASSED (5 kept clips, tagged phase-1): ≥3 vertical captioned clips + valid metadata; Gradio bg/poll/kill; sentence bounds; smoothness pass; DEBUG frames checked. Tag phase-1.
 
 ## Phase 2 — Creator features
-- [ ] A. 4 caption presets + per-run UI dropdown + .srt export
-- [ ] B. Batch queue (multi-line + /inbox watcher), per-job status, failure isolation
-- [ ] C. Clip edit & re-render (sentence snap; single-clip re-render; regenerate metadata button)
-- [ ] D. Thumbnails ×3 per clip (sharp, face, mid-action)
-- [ ] E. YouTube upload: full impl, mocked-API unit tests, creds-absent guidance, private default, quota handling, no OAuth in build
-- [ ] F. Aspect options 9:16 / 1:1 / 16:9 pass-through
-- [ ] GATE 2 keyless: batch of 2; presets render; targeted re-render; thumbnails; upload guidance + mocked tests. Tag phase-2.
+- [x] A. 4 caption presets + per-run UI dropdown + .srt export
+- [x] B. Batch queue (multi-line + /inbox watcher), per-job status, failure isolation
+- [x] C. Clip edit & re-render (sentence snap; single-clip re-render; regenerate metadata button)
+- [x] D. Thumbnails ×3 per clip (sharp, face, mid-action)
+- [x] E. YouTube upload: full impl, mocked-API unit tests, creds-absent guidance, private default, quota handling, no OAuth in build
+- [x] F. Aspect options 9:16 / 1:1 / 16:9 pass-through
+- [x] GATE 2 PASSED (tagged phase-2): batch of 2; presets render; targeted re-render; thumbnails; upload guidance + mocked tests. Tag phase-2.
 
 ## Phase 3 — Hardening & release
-- [ ] A. Parallel clip rendering; NVENC auto (x264 fallback); per-stage timing table
-- [ ] B. SQLite job history + UI History tab
-- [ ] C. pytest suite (snapping, durations, chunking, schemas, fallback scorer, metadata template, min-keep, smoothness, JSON failure paths, retry/fallback, idempotency)
-- [ ] D. Dockerfile + compose + run.sh/run.bat + pinned requirements.txt
-- [ ] E. README (per-OS setup, Gemini key, YouTube OAuth walkthrough, config ref, troubleshooting) + final CLAUDE.md
+- [x] A. Parallel clip rendering; NVENC auto (x264 fallback); per-stage timing table
+- [x] B. SQLite job history + UI History tab
+- [x] C. pytest suite (73 tests) (snapping, durations, chunking, schemas, fallback scorer, metadata template, min-keep, smoothness, JSON failure paths, retry/fallback, idempotency)
+- [x] D. Dockerfile + compose + run.sh/run.bat + pinned requirements.txt
+- [x] E. README (per-OS setup, Gemini key, YouTube OAuth walkthrough, config ref, troubleshooting) + final CLAUDE.md
 - [ ] F. Final QA: clean venv, keyless gate-1+2 re-run, walk this checklist
 - [ ] GATE 3: pytest green; docker static-validated (no daemon on host); tag v1.0.0
 
