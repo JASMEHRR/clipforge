@@ -101,13 +101,18 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     }
 
     try:
-        report("ingest", 0.02, "normalizing input")
-        info = stages.run("ingest",
-                          lambda: ingest_mod.ingest(source, job_dir, cfg))
+        report("ingest", 0.02, "downloading / normalizing input")
+        info = stages.run("ingest", lambda: ingest_mod.ingest(
+            source, job_dir, cfg,
+            progress_cb=lambda f, msg: report("ingest", 0.02 + 0.12 * f, msg)))
 
         report("transcribe", 0.15, "transcribing audio")
         transcript = stages.run("transcribe", lambda: transcribe_mod.transcribe(
-            info["audio_path"], cfg, debug_dir=debug_dir))
+            info["audio_path"], cfg, debug_dir=debug_dir,
+            progress_cb=lambda f: report(
+                "transcribe", 0.15 + 0.15 * f,
+                f"transcribing {f * 100:.0f}% "
+                f"({f * info['duration'] / 60:.0f}/{info['duration'] / 60:.0f} min)")))
         if not transcript["sentences"]:
             notes.append("empty transcript — mechanical windows used "
                          "(passed mechanically; re-verify with a real sample)")

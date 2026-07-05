@@ -39,8 +39,10 @@ def model_config(cfg: dict) -> tuple[str, str, str]:
 
 
 def transcribe(audio_path: str | Path, cfg: dict | None = None,
-               debug_dir: str | Path | None = None) -> dict:
-    """Returns Transcript dict (schema-validated)."""
+               debug_dir: str | Path | None = None,
+               progress_cb=None) -> dict:
+    """Returns Transcript dict (schema-validated). `progress_cb(frac)` gets
+    live 0..1 progress while Whisper walks the audio."""
     cfg = cfg or load_config()
     audio_path = Path(audio_path)
     if not audio_path.exists():
@@ -58,16 +60,23 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
         _write_debug(data, debug_dir)
         return data
 
-    log.info("whisper %s on %s (%s)", model_name, device, compute)
+    beam = int(cfg["whisper"].get("beam_size", 1))
+    log.info("whisper %s on %s (%s, beam=%d)", model_name, device, compute, beam)
     try:
+        import os as _os
+
         from faster_whisper import WhisperModel
         model = WhisperModel(model_name, device=device, compute_type=compute,
+                             cpu_threads=(_os.cpu_count() or 4),
                              download_root=str(ROOT / cfg["whisper"]["model_dir"]))
         segments, info = model.transcribe(
             str(audio_path), word_timestamps=True, vad_filter=True,
-            language=cfg["whisper"].get("language"))
+            beam_size=beam, language=cfg["whisper"].get("language"))
+        total = float(info.duration or 0.0) or 1.0
         words = []
         for seg in segments:  # generator — streams, memory-safe
+            if progress_cb:
+                progress_cb(min(1.0, float(seg.end) / total))
             for w in seg.words or []:
                 token = w.word.strip()
                 if token:

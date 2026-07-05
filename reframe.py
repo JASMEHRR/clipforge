@@ -170,12 +170,15 @@ def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
             min_detection_confidence=rcfg["min_face_confidence"]) as fm:
         idx = 0
         while True:
+            # grab() skips the expensive decode for frames we won't inspect
+            if idx % every:
+                if not cap.grab():
+                    break
+                idx += 1
+                continue
             ok, frame = cap.read()
             if not ok:
                 break
-            if idx % every:
-                idx += 1
-                continue
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             faces = []
             det = fd.process(rgb)

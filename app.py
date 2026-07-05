@@ -33,8 +33,17 @@ def _run_generator(file_path, url, preset, aspect, provider):
     q: queue.Queue = queue.Queue()
     holder: dict = {}
 
+    import time
+    last = {"t": 0.0}
+
     def cb(stage, frac, msg):
-        q.put(f"[{int(frac * 100):3d}%] {stage}: {msg}")
+        now = time.monotonic()
+        if now - last["t"] < 1.0 and 0.01 < frac < 0.99:
+            return  # throttle: at most ~1 update/sec
+        last["t"] = now
+        filled = int(frac * 24)
+        bar = "█" * filled + "░" * (24 - filled)
+        q.put(f"{bar} {frac * 100:3.0f}%  {stage}: {msg}")
 
     def work():
         try:
@@ -49,11 +58,22 @@ def _run_generator(file_path, url, preset, aspect, provider):
     threading.Thread(target=work, daemon=True).start()
     lines: list[str] = [f"Job started: {source}"]
     yield "\n".join(lines), "", [], []
+
+    def _stage_of(s: str) -> str:
+        return s.split("%", 1)[-1].split(":", 1)[0] if "%" in s else s
+
     while True:
         item = q.get()
         if item is None:
             break
-        lines.append(item)
+        # progress-bar updates for the same stage replace the previous line
+        # instead of flooding the log
+        if (lines and lines[-1].startswith(("█", "░"))
+                and item.startswith(("█", "░"))
+                and _stage_of(lines[-1]) == _stage_of(item)):
+            lines[-1] = item
+        else:
+            lines.append(item)
         yield "\n".join(lines[-25:]), "", [], []
 
     if "error" in holder:

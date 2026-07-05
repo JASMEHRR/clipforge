@@ -56,8 +56,10 @@ def demo_cap_seconds() -> float | None:
     return None
 
 
-def ingest(source: str, job_dir: str | Path, cfg: dict | None = None) -> dict:
-    """Returns IngestInfo dict (schema-validated); writes ingest_info.json."""
+def ingest(source: str, job_dir: str | Path, cfg: dict | None = None,
+           progress_cb=None) -> dict:
+    """Returns IngestInfo dict (schema-validated); writes ingest_info.json.
+    `progress_cb(frac, msg)` gets live download progress for URL sources."""
     cfg = cfg or load_config()
     job_dir = Path(job_dir)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +67,7 @@ def ingest(source: str, job_dir: str | Path, cfg: dict | None = None) -> dict:
     audio = job_dir / "audio.wav"
 
     if is_url(source):
-        src_file = _download_url(source, job_dir)
+        src_file = _download_url(source, job_dir, progress_cb)
         source_type = "url"
     else:
         src_file = Path(source)
@@ -143,13 +145,22 @@ def ingest(source: str, job_dir: str | Path, cfg: dict | None = None) -> dict:
     return result
 
 
-def _download_url(url: str, job_dir: Path) -> Path:
+def _download_url(url: str, job_dir: Path, progress_cb=None) -> Path:
     try:
         import yt_dlp
     except ImportError as e:
         raise IngestError("yt-dlp not installed", detail=str(e)) from e
+
+    def _hook(d):
+        if progress_cb and d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            if total:
+                frac = d.get("downloaded_bytes", 0) / total
+                progress_cb(frac, f"downloading {frac * 100:.0f}%")
+
     out_tmpl = str(job_dir / "source.%(ext)s")
     opts = {
+        "progress_hooks": [_hook],
         # Prefer H.264 (avc1) so normalization is a remux, not a re-encode;
         # fall back progressively. 1080p cap keeps CPU paths sane.
         "format": ("bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]"
