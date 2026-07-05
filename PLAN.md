@@ -131,7 +131,10 @@ Live calls never happen in gates (gates force `--provider mock`).
 | JSON Schema dicts + jsonschema lib for contracts | pydantic | schema dicts feed Gemini response_schema directly; single source of truth |
 | Mock provider synthesizes from schema + task-specific canned logic | random data | deterministic, schema-valid, exercises real code paths |
 | Sample: archive.org public-domain talk | Pexels, Wikimedia | direct mp4, stable, license-clean; HEAD-verified w/ mirrors |
-| Font: Inter (OFL) primary | Montserrat | excellent legibility at caption sizes; OFL |
+| Font: Montserrat (OFL) | Inter | direct raw static TTF URLs (no zip extraction); chunky weights suit captions; OFL |
+| groq/ollama via plain requests HTTP | official SDKs | fewer deps; `import llm` needs no SDK; unit tests mock HTTP |
+| mediapipe pinned 0.10.14 | 0.10.35 (latest) | 0.10.35 removed the legacy `solutions` API used for FaceDetection/FaceMesh |
+| Crop smoothing: accel-limited trapezoidal follower | plain velocity clamp | velocity clamping alone spikes acceleration on target flips; follower guarantees both bounds by construction |
 | Face detect: MediaPipe FaceDetection + FaceMesh mouth variance | true ASD models | spec forbids audio-visual ASD; largest-face + mouth-variance approximation |
 | Reframe smoothing: EMA + centered moving-average look-ahead + velocity clamp | Kalman | simpler, unit-testable, meets measurable-smoothness requirement |
 | Captions: libass ASS karaoke via ffmpeg subtitles filter | drawtext, moviepy | karaoke \k tags + styling native to ASS; fontsdir for bundled font |

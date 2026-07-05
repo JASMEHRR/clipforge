@@ -1,0 +1,15 @@
+services:
+  clipforge:
+    build: .
+    image: clipforge:latest
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./output:/app/output
+      - ./cache:/app/cache
+      - ./samples:/app/samples
+      - ./inbox:/app/inbox
+    env_file:
+      - path: .env
+        required: false      # runs fully keyless (mock provider)
+    restart: unless-stopped

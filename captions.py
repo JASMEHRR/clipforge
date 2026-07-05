@@ -13,7 +13,7 @@ from pathlib import Path
 
 from config import ROOT, load_config
 from errors import CaptionError
-from ffutil import filter_path, probe, run_ffmpeg
+from ffutil import filter_path, probe, run_ffmpeg, video_encode_args
 from logutil import get_logger
 
 log = get_logger("captions")
@@ -158,13 +158,11 @@ def caption_clip(video_path: str | Path, words: list[dict],
     srt_path = out_path.with_suffix(".srt")
     write_srt(words, srt_path, cfg)
 
-    r = cfg["render"]
     if not words:
         log.warning("no words for %s — burning skipped (mechanical run)",
                     video_path.name)
-        run_ffmpeg(["-i", video_path, "-c:v", "libx264",
-                    "-preset", r["preset_final"], "-crf", str(r["crf"]),
-                    "-c:a", "copy", out_path])
+        run_ffmpeg(["-i", video_path] + video_encode_args(cfg, final=True)
+                   + ["-c:a", "copy", out_path])
         return out_path
 
     info = probe(video_path)
@@ -173,10 +171,9 @@ def caption_clip(video_path: str | Path, words: list[dict],
     fontsdir = ROOT / cfg["captions"]["font_dir"]
     vf = (f"subtitles=filename='{filter_path(ass_path)}'"
           f":fontsdir='{filter_path(fontsdir)}'")
-    run_ffmpeg(["-i", video_path, "-vf", vf,
-                "-c:v", "libx264", "-preset", r["preset_final"],
-                "-crf", str(r["crf"]), "-pix_fmt", "yuv420p",
-                "-c:a", "copy", out_path])
+    run_ffmpeg(["-i", video_path, "-vf", vf]
+               + video_encode_args(cfg, final=True)
+               + ["-c:a", "copy", out_path])
     log.info("captions burned (%s, %d words) -> %s",
              preset_name, len(words), out_path.name)
     return out_path

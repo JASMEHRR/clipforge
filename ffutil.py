@@ -81,6 +81,38 @@ def verify_ffmpeg(cfg: dict) -> str:
     return ver
 
 
+_nvenc: bool | None = None
+
+
+def nvenc_available() -> bool:
+    """NVIDIA GPU present AND ffmpeg built with h264_nvenc (cached)."""
+    global _nvenc
+    if _nvenc is None:
+        try:
+            gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                                 timeout=15).returncode == 0
+            enc = gpu and "h264_nvenc" in subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True,
+                text=True, timeout=30).stdout
+            _nvenc = bool(enc)
+        except (OSError, subprocess.SubprocessError):
+            _nvenc = False
+        log.info("encoder: %s", "h264_nvenc (GPU)" if _nvenc else "libx264 (CPU)")
+    return _nvenc
+
+
+def video_encode_args(cfg: dict, final: bool = False) -> list[str]:
+    """Encoder argument set: NVENC when config allows and hardware exists,
+    otherwise libx264 with the configured preset/crf."""
+    r = cfg["render"]
+    if r.get("use_nvenc", "auto") == "auto" and nvenc_available():
+        return ["-c:v", "h264_nvenc", "-preset", "p5" if final else "p3",
+                "-cq", str(r["crf"]), "-pix_fmt", "yuv420p"]
+    preset = r["preset_final"] if final else r["preset_intermediate"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(r["crf"]),
+            "-pix_fmt", "yuv420p"]
+
+
 def filter_path(p: str | Path) -> str:
     """Escape a filesystem path for use inside an ffmpeg filter argument
     (subtitles/ass/sendcmd filenames) — Windows drive colons and backslashes."""

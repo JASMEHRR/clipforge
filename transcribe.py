@@ -55,6 +55,7 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
         log.info("transcript cache hit: %s", cache_file.name)
         data = json.loads(cache_file.read_text(encoding="utf-8"))
         validate(data, "transcript")
+        _write_debug(data, debug_dir)
         return data
 
     log.info("whisper %s on %s (%s)", model_name, device, compute)
@@ -92,11 +93,15 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
     cache_file.write_text(json.dumps(data), encoding="utf-8")
     log.info("transcribed: %d words, %d sentences, lang=%s",
              len(words), len(sentences), language)
+    _write_debug(data, debug_dir)
+    return data
+
+
+def _write_debug(data: dict, debug_dir) -> None:
     if debug_dir:
         Path(debug_dir).mkdir(parents=True, exist_ok=True)
         (Path(debug_dir) / "transcript.json").write_text(
             json.dumps(data, indent=2), encoding="utf-8")
-    return data
 
 
 def build_sentences(words: list[dict]) -> list[dict]:

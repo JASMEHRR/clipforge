@@ -7,7 +7,7 @@ from pathlib import Path
 
 from config import load_config
 from errors import CutError
-from ffutil import probe, run_ffmpeg
+from ffutil import probe, run_ffmpeg, video_encode_args
 from logutil import get_logger
 
 log = get_logger("cut")
@@ -27,11 +27,10 @@ def cut_clip(video_path: str | Path, start: float, end: float,
     # -ss before -i: fast keyframe seek, then decode — frame-accurate because
     # we re-encode. -t is the clip duration.
     run_ffmpeg(["-ss", f"{start:.3f}", "-i", video_path,
-                "-t", f"{end - start:.3f}",
-                "-c:v", "libx264", "-preset", r["preset_intermediate"],
-                "-crf", str(r["crf"]), "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", r["audio_bitrate"],
-                "-movflags", "+faststart", out_path])
+                "-t", f"{end - start:.3f}"]
+               + video_encode_args(cfg)
+               + ["-c:a", "aac", "-b:a", r["audio_bitrate"],
+                  "-movflags", "+faststart", out_path])
     got = probe(out_path)["duration"]
     want = end - start
     if abs(got - want) > 1.5:

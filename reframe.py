@@ -26,7 +26,7 @@ import numpy as np
 
 from config import load_config
 from errors import ReframeError
-from ffutil import filter_path, probe, run_ffmpeg
+from ffutil import filter_path, probe, run_ffmpeg, video_encode_args
 from logutil import get_logger
 
 log = get_logger("reframe")
@@ -278,14 +278,11 @@ def reframe_clip(clip_path: str | Path, out_path: str | Path,
         for i, p in enumerate(path):
             f.write(f"{i / fps:.4f} crop@dyn x {p - half:.1f};\n")
 
-    r = cfg["render"]
     vf = (f"sendcmd=f='{filter_path(cmd_file)}',"
           f"crop@dyn=w={cw}:h={ch}:x={max(0.0, path[0] - half):.1f}:y={y0},"
           f"scale={ow}:{oh}:flags=lanczos,setsar=1")
-    run_ffmpeg(["-i", clip_path, "-vf", vf,
-                "-c:v", "libx264", "-preset", r["preset_intermediate"],
-                "-crf", str(r["crf"]), "-pix_fmt", "yuv420p",
-                "-c:a", "copy", out_path])
+    run_ffmpeg(["-i", clip_path, "-vf", vf]
+               + video_encode_args(cfg) + ["-c:a", "copy", out_path])
 
     metrics = {"aspect": aspect, "crop": [cw, ch], "output": [ow, oh],
                "tracking": stats, "smoothness": worst,

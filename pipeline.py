@@ -126,19 +126,27 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
         clips = []
         n = max(1, len(candidates))
+        workers = _worker_count(cfg, n)
         with stage_timer(log, "render_clips", timings):
-            for i, cand in enumerate(candidates):
-                report("render", 0.45 + 0.45 * i / n,
-                       f"rendering clip {i + 1}/{n}")
-                try:
-                    clips.append(_render_one(
-                        i, cand, info, transcript, scene_data, job_dir, cfg,
-                        provider, preset, aspect, debug_dir,
-                        cut_mod, reframe_mod, captions_mod, metadata_mod,
-                        scenes_mod))
-                except ClipForgeError as e:
-                    log.error("clip %02d failed: %s — continuing", i, e)
-                    notes.append(f"clip {i:02d} failed: {e}")
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            done = 0
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(
+                    _render_one, i, cand, info, transcript, scene_data,
+                    job_dir, cfg, provider, preset, aspect, debug_dir,
+                    cut_mod, reframe_mod, captions_mod, metadata_mod,
+                    scenes_mod): i for i, cand in enumerate(candidates)}
+                for fut in as_completed(futures):
+                    i = futures[fut]
+                    done += 1
+                    report("render", 0.45 + 0.45 * done / n,
+                           f"clip {done}/{n} finished")
+                    try:
+                        clips.append(fut.result())
+                    except ClipForgeError as e:
+                        log.error("clip %02d failed: %s — continuing", i, e)
+                        notes.append(f"clip {i:02d} failed: {e}")
+            clips.sort(key=lambda c: c["index"])
         if not clips:
             raise ClipForgeError("no clips rendered successfully")
 
@@ -223,6 +231,14 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "thumbnails": thumbs, "metadata": meta, "reframe": metrics,
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
+
+
+def _worker_count(cfg: dict, n_clips: int) -> int:
+    import os as _os
+    setting = cfg["render"].get("parallel_workers", "auto")
+    if setting != "auto":
+        return max(1, int(setting))
+    return max(1, min(n_clips, (_os.cpu_count() or 2) // 2))
 
 
 def _print_timings(timings: dict) -> None:

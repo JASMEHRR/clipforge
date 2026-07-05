@@ -322,5 +322,6 @@ def build_app() -> gr.Blocks:
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
-    build_app().queue().launch(server_name="127.0.0.1", server_port=port,
-                               show_api=False, inbrowser=False, quiet=True)
+    host = os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1")  # 0.0.0.0 in Docker
+    build_app().queue().launch(server_name=host, server_port=port,
+                               inbrowser=False, quiet=True)

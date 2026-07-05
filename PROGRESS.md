@@ -64,5 +64,8 @@ Current: Phase 1 — core pipeline modules.
 
 ## Known Issues
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
+- mediapipe pinned to 0.10.14: 0.10.35 removed the legacy `solutions` API (rule 6 substitution, documented in PLAN.md Decisions).
+- pip reports a protobuf conflict (mediapipe 0.10.14 wants protobuf<5, google-api-core wants >=5.29). Verified harmless: the YouTube client is REST/JSON (no protobuf at runtime); covered by unit tests.
+- google-genai SDK intentionally NOT installed (keyless guarantee); gemini path raises a clean "pip install google-genai" LLMError and is unit-tested without the SDK. Users who set GEMINI_API_KEY must `pip install google-genai` (documented in README).
 - Sample film is 320×240 (archive.org 512kb derivative) → vertical output is upscaled; fine for gates, users should feed ≥720p sources for quality.
 - Host FFmpeg is 8.1.2 (winget gyan.dev build), verified at setup; Docker image pins its own FFmpeg.
