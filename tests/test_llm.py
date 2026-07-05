@@ -72,10 +72,27 @@ def test_exhausted_raises_llmerror(cfg, monkeypatch):
                           cfg=cfg)
 
 
+try:
+    from google import genai as _genai  # noqa: F401
+    _HAS_GENAI_SDK = True
+except ImportError:
+    _HAS_GENAI_SDK = False
+
+
+@pytest.mark.skipif(_HAS_GENAI_SDK,
+                    reason="google-genai installed in this env (user install)")
 def test_gemini_without_sdk_raises_clean_error(cfg, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake")
     monkeypatch.setattr(llm.time, "sleep", lambda s: None)
     # google-genai is intentionally NOT installed in the build env
+    with pytest.raises(LLMError):
+        llm._gemini_complete(SCHEMAS["clip_score"], "p", cfg)
+
+
+def test_gemini_without_key_raises_clean_error(cfg, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    if not _HAS_GENAI_SDK:
+        pytest.skip("SDK absent — covered by the no-SDK test above")
     with pytest.raises(LLMError):
         llm._gemini_complete(SCHEMAS["clip_score"], "p", cfg)
 

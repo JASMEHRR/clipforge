@@ -65,7 +65,7 @@ Current: Phase 3 — final QA (clean venv keyless re-run) then v1.0.0.
 ## Known Issues
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
 - mediapipe pinned to 0.10.14: 0.10.35 removed the legacy `solutions` API (rule 6 substitution, documented in PLAN.md Decisions).
-- pip reports a protobuf conflict (mediapipe 0.10.14 wants protobuf<5, google-api-core wants >=5.29). Verified harmless: the YouTube client is REST/JSON (no protobuf at runtime); covered by unit tests.
+- ~~pip protobuf conflict~~ RESOLVED: google-api-core pinned to 2.24.2 (accepts protobuf 4.x alongside mediapipe 0.10.14); `pip check` clean; clean-venv install from requirements.txt verified.
 - google-genai SDK is intentionally NOT installed in the build venv (gate 0 requires `import llm` with zero provider SDKs; the missing-SDK path raises a clean LLMError and is unit-tested). It IS pinned in requirements.txt so end-user installs get Gemini support out of the box.
 - Sample film is 320×240 (archive.org 512kb derivative) → vertical output is upscaled; fine for gates, users should feed ≥720p sources for quality.
 - Host FFmpeg is 8.1.2 (winget gyan.dev build), verified at setup; Docker image pins its own FFmpeg.
