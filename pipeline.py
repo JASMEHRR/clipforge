@@ -157,6 +157,11 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         validate(job, "job_record")
         (job_dir / "job.json").write_text(json.dumps(job, indent=2),
                                           encoding="utf-8")
+        try:
+            from history import record_job
+            record_job(job, job_dir, cfg)
+        except Exception as e:  # noqa: BLE001 — history is best-effort
+            log.warning("history record failed: %s", e)
         _print_timings(timings)
         remove_file_handler(fh)
 
@@ -203,13 +208,21 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
     (clip_dir / "metadata.json").write_text(json.dumps(meta, indent=2),
                                             encoding="utf-8")
+
+    thumbs: list[str] = []
+    try:
+        from thumbnails import extract_thumbnails
+        thumbs = [str(p) for p in extract_thumbnails(final)]
+    except Exception as e:  # noqa: BLE001 — thumbnails are best-effort
+        log.warning("thumbnails failed for clip %02d: %s", i, e)
+
     return {"index": i, "start": start, "end": end,
             "duration": round(end - start, 3),
             "hook": cand["hook"], "reason": cand.get("reason", ""),
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
-            "metadata": meta, "reframe": metrics, "preset":
-            preset or cfg["captions"]["preset"], "aspect": aspect}
+            "thumbnails": thumbs, "metadata": meta, "reframe": metrics,
+            "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
 
 
 def _print_timings(timings: dict) -> None:
