@@ -16,11 +16,19 @@ class FFmpegError(ClipForgeError):
     stage = "ffmpeg"
 
 
-def run_ffmpeg(args: list[str], timeout: int = 1800) -> None:
-    """Run ffmpeg -y -v error <args>; raise FFmpegError with stderr tail."""
+def run_ffmpeg(args: list[str], timeout: int = 1800,
+               progress_label: str | None = None) -> None:
+    """Run ffmpeg -y -v error <args>; raise FFmpegError with stderr tail.
+
+    With `progress_label`, ffmpeg's -progress stream is read live and an
+    out_time line is logged every ~30s so long re-encodes look alive
+    instead of hung."""
     cmd = ["ffmpeg", "-y", "-v", "error"] + [str(a) for a in args]
     log.info("ffmpeg %s", " ".join(cmd[3:6]) + (" ..." if len(cmd) > 6 else ""))
     try:
+        if progress_label:
+            _run_with_progress(cmd, timeout, progress_label)
+            return
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise FFmpegError(f"ffmpeg timed out after {timeout}s") from e
@@ -29,6 +37,30 @@ def run_ffmpeg(args: list[str], timeout: int = 1800) -> None:
     if r.returncode != 0:
         raise FFmpegError(f"ffmpeg exited {r.returncode}",
                           detail=(r.stderr or "")[-1000:])
+
+
+def _run_with_progress(cmd: list[str], timeout: int, label: str) -> None:
+    import time
+    # -progress pipe:1 emits key=value blocks; -stats_period throttles them.
+    cmd = cmd[:3] + ["-stats_period", "30", "-progress", "pipe:1"] + cmd[3:]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + timeout
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            if time.monotonic() > deadline:
+                proc.kill()
+                raise FFmpegError(f"ffmpeg timed out after {timeout}s ({label})")
+            if line.startswith("out_time="):
+                log.info("%s: encoded up to %s", label, line.strip()[9:])
+        proc.wait(timeout=max(30, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired as e:
+        proc.kill()
+        raise FFmpegError(f"ffmpeg timed out after {timeout}s ({label})") from e
+    if proc.returncode != 0:
+        stderr = proc.stderr.read() if proc.stderr else ""
+        raise FFmpegError(f"ffmpeg exited {proc.returncode}",
+                          detail=stderr[-1000:])
 
 
 def probe(path: str | Path) -> dict:
@@ -54,6 +86,7 @@ def probe(path: str | Path) -> dict:
         "height": int(v["height"]),
         "fps": fps,
         "vcodec": v.get("codec_name", ""),
+        "pix_fmt": v.get("pix_fmt", ""),
         "acodec": (a or {}).get("codec_name", ""),
         "has_audio": a is not None,
     }

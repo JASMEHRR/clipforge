@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from config import load_config
@@ -19,6 +20,40 @@ log = get_logger("ingest")
 
 def is_url(source: str) -> bool:
     return source.lower().startswith(("http://", "https://"))
+
+
+def normalize_plan(info: dict, suffix: str) -> str:
+    """Decide how to normalize a probed input (pure; unit-tested):
+    - 'remux'      — h264 + yuv420p + aac in an mp4-family container:
+                     stream-copy both (fast, no quality loss)
+    - 'audio_only' — video already fine but audio missing/non-aac:
+                     copy video, transcode/generate audio only
+    - 'reencode'   — anything else (vp9/av1/hevc, exotic pixel formats,
+                     non-mp4 containers whose remux can be unreliable)
+    """
+    video_ok = (info.get("vcodec") == "h264"
+                and info.get("pix_fmt", "") in ("yuv420p", "yuvj420p"))
+    container_ok = suffix.lower() in (".mp4", ".m4v", ".mov")
+    if not (video_ok and container_ok):
+        return "reencode"
+    if info.get("has_audio") and info.get("acodec") == "aac":
+        return "remux"
+    return "audio_only"
+
+
+def ffmpeg_timeout(cfg: dict, duration: float) -> int:
+    """Timeout scaled to input length: max(base, duration * per_second)."""
+    f = cfg.get("ffmpeg", {})
+    base = int(f.get("timeout_base_seconds", 1800))
+    per = float(f.get("timeout_per_input_second", 3.0))
+    return int(max(base, duration * per))
+
+
+def demo_cap_seconds() -> float | None:
+    """CLIPFORGE_DEMO=1 caps ingest length (hosted demo Spaces)."""
+    if os.environ.get("CLIPFORGE_DEMO") == "1":
+        return float(os.environ.get("CLIPFORGE_DEMO_MAX_SECONDS", "300"))
+    return None
 
 
 def ingest(source: str, job_dir: str | Path, cfg: dict | None = None) -> dict:
@@ -43,28 +78,47 @@ def ingest(source: str, job_dir: str | Path, cfg: dict | None = None) -> dict:
     except Exception as e:
         raise IngestError(f"could not probe input: {src_file}", detail=str(e)) from e
 
-    log.info("input: %s %dx%d %.2ffps %.1fs v=%s a=%s",
+    log.info("input: %s %dx%d %.2ffps %.1fs v=%s(%s) a=%s",
              src_file.name, info["width"], info["height"], info["fps"],
-             info["duration"], info["vcodec"], info["acodec"] or "-")
+             info["duration"], info["vcodec"], info.get("pix_fmt", "?"),
+             info["acodec"] or "-")
 
-    if (info["vcodec"] == "h264" and info["acodec"] == "aac"
-            and src_file.suffix.lower() == ".mp4"):
-        run_ffmpeg(["-i", src_file, "-c", "copy", "-movflags", "+faststart", video])
-        log.info("normalize: remux fast path (already h264+aac mp4)")
-    else:
-        r = cfg["render"]
-        args = ["-i", src_file,
-                "-c:v", "libx264", "-preset", r["preset_intermediate"],
-                "-crf", str(r["crf"]), "-pix_fmt", "yuv420p",
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
+    timeout = ffmpeg_timeout(cfg, info["duration"])
+    cap = demo_cap_seconds()
+    limit = ["-t", f"{cap:.0f}"] if cap and info["duration"] > cap else []
+    if limit:
+        log.warning("DEMO mode: input capped to %.0fs (of %.0fs)",
+                    cap, info["duration"])
+
+    plan = normalize_plan(info, src_file.suffix)
+    r = cfg["render"]
+    if plan == "remux":
+        run_ffmpeg(["-i", src_file] + limit
+                   + ["-c", "copy", "-movflags", "+faststart", video],
+                   timeout=timeout)
+        log.info("normalize: remux fast path (h264/yuv420p/aac, no re-encode)")
+    elif plan == "audio_only":
+        args = ["-i", src_file] + limit + ["-c:v", "copy"]
         args += (["-c:a", "aac", "-b:a", r["audio_bitrate"]]
                  if info["has_audio"] else ["-an"])
-        run_ffmpeg(args + ["-movflags", "+faststart", video])
-        log.info("normalize: re-encoded to h264/aac")
+        run_ffmpeg(args + ["-movflags", "+faststart", video], timeout=timeout)
+        log.info("normalize: video copied, audio %s",
+                 "transcoded to aac" if info["has_audio"] else "absent")
+    else:
+        args = ["-i", src_file] + limit + [
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", str(r["crf"]), "-pix_fmt", "yuv420p",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
+        args += (["-c:a", "aac", "-b:a", r["audio_bitrate"]]
+                 if info["has_audio"] else ["-an"])
+        run_ffmpeg(args + ["-movflags", "+faststart", video], timeout=timeout,
+                   progress_label=f"normalize {src_file.name}")
+        log.info("normalize: re-encoded to h264/aac (source was %s/%s)",
+                 info["vcodec"], info.get("pix_fmt") or "?")
 
     if info["has_audio"]:
         run_ffmpeg(["-i", video, "-vn", "-ac", "1", "-ar", "16000",
-                    "-c:a", "pcm_s16le", audio])
+                    "-c:a", "pcm_s16le", audio], timeout=timeout)
     else:
         # Silent track keeps downstream contracts intact (empty transcript).
         run_ffmpeg(["-f", "lavfi", "-i",
@@ -96,7 +150,12 @@ def _download_url(url: str, job_dir: Path) -> Path:
         raise IngestError("yt-dlp not installed", detail=str(e)) from e
     out_tmpl = str(job_dir / "source.%(ext)s")
     opts = {
-        "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b",
+        # Prefer H.264 (avc1) so normalization is a remux, not a re-encode;
+        # fall back progressively. 1080p cap keeps CPU paths sane.
+        "format": ("bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]"
+                   "/b[vcodec^=avc1][height<=1080][ext=mp4]"
+                   "/bv*[height<=1080][ext=mp4]+ba"
+                   "/b[height<=1080]/b"),
         "outtmpl": out_tmpl,
         "merge_output_format": "mp4",
         "quiet": True,

@@ -7,6 +7,8 @@ python:
 ffmpeg:
   pinned_version: "8.1.2"   # verified at setup; Docker pins its own build
   require_exact: false      # host: warn on drift; Docker: exact
+  timeout_base_seconds: 1800        # ffmpeg watchdog floor
+  timeout_per_input_second: 3.0     # scales with input duration: max(base, dur*this)
 
 llm:
   provider: auto            # auto | mock | gemini | groq | ollama
