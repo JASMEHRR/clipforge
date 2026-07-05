@@ -112,7 +112,7 @@ paths:
 
 render:
   crf: 19
-  preset_final: medium
+  preset_final: veryfast   # medium blew the <15min CPU budget; veryfast @ crf19 is visually fine for shorts
   preset_intermediate: veryfast
   audio_bitrate: 128k
   use_nvenc: auto               # auto | never  (auto: NVENC when NVIDIA GPU present)

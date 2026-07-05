@@ -1,6 +1,8 @@
 # CLAUDE.md — ClipForge project guide
 
-**Resume pointer: current phase and next task → see top of PROGRESS.md.** Architecture/decisions → PLAN.md.
+**Resume pointer: current phase and next task → see top of PROGRESS.md.** Architecture/decisions → PLAN.md. User docs → README.md.
+
+Release state: phases 0–2 tagged (phase-1, phase-2); v1.0.0 tagged after Gate 3 (clean-venv keyless QA + pytest + docker static validation).
 
 ## What this is
 Local Opus Clip alternative: long video → ranked 30–60s vertical clips with karaoke captions + metadata. Zero-touch build; ALL gates run keyless (`--provider mock`, no .env).

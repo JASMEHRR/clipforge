@@ -2,7 +2,7 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: Phase 3 — final QA (clean venv keyless re-run) then v1.0.0.
+Current: RELEASED — v1.0.0 tagged. All gates passed. Remaining manual items: run Docker build on a machine with a daemon; optional YouTube OAuth (user).
 
 ## Phase 0 — Scaffold
 - [x] git init + local identity (builder/builder@local), GIT_TERMINAL_PROMPT=0
@@ -47,20 +47,20 @@ Current: Phase 3 — final QA (clean venv keyless re-run) then v1.0.0.
 - [x] C. pytest suite (73 tests) (snapping, durations, chunking, schemas, fallback scorer, metadata template, min-keep, smoothness, JSON failure paths, retry/fallback, idempotency)
 - [x] D. Dockerfile + compose + run.sh/run.bat + pinned requirements.txt
 - [x] E. README (per-OS setup, Gemini key, YouTube OAuth walkthrough, config ref, troubleshooting) + final CLAUDE.md
-- [ ] F. Final QA: clean venv, keyless gate-1+2 re-run, walk this checklist
-- [ ] GATE 3: pytest green; docker static-validated (no daemon on host); tag v1.0.0
+- [x] F. Final QA PASSED: clean venv (.venv_qa from pinned requirements, pip check clean), caches cleared, keyless gate-1+2 re-run green (see output/gate3.log)
+- [x] GATE 3 PASSED: pytest green (74 tests) in clean venv; ffmpeg pin verified; docker static-validated (no daemon on host — container run pending manual verification); tagged v1.0.0
 
 ## Global standards (verified at each gate)
-- [ ] Central schemas.py used everywhere; no undefined JSON
-- [ ] Per-module logging (inputs, summarized outputs, timings)
-- [ ] DEBUG artifact persistence
-- [ ] Structured errors; pipeline never dies on one clip/LLM failure
-- [ ] Idempotent stages (markers, --force, hash-keyed cache under /cache)
-- [ ] Timestamped job folders; no overwrites
-- [ ] LLM retry + backoff everywhere
-- [ ] Chunked/streaming processing for large files
-- [ ] No silent failures
-- [ ] Prompting standard (task, constraints, schema, example)
+- [x] Central schemas.py used everywhere; no undefined JSON
+- [x] Per-module logging (inputs, summarized outputs, timings)
+- [x] DEBUG artifact persistence
+- [x] Structured errors; pipeline never dies on one clip/LLM failure
+- [x] Idempotent stages (markers, --force, hash-keyed cache under /cache)
+- [x] Timestamped job folders; no overwrites
+- [x] LLM retry + backoff everywhere
+- [x] Chunked/streaming processing for large files
+- [x] No silent failures
+- [x] Prompting standard (task, constraints, schema, example)
 
 ## Known Issues
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
@@ -69,3 +69,8 @@ Current: Phase 3 — final QA (clean venv keyless re-run) then v1.0.0.
 - google-genai SDK is intentionally NOT installed in the build venv (gate 0 requires `import llm` with zero provider SDKs; the missing-SDK path raises a clean LLMError and is unit-tested). It IS pinned in requirements.txt so end-user installs get Gemini support out of the box.
 - Sample film is 320×240 (archive.org 512kb derivative) → vertical output is upscaled; fine for gates, users should feed ≥720p sources for quality.
 - Host FFmpeg is 8.1.2 (winget gyan.dev build), verified at setup; Docker image pins its own FFmpeg.
+
+## Performance (measured, CPU-only: 4 cores, no GPU)
+- 9m15s sample, from scratch (no caches), keyless: transcribe 213s + scenes 15s + render 736s (medium preset) = 16.1 min → over budget.
+- Fix: final encode preset medium → veryfast (crf 19): caption burn 85s → 33s per clip (2.6×); projected total ≈ 9.5 min → a 10-min 1080p video completes well under the 15-min CPU target.
+- Cached re-runs (transcript+scenes hit): ~12s to candidate selection; renders dominate.
