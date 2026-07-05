@@ -1,0 +1,122 @@
+# ClipForge configuration. Secrets never live here — .env only.
+
+python:
+  required: "3.11"          # MediaPipe wheel compatibility; enforced at startup
+  allow_unsupported: false
+
+ffmpeg:
+  pinned_version: "8.1.2"   # verified at setup; Docker pins its own build
+  require_exact: false      # host: warn on drift; Docker: exact
+
+llm:
+  provider: auto            # auto | mock | gemini | groq | ollama
+                            # auto -> gemini when GEMINI_API_KEY set, else mock (logged at startup)
+  max_retries: 2
+  backoff_base_seconds: 1.5
+  gemini_model: gemini-2.5-flash
+  groq_model: llama-3.3-70b-versatile
+  ollama_model: llama3.1
+  ollama_base_url: http://localhost:11434
+
+whisper:
+  # Model matrix — performance targets assume these defaults.
+  gpu: { model: large-v3, compute_type: float16 }
+  cpu: { model: small,    compute_type: int8 }
+  model_dir: cache/models
+  language: null            # autodetect
+
+clips:
+  min_seconds: 30
+  max_seconds: 60
+  max_candidates: 10
+  keep_ratio: 0.7           # drop bottom 30% by weighted rescore
+  min_keep: 3               # but never fewer than 3 (or all, if fewer exist)
+  rescore_weights: { hook_strength: 0.35, retention: 0.30, clarity: 0.20, impact: 0.15 }
+
+captions:
+  preset: karaoke-pop
+  font_dir: assets/fonts
+  max_words_per_line: 3
+  bottom_margin_px: 220     # keeps text out of platform UI zones (1920px frame)
+  presets:
+    karaoke-pop:
+      font: Montserrat ExtraBold
+      font_size: 88
+      primary_color: "&H00FFFFFF"    # ASS BGR: white
+      highlight_color: "&H0000D7FF"  # gold-ish pop on active word
+      outline_color: "&H00000000"
+      outline: 5
+      shadow: 1
+      uppercase: false
+      highlight_scale: 108           # active word scale %
+      style: karaoke
+    bold-impact:
+      font: Montserrat Black
+      font_size: 92
+      primary_color: "&H00FFFFFF"
+      highlight_color: "&H00FF9500"  # keyword color flip (BGR: azure-orange)
+      outline_color: "&H00000000"
+      outline: 6
+      shadow: 0
+      uppercase: true
+      highlight_scale: 112
+      style: karaoke
+    clean-minimal:
+      font: Montserrat Regular
+      font_size: 64
+      primary_color: "&H00FFFFFF"
+      highlight_color: "&H00FFFFFF"
+      outline_color: "&H00000000"
+      outline: 2
+      shadow: 0
+      uppercase: false
+      highlight_scale: 100
+      style: fade            # single line, subtle fade, no karaoke pop
+    highlight-box:
+      font: Montserrat Bold
+      font_size: 80
+      primary_color: "&H00FFFFFF"
+      highlight_color: "&H00FFFFFF"
+      box_color: "&H00E16B16"        # filled box behind active word (BGR)
+      outline_color: "&H00000000"
+      outline: 0
+      shadow: 0
+      uppercase: false
+      highlight_scale: 100
+      style: box
+
+reframe:
+  output: { width: 1080, height: 1920 }
+  face_detect_every_n_frames: 5
+  ema_alpha: 0.15               # crop path smoothing
+  lookahead_frames: 12          # future frames influence current crop
+  max_center_velocity_px: 14.0  # per-frame threshold (1080-wide crop space)
+  max_center_accel_px: 4.0
+  headroom_ratio: 0.40          # face center sits 40% from top on fallback
+  min_face_confidence: 0.5
+
+sample:
+  # Public-domain film, direct mp4 from archive.org (never YouTube for --sample).
+  primary_url: "https://archive.org/download/DuckandC1951/DuckandC1951_512kb.mp4"
+  sha256: "ab0a244f9705792c8b24e9ab1e1f85a7d8ea0c3c1b8cbf8810271e608b6578b6"
+  mirrors:
+    - "https://dn600203.us.archive.org/0/items/DuckandC1951/DuckandC1951_512kb.mp4"
+    - "https://archive.org/download/Capitali1948/Capitali1948_512kb.mp4"  # different PD film; hash not enforced
+  synthetic_fallback: true      # scripts/make_synthetic_sample.py when all mirrors fail
+
+paths:
+  output_dir: output
+  cache_dir: cache
+  inbox_dir: inbox
+  db_path: jobs.db
+
+render:
+  crf: 19
+  preset_final: medium
+  preset_intermediate: veryfast
+  audio_bitrate: 128k
+  use_nvenc: auto               # auto | never  (auto: NVENC when NVIDIA GPU present)
+  parallel_workers: auto        # auto = min(clips, max(1, cpu_count // 2))
+
+debug: false                    # true: persist transcripts, prompts, raw LLM responses,
+                                # candidate rankings, reframe debug frames
