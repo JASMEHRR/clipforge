@@ -127,6 +127,23 @@ output/20260705-123456_myvideo/
 | Upload says quota exhausted | daily API quota; resets midnight Pacific |
 | UI unreachable in Docker | the container binds 0.0.0.0:7860; check `docker compose ps` and port mapping |
 
+## Updating
+
+```bash
+git pull
+# activate your venv, then refresh dependencies in case pins changed:
+pip install --no-input -r requirements.txt
+```
+
+Job outputs, caches, and your `.env` are untouched by updates (all gitignored).
+
+## Content rights disclaimer
+
+ClipForge is a tool. **You are responsible for the content you process and
+publish with it** — only download, clip, and re-upload videos you own or have
+the rights/permission to use, and follow the terms of service of YouTube and
+any platform you post to. The authors accept no liability for misuse.
+
 ## Development
 
 ```bash
@@ -135,5 +152,10 @@ output/20260705-123456_myvideo/
 ```
 
 Architecture and design decisions: `PLAN.md`. Requirement checklist and known
-issues: `PROGRESS.md`. Licensing: bundled Montserrat fonts are OFL
-(`assets/fonts/OFL.txt`); the sample video is public domain (archive.org).
+issues: `PROGRESS.md`.
+
+## License
+
+- Code: **MIT** (see `LICENSE`)
+- Bundled Montserrat fonts: **SIL Open Font License** (`assets/fonts/OFL.txt`)
+- Bundled sample film ("Duck and Cover", 1951): **public domain** (archive.org)

@@ -173,7 +173,12 @@ def _edit_regen_meta(job_name, clip_choice):
 # --------------------------------------------------------------- upload tab
 
 def _upload_status():
+    import os
     import youtube_upload as yt
+    if os.environ.get("CLIPFORGE_DEMO") == "1":
+        return ("**YouTube upload is disabled in this hosted demo.** "
+                "Run ClipForge locally (or in your own Space) to enable it — "
+                "see the README.")
     if not yt.credentials_available():
         return ("**YouTube upload is not configured.**\n\n"
                 + yt.SETUP_INSTRUCTIONS)

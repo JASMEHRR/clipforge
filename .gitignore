@@ -1,5 +1,11 @@
 .env
+.env.*
+!.env.example
 .venv*/
+downloads/
+*.zip
+client_secret*.json
+*token*.json
 __pycache__/
 *.pyc
 cache/
