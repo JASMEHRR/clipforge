@@ -60,7 +60,8 @@ class _Stages:
 def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             job_dir: str | Path | None = None, force: bool = False,
             preset: str | None = None, aspect: str = "9:16",
-            debug: bool | None = None, progress_cb=None) -> dict:
+            debug: bool | None = None, progress_cb=None,
+            tracker=None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -71,8 +72,11 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     import transcribe as transcribe_mod
     from llm import resolve_provider
 
+    from progress import ProgressTracker
+
     cfg = cfg or load_config()
-    verify_ffmpeg(cfg)
+    tracker = tracker or ProgressTracker(legacy_cb=progress_cb)
+    tracker.start("init", "loading configuration")
     debug = cfg.get("debug", False) if debug is None else debug
     job_dir = Path(job_dir) if job_dir else new_job_dir(cfg, source)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -81,13 +85,16 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     timings: dict = {}
     notes: list[str] = []
     stages = _Stages(job_dir, force, timings)
+    tracker.finish("init")
+    tracker.start("deps", "verifying ffmpeg")
+    verify_ffmpeg(cfg)
     resolved = resolve_provider(cfg, provider)
+    tracker.finish("deps", "ffmpeg OK")
     log.info("job start: source=%s provider=%s aspect=%s dir=%s",
              source, resolved, aspect, job_dir.name)
 
     def report(stage: str, frac: float, msg: str = ""):
-        if progress_cb:
-            progress_cb(stage, frac, msg)
+        tracker.legacy_report(stage, frac, msg)
 
     job = {
         "job_id": uuid.uuid4().hex[:12],
@@ -100,31 +107,61 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         "stages": {}, "clips": [], "notes": notes,
     }
 
-    try:
-        report("ingest", 0.02, "downloading / normalizing input")
-        info = stages.run("ingest", lambda: ingest_mod.ingest(
-            source, job_dir, cfg,
-            progress_cb=lambda f, msg: report("ingest", 0.02 + 0.12 * f, msg)))
+    def _stage(name, label, fn):
+        """Run a marker-cached stage while keeping the tracker in sync."""
+        marker = job_dir / f".done_{name}.json"
+        if marker.exists() and not force:
+            result = stages.run(name, fn)   # returns cached JSON, logs skip
+            tracker.skip(name)
+            return result
+        tracker.start(name, label)
+        result = stages.run(name, fn)
+        tracker.finish(name)
+        return result
 
-        report("transcribe", 0.15, "transcribing audio")
-        transcript = stages.run("transcribe", lambda: transcribe_mod.transcribe(
-            info["audio_path"], cfg, debug_dir=debug_dir,
-            progress_cb=lambda f: report(
-                "transcribe", 0.15 + 0.15 * f,
-                f"transcribing {f * 100:.0f}% "
-                f"({f * info['duration'] / 60:.0f}/{info['duration'] / 60:.0f} min)")))
+    try:
+        src_name = Path(str(source)).name if not str(source).startswith("http") \
+            else str(source)
+        info = _stage("ingest", "downloading / normalizing input",
+                      lambda: ingest_mod.ingest(
+                          source, job_dir, cfg,
+                          progress_cb=lambda f, msg: tracker.update(
+                              "ingest", f, msg, current_file=src_name)))
+
+        def _phase(phase):
+            if phase == "model_download":
+                tracker.start("model_download",
+                              "downloading Whisper model (first run only)")
+            elif phase == "model_load":
+                tracker.finish("model_download")
+                tracker.start("model_load", "loading Whisper model")
+            elif phase == "ready":
+                tracker.finish("model_load")
+
+        transcript = _stage(
+            "transcribe", "transcribing audio",
+            lambda: transcribe_mod.transcribe(
+                info["audio_path"], cfg, debug_dir=debug_dir, phase_cb=_phase,
+                progress_cb=lambda f, speed="": tracker.update(
+                    "transcribe", f,
+                    f"transcribing "
+                    f"({f * info['duration'] / 60:.0f}/"
+                    f"{info['duration'] / 60:.0f} min)",
+                    current_file="audio.wav", speed=speed)))
+        tracker.finish("model_download")
+        tracker.finish("model_load")
         if not transcript["sentences"]:
             notes.append("empty transcript — mechanical windows used "
                          "(passed mechanically; re-verify with a real sample)")
 
-        report("scenes", 0.30, "detecting shots")
-        scene_data = stages.run("scenes", lambda: scenes_mod.detect_scenes(
-            info["video_path"], cfg))
+        scene_data = _stage("scenes", "detecting shots",
+                            lambda: scenes_mod.detect_scenes(
+                                info["video_path"], cfg))
 
-        report("highlights", 0.38, "selecting highlights")
-        candidates = stages.run("highlights", lambda: hl.select_highlights(
-            transcript, scene_data, info["duration"], cfg,
-            provider=provider, debug_dir=debug_dir))
+        candidates = _stage("highlights", "selecting highlights",
+                            lambda: hl.select_highlights(
+                                transcript, scene_data, info["duration"], cfg,
+                                provider=provider, debug_dir=debug_dir))
         if len(candidates) <= cfg["clips"]["min_keep"]:
             notes.append(f"only {len(candidates)} candidates — all kept "
                          "(min-keep rule)")
@@ -132,6 +169,9 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         clips = []
         n = max(1, len(candidates))
         workers = _worker_count(cfg, n)
+        tracker.start("render", f"rendering {n} clips ({workers} workers)")
+        for i in range(len(candidates)):
+            tracker.item("render", f"clip_{i:02d}", 0.0)
         with stage_timer(log, "render_clips", timings):
             from concurrent.futures import ThreadPoolExecutor, as_completed
             done = 0
@@ -140,24 +180,28 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     _render_one, i, cand, info, transcript, scene_data,
                     job_dir, cfg, provider, preset, aspect, debug_dir,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
-                    scenes_mod): i for i, cand in enumerate(candidates)}
+                    scenes_mod, tracker): i for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
                     done += 1
-                    report("render", 0.45 + 0.45 * done / n,
-                           f"clip {done}/{n} finished")
+                    tracker.item("render", f"clip_{i:02d}", 1.0)
+                    tracker.update("render", done / n,
+                                   f"clip {done}/{n} finished",
+                                   current_file=f"clip_{i:02d}/final.mp4")
                     try:
                         clips.append(fut.result())
                     except ClipForgeError as e:
                         log.error("clip %02d failed: %s — continuing", i, e)
                         notes.append(f"clip {i:02d} failed: {e}")
             clips.sort(key=lambda c: c["index"])
+        tracker.finish("render")
         if not clips:
             raise ClipForgeError("no clips rendered successfully")
 
-        report("rescore", 0.93, "re-scoring clips")
+        tracker.start("rescore", "re-scoring rendered clips")
         with stage_timer(log, "rescore", timings):
             clips = hl.rescore_clips(clips, transcript, cfg, provider)
+        tracker.finish("rescore")
 
         job["clips"] = clips
         job["status"] = "done"
@@ -165,7 +209,11 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         job["status"] = "failed"
         notes.append(f"job failed: {e}")
         log.error("job failed: %s", e)
+        for row in tracker.snapshot()["stages"]:
+            if row["state"] == "running":
+                tracker.fail(row["key"], str(e)[:200])
     finally:
+        tracker.start("cleanup", "writing job record")
         job["stages"] = timings
         validate(job, "job_record")
         (job_dir / "job.json").write_text(json.dumps(job, indent=2),
@@ -177,10 +225,12 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             log.warning("history record failed: %s", e)
         _print_timings(timings)
         remove_file_handler(fh)
+        tracker.finish("cleanup")
 
-    report("done", 1.0, job["status"])
     if job["status"] == "failed":
+        tracker.fail("done", "failed")
         raise ClipForgeError(f"job {job['job_id']} failed", detail="; ".join(notes))
+    tracker.finish("done", "completed")
     log.info("job done: %d clips (%d kept) in %s",
              len(job["clips"]),
              sum(1 for c in job["clips"] if c.get("kept")), job_dir)
@@ -190,13 +240,18 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
-                metadata_mod, scenes_mod) -> dict:
+                metadata_mod, scenes_mod, tracker=None) -> dict:
+    def _sub(frac: float) -> None:
+        if tracker:
+            tracker.item("render", f"clip_{i:02d}", frac)
+
     clip_dir = job_dir / f"clip_{i:02d}"
     clip_dir.mkdir(exist_ok=True)
     start, end = cand["start"], cand["end"]
 
     cut_path = cut_mod.cut_clip(info["video_path"], start, end,
                                 clip_dir / "cut.mp4", cfg)
+    _sub(0.25)
     if aspect == "16:9":
         source_for_captions, metrics = cut_path, {"aspect": "16:9",
                                                   "passthrough": True}
@@ -207,6 +262,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             cut_path, clip_dir / "reframed.mp4", cuts_rel, cfg,
             aspect=aspect, debug_dir=debug_dir)
         source_for_captions = clip_dir / "reframed.mp4"
+    _sub(0.65)
 
     words = [{"word": w["word"],
               "start": round(max(0.0, w["start"] - start), 3),
@@ -216,6 +272,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     final = captions_mod.caption_clip(source_for_captions, words,
                                       clip_dir / "final.mp4", cfg,
                                       preset_name=preset)
+    _sub(0.85)
 
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)

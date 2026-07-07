@@ -38,11 +38,28 @@ def model_config(cfg: dict) -> tuple[str, str, str]:
     return w["model"], "cpu", w["compute_type"]
 
 
+def model_cached(cfg: dict) -> bool:
+    """True when the selected Whisper model already exists on disk (so no
+    download will be needed). Used by setup preflight and progress stages."""
+    model_name, _, _ = model_config(cfg)
+    root = ROOT / cfg["whisper"]["model_dir"]
+    if not root.exists():
+        return False
+    pattern = model_name.replace(".", "_")
+    for d in root.iterdir():
+        if d.is_dir() and pattern in d.name.replace(".", "_"):
+            if any(d.rglob("model.bin")):
+                return True
+    return False
+
+
 def transcribe(audio_path: str | Path, cfg: dict | None = None,
                debug_dir: str | Path | None = None,
-               progress_cb=None) -> dict:
+               progress_cb=None, phase_cb=None) -> dict:
     """Returns Transcript dict (schema-validated). `progress_cb(frac)` gets
-    live 0..1 progress while Whisper walks the audio."""
+    live 0..1 progress while Whisper walks the audio. `phase_cb(phase)` is
+    called with 'model_download' (only when a download is needed) and
+    'model_load' before the respective steps, and 'ready' after."""
     cfg = cfg or load_config()
     audio_path = Path(audio_path)
     if not audio_path.exists():
@@ -64,19 +81,29 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
     log.info("whisper %s on %s (%s, beam=%d)", model_name, device, compute, beam)
     try:
         import os as _os
+        import time as _time
 
         from faster_whisper import WhisperModel
+        if phase_cb and not model_cached(cfg):
+            phase_cb("model_download")
+        if phase_cb:
+            phase_cb("model_load")
         model = WhisperModel(model_name, device=device, compute_type=compute,
                              cpu_threads=(_os.cpu_count() or 4),
                              download_root=str(ROOT / cfg["whisper"]["model_dir"]))
+        if phase_cb:
+            phase_cb("ready")
         segments, info = model.transcribe(
             str(audio_path), word_timestamps=True, vad_filter=True,
             beam_size=beam, language=cfg["whisper"].get("language"))
         total = float(info.duration or 0.0) or 1.0
         words = []
+        t_start = _time.monotonic()
         for seg in segments:  # generator — streams, memory-safe
             if progress_cb:
-                progress_cb(min(1.0, float(seg.end) / total))
+                wall = max(1e-6, _time.monotonic() - t_start)
+                progress_cb(min(1.0, float(seg.end) / total),
+                            f"{float(seg.end) / wall:.1f}x realtime")
             for w in seg.words or []:
                 token = w.word.strip()
                 if token:

@@ -23,6 +23,7 @@ log = get_logger("app")
 
 def _run_generator(file_path, url, preset, aspect, provider):
     from pipeline import run_job
+    from progress import ProgressTracker
 
     source = (url or "").strip() or file_path
     if not source:
@@ -32,53 +33,53 @@ def _run_generator(file_path, url, preset, aspect, provider):
     cfg = load_config()
     q: queue.Queue = queue.Queue()
     holder: dict = {}
+    finished = threading.Event()
 
     import time
     last = {"t": 0.0}
 
-    def cb(stage, frac, msg):
+    def on_change(tr):
         now = time.monotonic()
-        if now - last["t"] < 1.0 and 0.01 < frac < 0.99:
-            return  # throttle: at most ~1 update/sec
+        if now - last["t"] < 0.7:        # throttle UI updates
+            return
         last["t"] = now
-        filled = int(frac * 24)
-        bar = "█" * filled + "░" * (24 - filled)
-        q.put(f"{bar} {frac * 100:3.0f}%  {stage}: {msg}")
+        q.put(tr.render_text())
+
+    tracker = ProgressTracker(on_change=on_change)
+
+    def heartbeat():
+        # ETA / elapsed keep ticking even inside a long ffmpeg encode, so
+        # the UI never looks frozen.
+        while not finished.is_set():
+            q.put(tracker.render_text())
+            finished.wait(2.0)
 
     def work():
         try:
             holder["job"] = run_job(source, cfg, provider=provider or None,
                                     preset=preset or None,
-                                    aspect=aspect or "9:16", progress_cb=cb)
+                                    aspect=aspect or "9:16", tracker=tracker)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
             holder["error"] = f"{e}\n{traceback.format_exc(limit=3)}"
         finally:
+            finished.set()
+            q.put(tracker.render_text())
             q.put(None)
 
     threading.Thread(target=work, daemon=True).start()
-    lines: list[str] = [f"Job started: {source}"]
-    yield "\n".join(lines), "", [], []
+    threading.Thread(target=heartbeat, daemon=True).start()
+    yield f"Job started: {source}", "", [], []
 
-    def _stage_of(s: str) -> str:
-        return s.split("%", 1)[-1].split(":", 1)[0] if "%" in s else s
-
+    board = ""
     while True:
         item = q.get()
         if item is None:
             break
-        # progress-bar updates for the same stage replace the previous line
-        # instead of flooding the log
-        if (lines and lines[-1].startswith(("█", "░"))
-                and item.startswith(("█", "░"))
-                and _stage_of(lines[-1]) == _stage_of(item)):
-            lines[-1] = item
-        else:
-            lines.append(item)
-        yield "\n".join(lines[-25:]), "", [], []
+        board = item
+        yield board, "", [], []
 
     if "error" in holder:
-        lines.append(f"FAILED: {holder['error']}")
-        yield "\n".join(lines[-25:]), "", [], []
+        yield board + f"\n\nFAILED: {holder['error']}", "", [], []
         return
 
     job = holder["job"]
@@ -92,9 +93,8 @@ def _run_generator(file_path, url, preset, aspect, provider):
     files += [c["srt"] for c in kept if Path(c.get("srt", "")).exists()]
     thumbs = [t for c in kept for t in c.get("thumbnails", [])
               if Path(t).exists()]
-    lines.append(f"Done: {len(kept)} clips kept of {len(job['clips'])} "
-                 f"rendered → {job['job_dir']}")
-    yield "\n".join(lines[-25:]), "\n".join(md), files, thumbs
+    yield (board + f"\n\nDone: {len(kept)} clips kept of {len(job['clips'])} "
+           f"rendered → {job['job_dir']}"), "\n".join(md), files, thumbs
 
 
 # ---------------------------------------------------------------- batch tab
