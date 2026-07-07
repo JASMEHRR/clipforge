@@ -33,6 +33,7 @@ clips:
   min_seconds: 30
   max_seconds: 60
   max_candidates: 10
+  target_count: 0           # 0 = auto (keep_ratio rule); 1-20 = keep exactly N
   keep_ratio: 0.7           # drop bottom 30% by weighted rescore
   min_keep: 3               # but never fewer than 3 (or all, if fewer exist)
   rescore_weights: { hook_strength: 0.35, retention: 0.30, clarity: 0.20, impact: 0.15 }

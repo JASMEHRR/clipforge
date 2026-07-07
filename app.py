@@ -21,13 +21,14 @@ log = get_logger("app")
 
 # --------------------------------------------------------------- create tab
 
-def _run_generator(file_path, url, preset, aspect, provider):
+def _run_generator(file_path, url, preset, aspect, provider, n_clips):
     from pipeline import run_job
 
     source = (url or "").strip() or file_path
     if not source:
         yield "Provide a video file or a URL.", "", []
         return
+    target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
     cfg = load_config()
     q: queue.Queue = queue.Queue()
@@ -49,7 +50,8 @@ def _run_generator(file_path, url, preset, aspect, provider):
         try:
             holder["job"] = run_job(source, cfg, provider=provider or None,
                                     preset=preset or None,
-                                    aspect=aspect or "9:16", progress_cb=cb)
+                                    aspect=aspect or "9:16",
+                                    target_count=target_count, progress_cb=cb)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
             holder["error"] = f"{e}\n{traceback.format_exc(limit=3)}"
         finally:
@@ -259,6 +261,9 @@ def build_app() -> gr.Blocks:
                                             value=cfg["captions"]["preset"])
                     aspect_in = gr.Radio(["9:16", "1:1", "16:9"], value="9:16",
                                          label="Output aspect")
+                    clips_in = gr.Slider(
+                        0, 20, value=int(cfg["clips"].get("target_count", 0)),
+                        step=1, label="Clips to keep (0 = auto)")
                     provider_in = gr.Dropdown(
                         ["", "mock", "gemini", "groq", "ollama"], value="",
                         label="LLM provider override")
@@ -268,7 +273,8 @@ def build_app() -> gr.Blocks:
                     ranking_out = gr.Markdown()
                     files_out = gr.Files(label="Download clips + subtitles")
             run_btn.click(_run_generator,
-                          [file_in, url_in, preset_in, aspect_in, provider_in],
+                          [file_in, url_in, preset_in, aspect_in, provider_in,
+                           clips_in],
                           [progress_out, ranking_out, files_out])
 
         with gr.Tab("Batch"):

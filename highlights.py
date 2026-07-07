@@ -160,11 +160,14 @@ def rule_based_candidates(windows: list[dict], cfg: dict) -> list[dict]:
 
 def select_highlights(transcript: dict, scenes: dict, duration: float,
                       cfg: dict | None = None, provider: str | None = None,
-                      debug_dir: str | Path | None = None) -> list[dict]:
-    """Returns validated, sentence-snapped, deduped candidate list (desc score)."""
+                      debug_dir: str | Path | None = None,
+                      max_candidates: int | None = None) -> list[dict]:
+    """Returns validated, sentence-snapped, deduped candidate list (desc score).
+    `max_candidates` overrides the config cap (used by the clip-count selector)."""
     cfg = cfg or load_config()
     ccfg = cfg["clips"]
-    min_s, max_s, max_n = ccfg["min_seconds"], ccfg["max_seconds"], ccfg["max_candidates"]
+    min_s, max_s = ccfg["min_seconds"], ccfg["max_seconds"]
+    max_n = int(max_candidates) if max_candidates else ccfg["max_candidates"]
 
     mechanical = not transcript["sentences"]
     windows = (mechanical_windows(duration, cfg) if mechanical
@@ -238,10 +241,13 @@ def _llm_or_fallback(windows, cfg, provider, min_s, max_s, max_n, debug_dir):
 # ------------------------------------------------------------- re-scoring
 
 def rescore_clips(clips: list[dict], transcript: dict,
-                  cfg: dict | None = None, provider: str | None = None) -> list[dict]:
+                  cfg: dict | None = None, provider: str | None = None,
+                  target_count: int | None = None) -> list[dict]:
     """Score each rendered clip 1–10 on four axes, compute the weighted score,
-    keep the top keep_ratio but never fewer than min_keep. Adds
-    'scores'/'weighted_score'/'kept' to each clip dict; returns clips desc."""
+    then decide which are kept. With `target_count`, keep exactly that many
+    (or all available, fewer, with a note); otherwise keep the top keep_ratio
+    but never fewer than min_keep. Adds 'scores'/'weighted_score'/'kept' to each
+    clip dict; returns clips desc."""
     cfg = cfg or load_config()
     weights = cfg["clips"]["rescore_weights"]
     for clip in clips:
@@ -269,6 +275,17 @@ def rescore_clips(clips: list[dict], transcript: dict,
 
     clips.sort(key=lambda c: -c["weighted_score"])
     n = len(clips)
+    if target_count:
+        keep = min(int(target_count), n)
+        for i, c in enumerate(clips):
+            c["kept"] = i < keep
+        if n < target_count:
+            log.info("requested %d clips but only %d available — keeping all %d",
+                     target_count, n, n)
+        else:
+            log.info("clip-count selector: kept exactly %d of %d clips",
+                     keep, n)
+        return clips
     keep = max(min(cfg["clips"]["min_keep"], n),
                math.ceil(n * cfg["clips"]["keep_ratio"]))
     for i, c in enumerate(clips):

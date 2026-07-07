@@ -75,6 +75,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
     cfg = cfg or load_config()
     verify_ffmpeg(cfg)
+    if target_count is None:  # 0 / unset in config means "auto" (keep-ratio rule)
+        target_count = cfg["clips"].get("target_count") or None
     debug = cfg.get("debug", False) if debug is None else debug
     job_dir = Path(job_dir) if job_dir else new_job_dir(cfg, source)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -135,8 +137,12 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         report("highlights", 0.42, "selecting highlights")
         candidates = stages.run("highlights", lambda: hl.select_highlights(
             transcript, scene_data, info["duration"], cfg,
-            provider=provider, debug_dir=debug_dir))
-        if len(candidates) <= cfg["clips"]["min_keep"]:
+            provider=provider, debug_dir=debug_dir,
+            max_candidates=target_count))
+        if target_count and len(candidates) < target_count:
+            notes.append(f"requested {target_count} clips but only "
+                         f"{len(candidates)} candidates available")
+        elif not target_count and len(candidates) <= cfg["clips"]["min_keep"]:
             notes.append(f"only {len(candidates)} candidates — all kept "
                          "(min-keep rule)")
 
@@ -168,7 +174,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
         report("rescore", 0.93, "re-scoring clips")
         with stage_timer(log, "rescore", timings):
-            clips = hl.rescore_clips(clips, transcript, cfg, provider)
+            clips = hl.rescore_clips(clips, transcript, cfg, provider,
+                                     target_count=target_count)
 
         job["clips"] = clips
         job["status"] = "done"
@@ -279,6 +286,8 @@ def main(argv=None):
     ap.add_argument("--full-transcribe", action="store_true",
                     help="transcribe the whole video (disable segment-first "
                          "shortlisting)")
+    ap.add_argument("--clips", type=int, default=None,
+                    help="keep exactly N clips (1-20); default uses config")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -292,7 +301,8 @@ def main(argv=None):
 
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
                   force=a.force, preset=a.preset, aspect=a.aspect,
-                  debug=a.debug or None, full_transcribe=a.full_transcribe)
+                  debug=a.debug or None, target_count=a.clips,
+                  full_transcribe=a.full_transcribe)
     kept = [c for c in job["clips"] if c.get("kept")]
     print(f"job {job['job_id']}: {len(kept)} clips kept of "
           f"{len(job['clips'])} rendered -> {job['job_dir']}")

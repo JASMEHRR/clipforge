@@ -45,8 +45,10 @@ each choice logged here.
 
 ## Upgrade 3 — Clip count selector
 - New `clips.target_count` config key (default 0 = auto/legacy keep-ratio rule).
-- `--clips N` CLI flag, UI slider 1-20. When N is set, exactly N clips are kept
-  (or all available with a note when fewer exist). Threaded through `run_job`.
+- `--clips N` CLI flag, UI slider 0-20 (0 = Auto, kept so the keep-ratio rule
+  stays reachable from the UI). When N>0, exactly N clips are kept (or all
+  available with a note when fewer exist). Threaded through `run_job` ->
+  `select_highlights(max_candidates=N)` + `rescore_clips(target_count=N)`.
 
 ## Upgrade 4 — Virality rating
 - New `virality.py`: 0-100 score from hook strength (LLM, first ~3s), speech
