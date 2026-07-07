@@ -68,12 +68,20 @@ def gpu_available() -> bool:
 
 
 def model_config(cfg: dict) -> tuple[str, str, str]:
-    """Returns (model_name, device, compute_type) per the model matrix."""
-    if gpu_available():
-        w = cfg["whisper"]["gpu"]
-        return w["model"], "cuda", w["compute_type"]
-    w = cfg["whisper"]["cpu"]
-    return w["model"], "cpu", w["compute_type"]
+    """Returns (model_name, device, compute_type). Honors render.compute
+    (auto|gpu|cpu) and an optional whisper.model_override that replaces the
+    matrix model for whichever device is selected."""
+    pref = cfg.get("render", {}).get("compute", "auto")
+    if pref == "cpu":
+        use_gpu = False
+    elif pref == "gpu":
+        use_gpu = True
+    else:
+        use_gpu = gpu_available()
+    w = cfg["whisper"]["gpu"] if use_gpu else cfg["whisper"]["cpu"]
+    device = "cuda" if use_gpu else "cpu"
+    model = cfg["whisper"].get("model_override") or w["model"]
+    return model, device, w["compute_type"]
 
 
 def _spans_key(spans: list[tuple] | None) -> str:

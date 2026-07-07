@@ -26,6 +26,7 @@ whisper:
   cpu: { model: small,    compute_type: int8 }
   model_dir: cache/models
   language: null            # autodetect
+  model_override: ""        # blank = use the matrix model; else tiny/base/small/medium/large-v3
   beam_size: 1              # greedy decode: 2-3x faster on CPU, fine for captions
                             # (raise to 5 for max transcription accuracy)
 
@@ -122,6 +123,7 @@ render:
   preset_final: veryfast   # medium blew the <15min CPU budget; veryfast @ crf19 is visually fine for shorts
   preset_intermediate: veryfast
   audio_bitrate: 128k
+  compute: auto                 # auto | gpu | cpu — forces Whisper device + encoder
   use_nvenc: auto               # auto | never  (auto: NVENC when NVIDIA GPU present)
   parallel_workers: auto        # auto = min(clips, max(1, cpu_count // 2))
 

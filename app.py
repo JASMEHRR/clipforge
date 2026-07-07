@@ -311,6 +311,39 @@ def _history_open(job_id):
     return files, f"{len(files)} downloadable clips from {job['job_dir']}"
 
 
+# ------------------------------------------------------------- settings tab
+
+def _detected_hardware() -> str:
+    import os
+
+    from ffutil import nvenc_available
+    from transcribe import gpu_available
+    gpu = gpu_available()
+    nvenc = nvenc_available()
+    return (f"**Detected hardware** — CUDA GPU (Whisper): "
+            f"{'yes' if gpu else 'no'} · NVENC (encoder): "
+            f"{'yes' if nvenc else 'no'} · CPU cores: {os.cpu_count()}")
+
+
+def _save_settings(compute, whisper_model, provider, gemini_model, groq_model,
+                   ollama_model):
+    from config import save_config
+    try:
+        save_config({
+            "render": {"compute": compute},
+            "whisper": {"model_override": whisper_model or ""},
+            "llm": {"provider": provider,
+                    "gemini_model": gemini_model.strip(),
+                    "groq_model": groq_model.strip(),
+                    "ollama_model": ollama_model.strip()},
+        })
+        return (f"Saved. Compute = **{compute}**, Whisper model = "
+                f"**{whisper_model or 'matrix default'}**, LLM = "
+                f"**{provider}**.\n\n" + _detected_hardware())
+    except Exception as e:  # noqa: BLE001
+        return f"save failed: {e}"
+
+
 # ------------------------------------------------------------------- layout
 
 def build_app() -> gr.Blocks:
@@ -430,6 +463,32 @@ def build_app() -> gr.Blocks:
             hist_refresh.click(_history_rows, [], [hist_table])
             hist_open.click(_history_open, [hist_id], [hist_files, hist_msg])
             hist_zip_btn.click(_zip_history, [hist_id], [hist_zip_out])
+
+        with gr.Tab("Settings"):
+            hw_md = gr.Markdown(_detected_hardware())
+            compute_in = gr.Radio(["auto", "gpu", "cpu"],
+                                  value=cfg["render"].get("compute", "auto"),
+                                  label="Compute (Whisper device + encoder)")
+            whisper_model_in = gr.Dropdown(
+                ["", "tiny", "base", "small", "medium", "large-v3"],
+                value=cfg["whisper"].get("model_override", ""),
+                label="Whisper model (blank = matrix default)")
+            provider_set = gr.Dropdown(
+                ["auto", "mock", "gemini", "groq", "ollama"],
+                value=cfg["llm"].get("provider", "auto"),
+                label="LLM provider")
+            gemini_model_in = gr.Textbox(value=cfg["llm"].get("gemini_model", ""),
+                                         label="Gemini model")
+            groq_model_in = gr.Textbox(value=cfg["llm"].get("groq_model", ""),
+                                       label="Groq model")
+            ollama_model_in = gr.Textbox(value=cfg["llm"].get("ollama_model", ""),
+                                         label="Ollama model")
+            save_btn = gr.Button("Save settings", variant="primary")
+            settings_status = gr.Markdown()
+            save_btn.click(_save_settings,
+                           [compute_in, whisper_model_in, provider_set,
+                            gemini_model_in, groq_model_in, ollama_model_in],
+                           [settings_status])
     return demo
 
 

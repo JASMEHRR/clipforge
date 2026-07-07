@@ -70,8 +70,12 @@ each choice logged here.
   everything" on Batch, and a `--zip` CLI flag.
 
 ## Upgrade 7 — GPU + model selection UI
-- New Settings tab. Compute = Auto/Force GPU/Force CPU, persisted to
-  `config.yaml` (`render.compute`), honored by `transcribe` + encoder.
-  Detected hardware shown. Whisper model picker (tiny->large-v3) and LLM
-  provider+model picker persisted to config. `save_config()` added to
-  `config.py` (round-trips yaml, preserves the singleton).
+- New Settings tab. Compute = auto/gpu/cpu, honored by `transcribe.model_config`
+  (Whisper device) and `ffutil.video_encode_args` (encoder). Detected hardware
+  shown (CUDA / NVENC / CPU cores). Whisper model picker (blank = matrix
+  default, else tiny->large-v3 via `whisper.model_override`) and LLM
+  provider+model fields.
+- Persistence is **non-destructive**: `save_config()` writes only the changed
+  keys to `config.local.yaml` (gitignored), which `load_config()` deep-merges
+  over `config.yaml` on load. This keeps `config.yaml`'s comments intact
+  instead of rewriting it with a comment-stripping yaml dump.

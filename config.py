@@ -14,8 +14,21 @@ from errors import ConfigError
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.yaml"
+# User overrides saved from the Settings tab live here so config.yaml (and its
+# comments) stays pristine. This file is deep-merged over config.yaml on load.
+LOCAL_PATH = ROOT / "config.local.yaml"
 
 _cached: dict | None = None
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    """Recursively merge `over` into `base` (returns `base`, mutated)."""
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
 
 
 def check_python_version(cfg: dict) -> None:
@@ -43,12 +56,33 @@ def load_config(path: Path | None = None, check_python: bool = True) -> dict:
         raise ConfigError(f"config file not found: {p}")
     with open(p, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    if path is None and LOCAL_PATH.exists():  # Settings-tab overrides
+        try:
+            local = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
+            _deep_merge(cfg, local)
+        except (yaml.YAMLError, OSError) as e:
+            raise ConfigError(f"could not read {LOCAL_PATH.name}: {e}") from e
     if check_python:
         check_python_version(cfg)
     _load_dotenv(ROOT / ".env")
     if path is None:
         _cached = cfg
     return cfg
+
+
+def save_config(updates: dict) -> dict:
+    """Persist `updates` (nested dict) to config.local.yaml, deep-merged over any
+    existing overrides, and refresh the in-process config singleton. Returns the
+    updated config. config.yaml itself is never modified."""
+    global _cached
+    existing: dict = {}
+    if LOCAL_PATH.exists():
+        existing = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
+    merged = _deep_merge(existing, updates)
+    with open(LOCAL_PATH, "w", encoding="utf-8") as f:
+        yaml.safe_dump(merged, f, sort_keys=False, default_flow_style=False)
+    _cached = None                 # force reload with the new overrides
+    return load_config()
 
 
 def _load_dotenv(env_path: Path) -> None:

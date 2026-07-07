@@ -147,7 +147,9 @@ def video_encode_args(cfg: dict, final: bool = False) -> list[str]:
     """Encoder argument set: NVENC when config allows and hardware exists,
     otherwise libx264 with the configured preset/crf."""
     r = cfg["render"]
-    if r.get("use_nvenc", "auto") == "auto" and nvenc_available():
+    force_cpu = r.get("compute", "auto") == "cpu"
+    if (not force_cpu and r.get("use_nvenc", "auto") == "auto"
+            and nvenc_available()):
         return ["-c:v", "h264_nvenc", "-preset", "p5" if final else "p3",
                 "-cq", str(r["crf"]), "-pix_fmt", "yuv420p"]
     preset = r["preset_final"] if final else r["preset_intermediate"]
