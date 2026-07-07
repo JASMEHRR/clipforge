@@ -36,7 +36,7 @@ from logutil import get_logger
 log = get_logger("updater")
 
 ROOT = Path(__file__).resolve().parent
-REPO = "megaboss69-svg/clipforge"
+REPO = "JASMEHRR/clipforge"
 API = f"https://api.github.com/repos/{REPO}"
 UPDATES_DIR = ROOT / "cache" / "updates"
 

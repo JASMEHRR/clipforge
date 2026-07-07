@@ -14,7 +14,7 @@ ffmpeg and Whisper for minutes at a time and needs local disk. A Hugging Face
 ## 2. Upload the code
 
 ```bash
-git clone https://github.com/megaboss69-svg/clipforge
+git clone https://github.com/JASMEHRR/clipforge
 cd clipforge
 # Replace the repo README with the Space-metadata one and use Space requirements:
 cp deploy/huggingface/README.md README.md

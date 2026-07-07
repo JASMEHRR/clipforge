@@ -21,7 +21,7 @@ social metadata. No API key required (deterministic mock provider); add a
 
 **Demo limits** (`CLIPFORGE_DEMO=1`): inputs are capped at 5 minutes and
 YouTube upload is disabled. Run it locally for the full experience:
-https://github.com/megaboss69-svg/clipforge
+https://github.com/JASMEHRR/clipforge
 
 Processing is CPU-bound — a 5-minute video takes several minutes on free
 Spaces hardware. Please be patient with the progress bar.
