@@ -243,7 +243,32 @@ def _history_open(job_id):
 
 # ------------------------------------------------------------------- layout
 
+def _update_banner() -> str:
+    import updater
+    s = updater.get_state()
+    v = updater.current_version()
+    if not s.get("checked"):
+        return f"ClipForge v{v}"
+    if s.get("update_available"):
+        return (f"ClipForge v{v} — **update available: {s['latest']}**. "
+                "Click *Install update* (your settings, models and videos "
+                "are preserved).")
+    if s.get("error"):
+        return f"ClipForge v{v} (update check: {s['error']})"
+    return f"ClipForge v{v} — up to date"
+
+
+def _do_update():
+    import updater
+    try:
+        return updater.apply_update(), _update_banner()
+    except Exception as e:  # noqa: BLE001 — updater rolls back; UI must show why
+        return f"Update failed (no changes were kept): {e}", _update_banner()
+
+
 def build_app() -> gr.Blocks:
+    import updater
+    updater.check_async()
     cfg = load_config()
     presets = list(cfg["captions"]["presets"].keys())
     with gr.Blocks(title="ClipForge") as demo:
@@ -251,6 +276,18 @@ def build_app() -> gr.Blocks:
                     "Long video in → ranked vertical clips with animated "
                     "captions out. No API key required (mock provider); add "
                     "GEMINI_API_KEY in .env for LLM-powered selection.")
+        with gr.Row():
+            update_md = gr.Markdown(_update_banner())
+            with gr.Column(scale=0, min_width=180):
+                update_check_btn = gr.Button("Check for updates", size="sm")
+                update_btn = gr.Button("Install update", size="sm",
+                                       variant="primary")
+        update_result = gr.Markdown()
+        update_check_btn.click(
+            lambda: (__import__("updater").check_for_update()
+                     and _update_banner()) or _update_banner(),
+            [], [update_md])
+        update_btn.click(_do_update, [], [update_result, update_md])
         with gr.Tab("Create"):
             with gr.Row():
                 with gr.Column(scale=1):
