@@ -26,12 +26,19 @@ picks the moments and writes the metadata instead.
 - Idempotent pipeline: cached transcripts/scenes, per-stage completion
   markers, `--force` to redo
 
-## Quick start (Windows)
+## Quick start (Windows) — zero setup
 
-```bat
-winget install Python.Python.3.11 Gyan.FFmpeg
-run.bat
-```
+Download the repo and double-click **`run.bat`**. That's it.
+
+The launcher installs everything automatically: Python 3.11 (via winget if
+missing), the virtual environment, all Python packages, and a portable
+FFmpeg build (downloaded once into `tools/ffmpeg/`). It detects your GPU and
+picks GPU or CPU mode by itself, validates the install, and only then starts
+the app. Interrupted downloads resume where they stopped; nothing is
+re-downloaded on later runs.
+
+Optional: `python setup_env.py --prefetch-models` downloads the Whisper
+model up front so your first job starts instantly.
 
 Open http://127.0.0.1:7860. Or run the CLI directly:
 
@@ -52,6 +59,10 @@ brew install ffmpeg python@3.11
 ./run.sh
 ```
 
+`run.sh` self-installs the venv and packages and validates the setup; if
+FFmpeg or Python 3.11 are missing it prints the exact one-line install
+command for your OS.
+
 ## Docker
 
 ```bash
@@ -61,6 +72,25 @@ docker compose up --build
 
 > Python is pinned to **3.11** everywhere (MediaPipe wheels lag newer
 > versions). The app refuses to start on other versions with a clear message.
+
+
+## Automatic updates
+
+ClipForge checks GitHub for new versions at launch (silently; offline is
+fine) and shows an **Install update** button in the UI. Updates download
+only the changed files when possible, verify integrity before installing,
+keep a backup and roll back automatically on any failure. Your settings,
+downloaded models, cache, exported videos and projects are never touched;
+a locally edited `config.yaml` is preserved (the new default is saved as
+`config.yaml.new`). Restart the app after updating.
+
+## Progress
+
+Jobs show a live stage board — Initializing → Checking dependencies →
+Downloading/Loading models → Preparing media → Transcribing → Detecting
+scenes → Selecting highlights → Rendering clips (with per-clip bars) →
+Re-scoring → Cleaning up — each with percentage, elapsed time, ETA, the
+current file and processing speed, so the app never looks frozen.
 
 ## Getting a free Gemini API key (optional but recommended)
 

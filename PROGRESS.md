@@ -74,3 +74,8 @@ Current: RELEASED — v1.0.0 tagged. All gates passed. Remaining manual items: r
 - 9m15s sample, from scratch (no caches), keyless: transcribe 213s + scenes 15s + render 736s (medium preset) = 16.1 min → over budget.
 - Fix: final encode preset medium → veryfast (crf 19): caption burn 85s → 33s per clip (2.6×); projected total ≈ 9.5 min → a 10-min 1080p video completes well under the 15-min CPU target.
 - Cached re-runs (transcript+scenes hit): ~12s to candidate selection; renders dominate.
+
+## Phase 4 — Production upgrade (v1.1.0)
+- [x] progress.py stage tracker (per-stage %, ETA, elapsed, current file, speed, per-clip bars) wired into pipeline + UI heartbeat
+- [x] setup_env.py zero-setup installer (Python/venv/pip retries, portable FFmpeg auto-download, GPU/CUDA detect + CPU fallback messaging, resumable cached downloads, Whisper prefetch, preflight validation); ffutil bundled-binary resolution; self-installing run.bat/run.sh
+- [x] updater.py self-update (background check, delta via compare API + blob-sha verify, zipball fallback, staged py_compile verify, backup + auto-rollback, user data always preserved); VERSION file + UI banner
