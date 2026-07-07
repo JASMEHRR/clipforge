@@ -3,13 +3,41 @@ ALL AV operations in the project go through ffmpeg/ffprobe via this module."""
 from __future__ import annotations
 
 import json
+import os
+import platform
+import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from errors import ClipForgeError
 from logutil import get_logger
 
 log = get_logger("ffmpeg")
+
+_ROOT = Path(__file__).resolve().parent
+
+
+@lru_cache(maxsize=None)
+def _binary(name: str) -> str:
+    """Resolve ffmpeg/ffprobe: env override → system PATH → bundled build in
+    tools/ffmpeg (downloaded by setup_env.py). Missing binaries raise a
+    structured error with the exact fix instead of a bare FileNotFoundError."""
+    env = os.environ.get(f"CLIPFORGE_{name.upper()}")
+    if env and Path(env).exists():
+        return env
+    on_path = shutil.which(name)
+    if on_path:
+        return on_path
+    exe = f"{name}.exe" if platform.system() == "Windows" else name
+    base = _ROOT / "tools" / "ffmpeg"
+    if base.exists():
+        for p in base.rglob(exe):
+            return str(p)
+    raise FFmpegError(
+        f"{name} was not found on this system.",
+        detail="Run `python setup_env.py` (or run.bat / run.sh) once — it "
+               "downloads FFmpeg automatically. Nothing else is required.")
 
 
 class FFmpegError(ClipForgeError):
@@ -23,7 +51,7 @@ def run_ffmpeg(args: list[str], timeout: int = 1800,
     With `progress_label`, ffmpeg's -progress stream is read live and an
     out_time line is logged every ~30s so long re-encodes look alive
     instead of hung."""
-    cmd = ["ffmpeg", "-y", "-v", "error"] + [str(a) for a in args]
+    cmd = [_binary("ffmpeg"), "-y", "-v", "error"] + [str(a) for a in args]
     log.info("ffmpeg %s", " ".join(cmd[3:6]) + (" ..." if len(cmd) > 6 else ""))
     try:
         if progress_label:
@@ -65,7 +93,7 @@ def _run_with_progress(cmd: list[str], timeout: int, label: str) -> None:
 
 def probe(path: str | Path) -> dict:
     """ffprobe → {duration, width, height, fps, vcodec, acodec, has_audio}."""
-    cmd = ["ffprobe", "-v", "error", "-print_format", "json",
+    cmd = [_binary("ffprobe"), "-v", "error", "-print_format", "json",
            "-show_format", "-show_streams", str(path)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
@@ -93,7 +121,7 @@ def probe(path: str | Path) -> dict:
 
 
 def ffmpeg_version() -> str:
-    r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True,
+    r = subprocess.run([_binary("ffmpeg"), "-version"], capture_output=True, text=True,
                        timeout=30)
     first = (r.stdout or "").splitlines()[0] if r.stdout else ""
     return first.split(" ")[2] if len(first.split(" ")) > 2 else "unknown"
@@ -125,7 +153,7 @@ def nvenc_available() -> bool:
             gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
                                  timeout=15).returncode == 0
             enc = gpu and "h264_nvenc" in subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True,
+                [_binary("ffmpeg"), "-hide_banner", "-encoders"], capture_output=True,
                 text=True, timeout=30).stdout
             _nvenc = bool(enc)
         except (OSError, subprocess.SubprocessError):
