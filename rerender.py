@@ -82,15 +82,16 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
     log.info("re-render clip %02d: %.2f–%.2f preset=%s", clip_index, start,
              end, preset)
 
-    cut_path = cut_mod.cut_clip(info["video_path"], start, end,
-                                clip_dir / "cut.mp4", cfg)
     if aspect == "16:9":
+        cut_path = cut_mod.cut_clip(info["video_path"], start, end,
+                                    clip_dir / "cut.mp4", cfg)
         src, metrics = cut_path, {"aspect": "16:9", "passthrough": True}
     else:
         cuts_rel = [t - start for t in
                     scenes_mod.scene_cuts_in_range(scene_data, start, end)]
-        metrics = reframe_mod.reframe_clip(cut_path, clip_dir / "reframed.mp4",
-                                           cuts_rel, cfg, aspect=aspect)
+        metrics = reframe_mod.reframe_clip(
+            info["video_path"], start, end, clip_dir / "reframed.mp4",
+            cuts_rel, cfg, aspect=aspect, info=info)
         src = clip_dir / "reframed.mp4"
 
     words = [{"word": w["word"],

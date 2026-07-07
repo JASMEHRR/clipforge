@@ -60,7 +60,8 @@ class _Stages:
 def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             job_dir: str | Path | None = None, force: bool = False,
             preset: str | None = None, aspect: str = "9:16",
-            debug: bool | None = None, progress_cb=None) -> dict:
+            debug: bool | None = None, target_count: int | None = None,
+            full_transcribe: bool = False, progress_cb=None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -68,6 +69,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     import metadata as metadata_mod
     import reframe as reframe_mod
     import scenes as scenes_mod
+    import segment as segment_mod
     import transcribe as transcribe_mod
     from llm import resolve_provider
 
@@ -106,22 +108,31 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             source, job_dir, cfg,
             progress_cb=lambda f, msg: report("ingest", 0.02 + 0.12 * f, msg)))
 
-        report("transcribe", 0.15, "transcribing audio")
+        report("scenes", 0.15, "detecting shots")
+        scene_data = stages.run("scenes", lambda: scenes_mod.detect_scenes(
+            info["video_path"], cfg))
+
+        # segment-first: shortlist the spans worth transcribing (long inputs)
+        target = target_count or cfg["clips"]["max_candidates"]
+        spans = None
+        if not full_transcribe:
+            spans = segment_mod.shortlist_spans(
+                info["duration"], scene_data, info["audio_path"], cfg, target)
+        if spans:
+            notes.append(f"segment-first: transcribing {len(spans)} span(s) "
+                         "instead of the whole video")
+
+        report("transcribe", 0.22, "transcribing audio")
         transcript = stages.run("transcribe", lambda: transcribe_mod.transcribe(
-            info["audio_path"], cfg, debug_dir=debug_dir,
+            info["audio_path"], cfg, spans=spans, debug_dir=debug_dir,
             progress_cb=lambda f: report(
-                "transcribe", 0.15 + 0.15 * f,
-                f"transcribing {f * 100:.0f}% "
-                f"({f * info['duration'] / 60:.0f}/{info['duration'] / 60:.0f} min)")))
+                "transcribe", 0.22 + 0.18 * f,
+                f"transcribing {f * 100:.0f}%")))
         if not transcript["sentences"]:
             notes.append("empty transcript — mechanical windows used "
                          "(passed mechanically; re-verify with a real sample)")
 
-        report("scenes", 0.30, "detecting shots")
-        scene_data = stages.run("scenes", lambda: scenes_mod.detect_scenes(
-            info["video_path"], cfg))
-
-        report("highlights", 0.38, "selecting highlights")
+        report("highlights", 0.42, "selecting highlights")
         candidates = stages.run("highlights", lambda: hl.select_highlights(
             transcript, scene_data, info["duration"], cfg,
             provider=provider, debug_dir=debug_dir))
@@ -194,18 +205,20 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     clip_dir = job_dir / f"clip_{i:02d}"
     clip_dir.mkdir(exist_ok=True)
     start, end = cand["start"], cand["end"]
+    source = info["video_path"]
 
-    cut_path = cut_mod.cut_clip(info["video_path"], start, end,
-                                clip_dir / "cut.mp4", cfg)
     if aspect == "16:9":
+        # passthrough: a frame-accurate cut is the clip (captions burn onto it)
+        cut_path = cut_mod.cut_clip(source, start, end, clip_dir / "cut.mp4", cfg)
         source_for_captions, metrics = cut_path, {"aspect": "16:9",
                                                   "passthrough": True}
     else:
+        # single re-encode straight from the source (no full-res intermediate)
         cuts_rel = [t - start for t in
                     scenes_mod.scene_cuts_in_range(scene_data, start, end)]
         metrics = reframe_mod.reframe_clip(
-            cut_path, clip_dir / "reframed.mp4", cuts_rel, cfg,
-            aspect=aspect, debug_dir=debug_dir)
+            source, start, end, clip_dir / "reframed.mp4", cuts_rel, cfg,
+            aspect=aspect, debug_dir=debug_dir, info=info)
         source_for_captions = clip_dir / "reframed.mp4"
 
     words = [{"word": w["word"],
@@ -263,6 +276,9 @@ def main(argv=None):
     ap.add_argument("--preset", default=None, help="caption preset name")
     ap.add_argument("--aspect", default="9:16",
                     choices=["9:16", "1:1", "16:9"])
+    ap.add_argument("--full-transcribe", action="store_true",
+                    help="transcribe the whole video (disable segment-first "
+                         "shortlisting)")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -276,7 +292,7 @@ def main(argv=None):
 
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
                   force=a.force, preset=a.preset, aspect=a.aspect,
-                  debug=a.debug or None)
+                  debug=a.debug or None, full_transcribe=a.full_transcribe)
     kept = [c for c in job["clips"] if c.get("kept")]
     print(f"job {job['job_id']}: {len(kept)} clips kept of "
           f"{len(job['clips'])} rendered -> {job['job_dir']}")

@@ -91,6 +91,8 @@ captions:
 
 reframe:
   output: { width: 1080, height: 1920 }
+  proxy_height: 360             # MediaPipe tracking runs on a 360p proxy (fast);
+  proxy_fps: 12                 # crop coords scale back to full res
   face_detect_every_n_frames: 5
   ema_alpha: 0.15               # crop path smoothing
   lookahead_frames: 12          # future frames influence current crop

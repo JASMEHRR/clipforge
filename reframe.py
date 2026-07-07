@@ -148,13 +148,15 @@ def _mouth_openness(landmarks, h: int) -> float:
 
 
 def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
-                  n_frames: int) -> tuple[list[float | None], dict]:
+                  every: int | None = None) -> tuple[list[float | None], dict]:
     """Sampled target x-centers (None = no signal → later filled with center).
-    Returns (targets_per_sampled_frame, stats)."""
+    Returns (targets_per_sampled_frame, stats). `every` is the frame sampling
+    stride; on a reduced-fps proxy pass 1 (every frame)."""
     import cv2
     import mediapipe as mp
 
-    every = max(1, int(rcfg["face_detect_every_n_frames"]))
+    every = max(1, int(every if every is not None
+                       else rcfg["face_detect_every_n_frames"]))
     cap = cv2.VideoCapture(str(clip_path))
     tracker = _FaceTracker(w)
     targets: list[float | None] = []
@@ -219,48 +221,73 @@ def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
 
 # --------------------------------------------------------------- main entry
 
-def reframe_clip(clip_path: str | Path, out_path: str | Path,
-                 scene_cuts_rel: list[float] | None = None,
+def _build_proxy(source: Path, start: float, dur: float, proxy: Path,
+                 proxy_h: int, proxy_fps: float) -> None:
+    """Small, cheap, low-fps proxy of just the clip window for MediaPipe
+    tracking. Fast keyframe seek (-ss before -i), video only."""
+    run_ffmpeg(["-ss", f"{start:.3f}", "-i", source, "-t", f"{dur:.3f}", "-an",
+                "-vf", f"scale=-2:{proxy_h},fps={proxy_fps}",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", proxy],
+               timeout=900)
+
+
+def reframe_clip(source: str | Path, start: float, end: float,
+                 out_path: str | Path, scene_cuts_rel: list[float] | None = None,
                  cfg: dict | None = None, aspect: str = "9:16",
-                 debug_dir: str | Path | None = None) -> dict:
-    """Reframe a cut clip to the target aspect. Returns metrics dict."""
+                 debug_dir: str | Path | None = None,
+                 info: dict | None = None) -> dict:
+    """Reframe the [start, end] window of `source` to the target aspect in a
+    SINGLE re-encode (seek + crop + scale straight from the source — no
+    intermediate full-res cut). Tracking runs on a 360p low-fps proxy; crop
+    coordinates are scaled back to full resolution. Returns a metrics dict."""
     cfg = cfg or load_config()
     rcfg = cfg["reframe"]
-    clip_path, out_path = Path(clip_path), Path(out_path)
-    if not clip_path.exists():
-        raise ReframeError(f"clip not found: {clip_path}")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    info = probe(clip_path)
-    w, h, fps = info["width"], info["height"], info["fps"]
-    dur = info["duration"]
+    source, out_path = Path(source), Path(out_path)
+    if not source.exists():
+        raise ReframeError(f"source not found: {source}")
     if aspect == "16:9":
         raise ReframeError("16:9 is pass-through — pipeline must skip reframe")
-    ow, oh = ((cfg["reframe"]["output"]["width"], cfg["reframe"]["output"]["height"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    src = info or probe(source)
+    w, h, fps = int(src["width"]), int(src["height"]), float(src["fps"])
+    dur = end - start
+    if dur <= 0:
+        raise ReframeError(f"invalid range: start={start} end={end}")
+    ow, oh = ((rcfg["output"]["width"], rcfg["output"]["height"])
               if aspect == "9:16" else (1080, 1080))
     cw, ch, y0 = crop_geometry(w, h, aspect)
-
-    every = max(1, int(rcfg["face_detect_every_n_frames"]))
     n_frames = max(1, int(round(dur * fps)))
 
+    proxy_h = int(rcfg.get("proxy_height", 360))
+    proxy_fps = float(rcfg.get("proxy_fps", 12))
+    proxy = out_path.with_name(out_path.stem + "_proxy.mp4")
     try:
-        targets, stats = track_targets(clip_path, rcfg, w, h, n_frames)
-    except ReframeError:
-        raise
+        _build_proxy(source, start, dur, proxy, proxy_h, proxy_fps)
+        pinfo = probe(proxy)
+        pw = int(pinfo["width"])
+        targets, stats = track_targets(proxy, rcfg, pw, int(pinfo["height"]),
+                                       every=1)
     except Exception as e:  # noqa: BLE001 — tracking failure → center fallback
         log.warning("tracking failed (%s) — center crop with headroom", e)
-        targets, stats = [], {"face": 0, "motion": 0, "center": 1}
+        targets, stats, pw = [], {"face": 0, "motion": 0, "center": 1}, w
+    finally:
+        proxy.unlink(missing_ok=True)
 
     center = w / 2.0
     half = cw / 2.0
+    x_scale = w / max(pw, 1)  # proxy-x → source-x
     # clamp raw targets into the reachable range BEFORE smoothing so the
     # follower's guarantees survive (a post-hoc position clamp would kink
     # the path and break the acceleration bound)
-    sampled = [float(np.clip(t if t is not None else center, half, w - half))
+    sampled = [float(np.clip(t * x_scale if t is not None else center,
+                             half, w - half))
                for t in targets] or [center]
-    # interpolate sampled targets to every frame
-    xs = np.arange(len(sampled)) * every
-    full = np.interp(np.arange(n_frames), xs, sampled).tolist()
+    # interpolate sampled proxy targets (spaced 1/proxy_fps apart) onto every
+    # output frame time
+    sample_times = np.arange(len(sampled)) / proxy_fps
+    frame_times = np.arange(n_frames) / fps
+    full = np.interp(frame_times, sample_times, sampled).tolist()
 
     # per-scene segments: smoothing resets at shot boundaries
     cut_frames = sorted({int(t * fps) for t in (scene_cuts_rel or [])
@@ -284,54 +311,40 @@ def reframe_clip(clip_path: str | Path, out_path: str | Path,
     vf = (f"sendcmd=f='{filter_path(cmd_file)}',"
           f"crop@dyn=w={cw}:h={ch}:x={max(0.0, path[0] - half):.1f}:y={y0},"
           f"scale={ow}:{oh}:flags=lanczos,setsar=1")
-    run_ffmpeg(["-i", clip_path, "-vf", vf]
-               + video_encode_args(cfg) + ["-c:a", "copy", out_path])
+    # single re-encode from source: fast seek, crop, scale, and re-encode audio
+    # for the same window (aac keeps sync across arbitrary start times)
+    run_ffmpeg(["-ss", f"{start:.3f}", "-i", source, "-t", f"{dur:.3f}",
+                "-vf", vf] + video_encode_args(cfg)
+               + ["-c:a", "aac", "-b:a", cfg["render"]["audio_bitrate"],
+                  "-movflags", "+faststart", out_path])
 
     metrics = {"aspect": aspect, "crop": [cw, ch], "output": [ow, oh],
                "tracking": stats, "smoothness": worst,
                "smoothness_ok": bool(all_ok),
                "segments": len(bounds) - 1}
-    log.info("reframed %s: tracking=%s smoothness=%s ok=%s",
-             clip_path.name, stats,
+    log.info("reframed %s [%.1f-%.1f]: tracking=%s smoothness=%s ok=%s",
+             source.name, start, end, stats,
              {k: round(v, 2) for k, v in worst.items()}, all_ok)
 
     if debug_dir:
-        _dump_debug(clip_path, Path(debug_dir), path, half, cw, ch, y0,
-                    n_frames, metrics)
+        Path(debug_dir).mkdir(parents=True, exist_ok=True)
+        (Path(debug_dir) / f"{out_path.stem}_croppath.json").write_text(
+            json.dumps({"metrics": metrics, "path_every_10": path[::10]}),
+            encoding="utf-8")
     if not cmd_file.exists() or not out_path.exists():
         raise ReframeError("reframe output missing")
     cmd_file.unlink(missing_ok=True)
     return metrics
 
 
-def _dump_debug(clip_path, debug_dir, path, half, cw, ch, y0, n_frames, metrics):
-    """DEBUG mode: 10 evenly spaced frames with the crop rect drawn."""
-    import cv2
-    frames_dir = debug_dir / "reframe_frames" / clip_path.stem
-    frames_dir.mkdir(parents=True, exist_ok=True)
-    (debug_dir / f"{clip_path.stem}_croppath.json").write_text(
-        json.dumps({"metrics": metrics, "path_every_10": path[::10]}),
-        encoding="utf-8")
-    cap = cv2.VideoCapture(str(clip_path))
-    picks = {int(i * (n_frames - 1) / 9) for i in range(10)}
-    idx = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if idx in picks and idx < len(path):
-            x = int(path[idx] - half)
-            cv2.rectangle(frame, (x, y0), (x + cw, y0 + ch), (0, 255, 0), 2)
-            cv2.imwrite(str(frames_dir / f"f{idx:05d}.jpg"), frame)
-        idx += 1
-    cap.release()
-
-
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="smoke: reframe a clip")
-    ap.add_argument("clip")
+    ap = argparse.ArgumentParser(description="smoke: reframe a source window")
+    ap.add_argument("source")
+    ap.add_argument("start", type=float)
+    ap.add_argument("end", type=float)
     ap.add_argument("--out", default="output/_smoke_reframe.mp4")
     ap.add_argument("--aspect", default="9:16")
     a = ap.parse_args()
-    print(json.dumps(reframe_clip(a.clip, a.out, aspect=a.aspect), indent=2))
+    print(json.dumps(reframe_clip(a.source, a.start, a.end, a.out,
+                                  aspect=a.aspect), indent=2))

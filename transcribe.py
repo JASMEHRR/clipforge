@@ -6,15 +6,18 @@ hash, so re-runs are instant."""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from config import ROOT, config_hash, file_hash, load_config
 from errors import TranscribeError
+from ffutil import run_ffmpeg
 from logutil import get_logger
 from schemas import validate
 
@@ -73,20 +76,91 @@ def model_config(cfg: dict) -> tuple[str, str, str]:
     return w["model"], "cpu", w["compute_type"]
 
 
+def _spans_key(spans: list[tuple] | None) -> str:
+    """Stable short hash of the span set for the transcript cache key."""
+    if not spans:
+        return "whole"
+    blob = ";".join(f"{s:.3f}-{e:.3f}" for s, e in spans).encode("utf-8")
+    return "spans_" + hashlib.sha256(blob).hexdigest()[:12]
+
+
+def _build_model(cfg: dict):
+    model_name, device, compute = model_config(cfg)
+    if device == "cuda":
+        _register_cuda_dll_dirs()
+    from faster_whisper import WhisperModel
+    model = WhisperModel(model_name, device=device, compute_type=compute,
+                         cpu_threads=(os.cpu_count() or 4),
+                         download_root=str(ROOT / cfg["whisper"]["model_dir"]))
+    return model, model_name, device, compute
+
+
+def _run_whisper(model, path: str | Path, cfg: dict):
+    """Transcribe one audio file; return (words, info). Options match the
+    performance/quality contract: VAD on, greedy (beam per config), no
+    cross-segment conditioning (avoids hallucinated carry-over on clips)."""
+    beam = int(cfg["whisper"].get("beam_size", 1))
+    segments, info = model.transcribe(
+        str(path), word_timestamps=True, vad_filter=True, beam_size=beam,
+        condition_on_previous_text=False, language=cfg["whisper"].get("language"))
+    words = []
+    for seg in segments:  # generator — streams, memory-safe
+        for w in seg.words or []:
+            token = w.word.strip()
+            if token:
+                words.append({"word": token,
+                              "start": float(w.start),
+                              "end": float(w.end)})
+    return words, info
+
+
+def _transcribe_spans(model, audio_path: Path, spans: list[tuple], cfg: dict,
+                      progress_cb=None) -> tuple[list[dict], list[dict], str]:
+    """Transcribe only the shortlisted spans. Each span is trimmed from the wav
+    with a fast keyframe seek, transcribed, and its word times offset back to
+    absolute. Sentences are grouped per span so grouping never bridges a gap."""
+    all_words: list[dict] = []
+    all_sents: list[dict] = []
+    language = ""
+    total = max(1e-6, sum(e - s for s, e in spans))
+    done = 0.0
+    with tempfile.TemporaryDirectory(prefix="clipforge_spans_") as td:
+        for i, (s, e) in enumerate(spans):
+            clip = Path(td) / f"span_{i:03d}.wav"
+            run_ffmpeg(["-ss", f"{s:.3f}", "-i", audio_path,
+                        "-t", f"{e - s:.3f}", "-c", "copy", clip], timeout=600)
+            words, info = _run_whisper(model, clip, cfg)
+            language = language or (info.language or "")
+            span_words = [{"word": w["word"],
+                           "start": round(w["start"] + s, 3),
+                           "end": round(w["end"] + s, 3)} for w in words]
+            all_words.extend(span_words)
+            all_sents.extend(build_sentences(span_words))
+            done += (e - s)
+            if progress_cb:
+                progress_cb(min(1.0, done / total))
+    all_words.sort(key=lambda w: w["start"])
+    all_sents.sort(key=lambda s: s["start"])
+    return all_words, all_sents, (language or "en")
+
+
 def transcribe(audio_path: str | Path, cfg: dict | None = None,
+               spans: list[tuple] | None = None,
                debug_dir: str | Path | None = None,
                progress_cb=None) -> dict:
     """Returns Transcript dict (schema-validated). `progress_cb(frac)` gets
-    live 0..1 progress while Whisper walks the audio."""
+    live 0..1 progress. When `spans` is given, only those (start, end) regions
+    are transcribed (segment-first); otherwise the whole audio is transcribed."""
     cfg = cfg or load_config()
     audio_path = Path(audio_path)
     if not audio_path.exists():
         raise TranscribeError(f"audio not found: {audio_path}")
 
-    model_name, device, compute = model_config(cfg)
+    model_name, device, _ = model_config(cfg)
     cache_dir = ROOT / cfg["paths"]["cache_dir"] / "transcripts"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = f"{file_hash(audio_path)[:24]}_{model_name}_{config_hash(cfg, 'whisper')}"
+    key = (f"{file_hash(audio_path)[:24]}_{model_name}_"
+           f"{config_hash(cfg, 'whisper')}_{_spans_key(spans)}")
     cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
         log.info("transcript cache hit: %s", cache_file.name)
@@ -96,37 +170,32 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
         return data
 
     beam = int(cfg["whisper"].get("beam_size", 1))
-    log.info("whisper %s on %s (%s, beam=%d)", model_name, device, compute, beam)
+    log.info("whisper %s on %s (beam=%d, %s)", model_name, device, beam,
+             f"{len(spans)} spans" if spans else "whole video")
     try:
-        if device == "cuda":
-            _register_cuda_dll_dirs()
-
-        from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device=device, compute_type=compute,
-                             cpu_threads=(os.cpu_count() or 4),
-                             download_root=str(ROOT / cfg["whisper"]["model_dir"]))
-        segments, info = model.transcribe(
-            str(audio_path), word_timestamps=True, vad_filter=True,
-            beam_size=beam, language=cfg["whisper"].get("language"))
-        total = float(info.duration or 0.0) or 1.0
-        words = []
-        for seg in segments:  # generator — streams, memory-safe
-            if progress_cb:
-                progress_cb(min(1.0, float(seg.end) / total))
-            for w in seg.words or []:
-                token = w.word.strip()
-                if token:
-                    words.append({"word": token,
-                                  "start": round(float(w.start), 3),
-                                  "end": round(float(w.end), 3)})
-        language = info.language or "en"
-        duration = float(info.duration or 0.0)
+        model, _, _, _ = _build_model(cfg)
+        if spans:
+            words, sentences, language = _transcribe_spans(
+                model, audio_path, spans, cfg, progress_cb)
+            duration = sum(e - s for s, e in spans)
+        else:
+            raw, info = _run_whisper(model, audio_path, cfg)
+            total = float(info.duration or 0.0) or 1.0
+            words = []
+            for w in raw:
+                words.append({"word": w["word"],
+                              "start": round(w["start"], 3),
+                              "end": round(w["end"], 3)})
+                if progress_cb:
+                    progress_cb(min(1.0, w["end"] / total))
+            sentences = build_sentences(words)
+            language = info.language or "en"
+            duration = float(info.duration or 0.0)
     except TranscribeError:
         raise
     except Exception as e:  # noqa: BLE001
         raise TranscribeError("faster-whisper failed", detail=str(e)[:500]) from e
 
-    sentences = build_sentences(words)
     data = {
         "text": " ".join(w["word"] for w in words),
         "language": language,
