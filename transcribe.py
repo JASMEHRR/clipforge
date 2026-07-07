@@ -103,16 +103,24 @@ def _build_model(cfg: dict):
     return model, model_name, device, compute
 
 
-def _run_whisper(model, path: str | Path, cfg: dict):
+def _run_whisper(model, path: str | Path, cfg: dict, progress_cb=None,
+                 base: float = 0.0, span: float = 0.0):
     """Transcribe one audio file; return (words, info). Options match the
     performance/quality contract: VAD on, greedy (beam per config), no
-    cross-segment conditioning (avoids hallucinated carry-over on clips)."""
+    cross-segment conditioning (avoids hallucinated carry-over on clips).
+
+    `progress_cb`, when given, is called live as the generator streams (so long
+    transcriptions show real progress instead of a single jump at the end);
+    `base`/`span` map this file's 0..duration onto a fraction of the whole job."""
     beam = int(cfg["whisper"].get("beam_size", 1))
     segments, info = model.transcribe(
         str(path), word_timestamps=True, vad_filter=True, beam_size=beam,
         condition_on_previous_text=False, language=cfg["whisper"].get("language"))
+    total = float(info.duration or 0.0) or 1.0
     words = []
     for seg in segments:  # generator — streams, memory-safe
+        if progress_cb and span > 0:
+            progress_cb(min(1.0, base + span * min(1.0, float(seg.end) / total)))
         for w in seg.words or []:
             token = w.word.strip()
             if token:
@@ -137,7 +145,8 @@ def _transcribe_spans(model, audio_path: Path, spans: list[tuple], cfg: dict,
             clip = Path(td) / f"span_{i:03d}.wav"
             run_ffmpeg(["-ss", f"{s:.3f}", "-i", audio_path,
                         "-t", f"{e - s:.3f}", "-c", "copy", clip], timeout=600)
-            words, info = _run_whisper(model, clip, cfg)
+            words, info = _run_whisper(model, clip, cfg, progress_cb,
+                                       base=done / total, span=(e - s) / total)
             language = language or (info.language or "")
             span_words = [{"word": w["word"],
                            "start": round(w["start"] + s, 3),
@@ -187,15 +196,11 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
                 model, audio_path, spans, cfg, progress_cb)
             duration = sum(e - s for s, e in spans)
         else:
-            raw, info = _run_whisper(model, audio_path, cfg)
-            total = float(info.duration or 0.0) or 1.0
-            words = []
-            for w in raw:
-                words.append({"word": w["word"],
-                              "start": round(w["start"], 3),
-                              "end": round(w["end"], 3)})
-                if progress_cb:
-                    progress_cb(min(1.0, w["end"] / total))
+            raw, info = _run_whisper(model, audio_path, cfg, progress_cb,
+                                     base=0.0, span=1.0)
+            words = [{"word": w["word"],
+                      "start": round(w["start"], 3),
+                      "end": round(w["end"], 3)} for w in raw]
             sentences = build_sentences(words)
             language = info.language or "en"
             duration = float(info.duration or 0.0)
