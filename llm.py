@@ -201,6 +201,10 @@ def _mock_complete(task, schema, prompt, context):
         # imported lazily to avoid a circular import at module load.
         from metadata import template_metadata
         return template_metadata(context.get("hook", ""), context["text"])
+    if task == "virality" and context.get("duration") is not None:
+        from virality import rule_based_virality
+        return rule_based_virality(context["text"], context.get("hook", ""),
+                                   context["duration"])
     return synthesize_from_schema(schema, seed=task)
 
 

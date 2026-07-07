@@ -239,15 +239,19 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
 
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
-    (clip_dir / "metadata.json").write_text(json.dumps(meta, indent=2),
-                                            encoding="utf-8")
+
+    import virality as virality_mod
+    vir = virality_mod.rate_virality(clip_text, cand["hook"], end - start, cfg,
+                                     provider)
+    (clip_dir / "metadata.json").write_text(
+        json.dumps({**meta, "virality": vir}, indent=2), encoding="utf-8")
 
     return {"index": i, "start": start, "end": end,
             "duration": round(end - start, 3),
             "hook": cand["hook"], "reason": cand.get("reason", ""),
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
-            "metadata": meta, "reframe": metrics,
+            "metadata": meta, "virality": vir, "reframe": metrics,
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
 
 

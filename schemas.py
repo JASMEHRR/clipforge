@@ -136,6 +136,22 @@ CLIP_METADATA = {
     "additionalProperties": False,
 }
 
+# LLM output: per-clip virality rating.
+VIRALITY = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "verdict": {"type": "string", "enum": ["post", "maybe", "skip"]},
+        "reasons": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+    },
+    "required": ["score", "verdict", "reasons"],
+    "additionalProperties": False,
+}
+
 JOB_RECORD = {
     "type": "object",
     "properties": {
@@ -172,6 +188,7 @@ SCHEMAS: dict[str, dict] = {
     "highlight_candidates": HIGHLIGHT_CANDIDATES,
     "clip_score": CLIP_SCORE,
     "clip_metadata": CLIP_METADATA,
+    "virality": VIRALITY,
     "job_record": JOB_RECORD,
 }
 

@@ -21,6 +21,15 @@ log = get_logger("app")
 
 # --------------------------------------------------------------- create tab
 
+def _virality_badge(vir: dict | None) -> str:
+    """Green >=70 / yellow 40-69 / red <40 virality badge for the score table."""
+    if not vir:
+        return "-"
+    score = vir.get("score", 0)
+    dot = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
+    return f"{dot} {int(score)} ({vir.get('verdict', '?')})"
+
+
 def _run_generator(file_path, url, preset, aspect, provider, n_clips):
     from pipeline import run_job
 
@@ -85,9 +94,12 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips):
 
     job = holder["job"]
     kept = [c for c in job["clips"] if c.get("kept")]
-    md = ["| # | score | length | title | preset |", "|---|---|---|---|---|"]
+    kept.sort(key=lambda c: -c.get("virality", {}).get("score", 0))
+    md = ["| # | virality | quality | length | title | preset |",
+          "|---|---|---|---|---|---|"]
     for rank, c in enumerate(kept, 1):
-        md.append(f"| {rank} | {c['weighted_score']:.2f} | "
+        md.append(f"| {rank} | {_virality_badge(c.get('virality'))} | "
+                  f"{c['weighted_score']:.2f} | "
                   f"{c['duration']:.0f}s | {c['metadata']['title']} | "
                   f"{c['preset']} |")
     files = [c["path"] for c in kept if Path(c["path"]).exists()]
