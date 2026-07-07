@@ -3,8 +3,7 @@
 2. all 4 caption presets render correctly on one clip each
 3. editing a clip's bounds re-renders ONLY that clip (others untouched,
    transcription not re-run)
-4. thumbnails exist (3 per kept clip)
-5. upload path shows correct setup guidance with creds absent AND the
+4. upload path shows correct setup guidance with creds absent AND the
    mocked-API unit tests pass
 
 Usage: python scripts/gate2.py
@@ -105,17 +104,7 @@ for p, m in other_mtimes.items():
 if (job1 / ".done_transcribe.json").stat().st_mtime != transcribe_marker:
     failures.append("re-render re-ran transcription")
 
-# ---- 4. thumbnails -------------------------------------------------------
-for d in done_dirs:
-    jd = json.loads((Path(d) / "job.json").read_text(encoding="utf-8"))
-    for c in jd["clips"]:
-        if c.get("kept"):
-            thumbs = [t for t in c.get("thumbnails", []) if Path(t).exists()]
-            if len(thumbs) != 3:
-                failures.append(f"{Path(d).name} clip {c['index']:02d}: "
-                                f"{len(thumbs)} thumbnails (want 3)")
-
-# ---- 5. upload guidance + mocked tests ----------------------------------
+# ---- 4. upload guidance + mocked tests ----------------------------------
 from app import _upload_status  # noqa: E402
 
 status = _upload_status()

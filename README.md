@@ -22,7 +22,7 @@ picks the moments and writes the metadata instead.
   highlight-box), bundled OFL Montserrat fonts, `.srt` exported per clip
 - Post-render re-scoring: weak clips dropped (bottom 30%), at least 3 kept
 - Gradio UI: create, batch queue (+ watched `inbox/` folder), clip editing
-  with sentence-snapped re-render, thumbnails, YouTube upload, job history
+  with sentence-snapped re-render, YouTube upload, job history
 - Idempotent pipeline: cached transcripts/scenes, per-stage completion
   markers, `--force` to redo
 
@@ -110,7 +110,7 @@ Secrets live **only** in `.env` (see `.env.example`). Never commit `.env`.
 ```
 output/20260705-123456_myvideo/
   job.json  job.log
-  clip_00/final.mp4  final.srt  metadata.json  final_thumb{1..3}.jpg
+  clip_00/final.mp4  final.srt  metadata.json
   clip_01/...
 ```
 

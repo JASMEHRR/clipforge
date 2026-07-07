@@ -26,7 +26,7 @@ def _run_generator(file_path, url, preset, aspect, provider):
 
     source = (url or "").strip() or file_path
     if not source:
-        yield "Provide a video file or a URL.", "", [], []
+        yield "Provide a video file or a URL.", "", []
         return
 
     cfg = load_config()
@@ -57,7 +57,7 @@ def _run_generator(file_path, url, preset, aspect, provider):
 
     threading.Thread(target=work, daemon=True).start()
     lines: list[str] = [f"Job started: {source}"]
-    yield "\n".join(lines), "", [], []
+    yield "\n".join(lines), "", []
 
     def _stage_of(s: str) -> str:
         return s.split("%", 1)[-1].split(":", 1)[0] if "%" in s else s
@@ -74,11 +74,11 @@ def _run_generator(file_path, url, preset, aspect, provider):
             lines[-1] = item
         else:
             lines.append(item)
-        yield "\n".join(lines[-25:]), "", [], []
+        yield "\n".join(lines[-25:]), "", []
 
     if "error" in holder:
         lines.append(f"FAILED: {holder['error']}")
-        yield "\n".join(lines[-25:]), "", [], []
+        yield "\n".join(lines[-25:]), "", []
         return
 
     job = holder["job"]
@@ -90,11 +90,9 @@ def _run_generator(file_path, url, preset, aspect, provider):
                   f"{c['preset']} |")
     files = [c["path"] for c in kept if Path(c["path"]).exists()]
     files += [c["srt"] for c in kept if Path(c.get("srt", "")).exists()]
-    thumbs = [t for c in kept for t in c.get("thumbnails", [])
-              if Path(t).exists()]
     lines.append(f"Done: {len(kept)} clips kept of {len(job['clips'])} "
                  f"rendered → {job['job_dir']}")
-    yield "\n".join(lines[-25:]), "\n".join(md), files, thumbs
+    yield "\n".join(lines[-25:]), "\n".join(md), files
 
 
 # ---------------------------------------------------------------- batch tab
@@ -269,11 +267,9 @@ def build_app() -> gr.Blocks:
                     progress_out = gr.Textbox(label="Progress", lines=10)
                     ranking_out = gr.Markdown()
                     files_out = gr.Files(label="Download clips + subtitles")
-                    thumbs_out = gr.Gallery(label="Thumbnails", columns=6,
-                                            height=180)
             run_btn.click(_run_generator,
                           [file_in, url_in, preset_in, aspect_in, provider_in],
-                          [progress_out, ranking_out, files_out, thumbs_out])
+                          [progress_out, ranking_out, files_out])
 
         with gr.Tab("Batch"):
             batch_in = gr.Textbox(label="One file path or URL per line",

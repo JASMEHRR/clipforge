@@ -48,7 +48,6 @@ Zero-touch build; every gate runs keyless (mock LLM provider + deterministic fal
 | reframe.py | cut.mp4, scenes, aspect | `reframed.mp4` (1080×1920 / 1080×1080 / passthrough), crop-path debug JSON |
 | captions.py | reframed.mp4, words, preset | `final.mp4` (burned ASS), `.ass`, `.srt` |
 | metadata.py | transcript slice, hook | ClipMetadata JSON: title ≤60, description, 8–12 hashtags |
-| thumbnails.py | final.mp4 | 3 jpgs (sharp/face/mid-action heuristic) |
 | rescore (in highlights.py) | rendered clips + transcript | ClipScore JSON per clip; kept list |
 | pipeline.py | source, options | job folder with everything above + `job.json` |
 | youtube_upload.py | clip + metadata + creds | upload result / setup guidance (never live in build) |
