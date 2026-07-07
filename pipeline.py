@@ -324,6 +324,8 @@ def main(argv=None):
                          "(see music.py --list)")
     ap.add_argument("--music-volume", type=float, default=-22.0,
                     help="background music volume in dB (default -22)")
+    ap.add_argument("--zip", action="store_true",
+                    help="also write a clips_bundle.zip of kept clips")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -346,6 +348,9 @@ def main(argv=None):
     for c in kept:
         print(f"  [{c['weighted_score']:.2f}] {c['duration']:.0f}s "
               f"{c['metadata']['title']}")
+    if a.zip and kept:
+        from bundle import zip_job
+        print(f"bundle -> {zip_job(job['job_dir'])}")
     return 0
 
 

@@ -48,7 +48,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
 
     source = (url or "").strip() or file_path
     if not source:
-        yield "Provide a video file or a URL.", "", []
+        yield "Provide a video file or a URL.", "", [], ""
         return
     target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
@@ -84,7 +84,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
 
     threading.Thread(target=work, daemon=True).start()
     lines: list[str] = [f"Job started: {source}"]
-    yield "\n".join(lines), "", []
+    yield "\n".join(lines), "", [], ""
 
     def _stage_of(s: str) -> str:
         return s.split("%", 1)[-1].split(":", 1)[0] if "%" in s else s
@@ -101,11 +101,11 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
             lines[-1] = item
         else:
             lines.append(item)
-        yield "\n".join(lines[-25:]), "", []
+        yield "\n".join(lines[-25:]), "", [], ""
 
     if "error" in holder:
         lines.append(f"FAILED: {holder['error']}")
-        yield "\n".join(lines[-25:]), "", []
+        yield "\n".join(lines[-25:]), "", [], ""
         return
 
     job = holder["job"]
@@ -122,7 +122,49 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
     files += [c["srt"] for c in kept if Path(c.get("srt", "")).exists()]
     lines.append(f"Done: {len(kept)} clips kept of {len(job['clips'])} "
                  f"rendered → {job['job_dir']}")
-    yield "\n".join(lines[-25:]), "\n".join(md), files
+    yield "\n".join(lines[-25:]), "\n".join(md), files, job["job_dir"]
+
+
+# -------------------------------------------------------------- bulk download
+
+def _zip_current(job_dir):
+    from bundle import zip_job
+    if not job_dir:
+        return None
+    try:
+        return str(zip_job(job_dir))
+    except Exception as e:  # noqa: BLE001
+        log.warning("bundle failed: %s", e)
+        return None
+
+
+def _zip_history(job_id):
+    from bundle import zip_job
+    from history import get_job
+    if not job_id:
+        return None
+    job = get_job(job_id.strip())
+    if job is None or not job.get("job_dir"):
+        return None
+    try:
+        return str(zip_job(job["job_dir"]))
+    except Exception as e:  # noqa: BLE001
+        log.warning("bundle failed: %s", e)
+        return None
+
+
+def _zip_batch_all():
+    from batch import get_queue
+    from bundle import zip_jobs
+    dirs = [i["job_dir"] for i in get_queue().items
+            if i["status"] == "done" and i.get("job_dir")]
+    if not dirs:
+        return None
+    try:
+        return str(zip_jobs(dirs))
+    except Exception as e:  # noqa: BLE001
+        log.warning("bundle failed: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------- batch tab
@@ -305,10 +347,15 @@ def build_app() -> gr.Blocks:
                     progress_out = gr.Textbox(label="Progress", lines=10)
                     ranking_out = gr.Markdown()
                     files_out = gr.Files(label="Download clips + subtitles")
+                    job_dir_state = gr.State("")
+                    with gr.Row():
+                        zip_btn = gr.Button("Download all (zip)")
+                    zip_out = gr.File(label="Bundle (.zip)")
             run_btn.click(_run_generator,
                           [file_in, url_in, preset_in, aspect_in, provider_in,
                            clips_in, music_in, music_vol],
-                          [progress_out, ranking_out, files_out])
+                          [progress_out, ranking_out, files_out, job_dir_state])
+            zip_btn.click(_zip_current, [job_dir_state], [zip_out])
 
         with gr.Tab("Batch"):
             batch_in = gr.Textbox(label="One file path or URL per line",
@@ -322,9 +369,13 @@ def build_app() -> gr.Blocks:
             batch_table = gr.Dataframe(
                 headers=["id", "source", "status", "message"],
                 interactive=False)
+            with gr.Row():
+                batch_zip_btn = gr.Button("Download everything (zip)")
+            batch_zip_out = gr.File(label="All jobs bundle (.zip)")
             batch_btn.click(_batch_add, [batch_in], [batch_msg, batch_table])
             refresh_btn.click(_batch_rows, [], [batch_table])
             inbox_cb.change(_inbox_toggle, [inbox_cb], [batch_msg])
+            batch_zip_btn.click(_zip_batch_all, [], [batch_zip_out])
 
         with gr.Tab("Edit clips"):
             with gr.Row():
@@ -374,8 +425,11 @@ def build_app() -> gr.Blocks:
                 value=_history_rows(), interactive=False)
             hist_msg = gr.Markdown()
             hist_files = gr.Files(label="Clips")
+            hist_zip_btn = gr.Button("Download all (zip)")
+            hist_zip_out = gr.File(label="Bundle (.zip)")
             hist_refresh.click(_history_rows, [], [hist_table])
             hist_open.click(_history_open, [hist_id], [hist_files, hist_msg])
+            hist_zip_btn.click(_zip_history, [hist_id], [hist_zip_out])
     return demo
 
 
