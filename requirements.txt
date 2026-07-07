@@ -106,3 +106,11 @@ yt-dlp==2026.7.4
 
 # LLM provider SDK (only used when GEMINI_API_KEY is set; keyless runs use the mock provider)
 google-genai==2.10.0
+
+# CUDA runtime for ctranslate2/faster-whisper GPU inference on Windows (no
+# CUDA Toolkit install needed). ctranslate2 4.8.1 requires CUDA 12.x cuBLAS
+# + cuDNN 9 (see transcribe.py:_register_cuda_dll_dirs). Not needed on
+# Linux/Docker, where LD_LIBRARY_PATH-based installs or the system CUDA
+# Toolkit are used instead.
+nvidia-cublas-cu12==12.9.2.10; sys_platform == "win32"
+nvidia-cudnn-cu12==9.24.0.43; sys_platform == "win32"

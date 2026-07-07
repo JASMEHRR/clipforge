@@ -118,7 +118,12 @@ _nvenc: bool | None = None
 
 
 def nvenc_available() -> bool:
-    """NVIDIA GPU present AND ffmpeg built with h264_nvenc (cached)."""
+    """NVIDIA GPU present, ffmpeg built with h264_nvenc, AND the driver can
+    actually initialize it (cached). The compiled-in encoder list says
+    nothing about whether the installed driver meets NVENC's own minimum
+    version requirement — that only surfaces as a runtime "minimum required
+    Nvidia driver" error from ffmpeg, so a real 1-frame smoke encode is the
+    only reliable check. Falls back to libx264 when it can't."""
     global _nvenc
     if _nvenc is None:
         try:
@@ -127,7 +132,11 @@ def nvenc_available() -> bool:
             enc = gpu and "h264_nvenc" in subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True,
                 text=True, timeout=30).stdout
-            _nvenc = bool(enc)
+            _nvenc = bool(enc) and subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                 "-i", "color=black:s=64x64", "-frames:v", "1",
+                 "-c:v", "h264_nvenc", "-f", "null", "-"],
+                capture_output=True, timeout=30).returncode == 0
         except (OSError, subprocess.SubprocessError):
             _nvenc = False
         log.info("encoder: %s", "h264_nvenc (GPU)" if _nvenc else "libx264 (CPU)")

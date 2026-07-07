@@ -6,8 +6,11 @@ hash, so re-runs are instant."""
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 from config import ROOT, config_hash, file_hash, load_config
@@ -19,6 +22,38 @@ log = get_logger("transcribe")
 
 _SENT_END = re.compile(r"[.!?…]['\")\]]*$")
 MAX_SENTENCE_SECONDS = 30.0
+
+
+def _register_cuda_dll_dirs() -> None:
+    """ctranslate2's CUDA build needs cuBLAS/cuDNN on the DLL search path.
+    On Windows there's no system CUDA Toolkit here, so pull them from the
+    pip-installed nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels instead
+    (see requirements.txt). No-op if those packages aren't installed
+    (e.g. Linux/Docker, or CPU-only setups).
+
+    cuDNN ships bundled inside ctranslate2's own package directory, so it
+    resolves on its own. cuBLAS does not: ctranslate2 loads it lazily via a
+    plain LoadLibraryA("cublas64_12.dll") call (src/cuda/cublas_stub.cc),
+    which os.add_dll_directory() alone does not satisfy. ctranslate2 has a
+    built-in escape hatch for exactly this — it honors CUDA_PATH and calls
+    SetDllDirectoryA(CUDA_PATH + "\\bin") before that load — so point
+    CUDA_PATH at the pip-installed cublas package instead of a real CUDA
+    Toolkit install."""
+    if sys.platform != "win32":
+        return
+    for pkg in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            mod = importlib.import_module(pkg)
+        except ImportError:
+            continue
+        roots = [Path(p) for p in getattr(mod, "__path__", [])]
+        if not roots and mod.__file__:
+            roots = [Path(mod.__file__).parent]
+        for root in roots:
+            for dll_dir in {p.parent for p in root.rglob("*.dll")}:
+                os.add_dll_directory(str(dll_dir))
+            if pkg == "nvidia.cublas" and not os.environ.get("CUDA_PATH"):
+                os.environ["CUDA_PATH"] = str(root)
 
 
 def gpu_available() -> bool:
@@ -63,11 +98,12 @@ def transcribe(audio_path: str | Path, cfg: dict | None = None,
     beam = int(cfg["whisper"].get("beam_size", 1))
     log.info("whisper %s on %s (%s, beam=%d)", model_name, device, compute, beam)
     try:
-        import os as _os
+        if device == "cuda":
+            _register_cuda_dll_dirs()
 
         from faster_whisper import WhisperModel
         model = WhisperModel(model_name, device=device, compute_type=compute,
-                             cpu_threads=(_os.cpu_count() or 4),
+                             cpu_threads=(os.cpu_count() or 4),
                              download_root=str(ROOT / cfg["whisper"]["model_dir"]))
         segments, info = model.transcribe(
             str(audio_path), word_timestamps=True, vad_filter=True,
