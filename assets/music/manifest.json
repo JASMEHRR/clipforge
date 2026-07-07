@@ -1,0 +1,65 @@
+{
+  "_note": "Verified-license background music. Tracks download on first use from the source_url; the local mp3 is cached next to this manifest (gitignored). Every track records its license and, when the license requires it, the exact attribution string that ClipForge appends to a clip's description.",
+  "tracks": [
+    {
+      "id": "carefree",
+      "title": "Carefree",
+      "artist": "Kevin MacLeod",
+      "moods": ["happy", "upbeat", "light", "positive", "fun"],
+      "file": "carefree.mp3",
+      "source_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution_required": true,
+      "attribution": "Music: \"Carefree\" by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/"
+    },
+    {
+      "id": "sneaky_snitch",
+      "title": "Sneaky Snitch",
+      "artist": "Kevin MacLeod",
+      "moods": ["quirky", "comedic", "playful", "sneaky", "funny"],
+      "file": "sneaky_snitch.mp3",
+      "source_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Sneaky%20Snitch.mp3",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution_required": true,
+      "attribution": "Music: \"Sneaky Snitch\" by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/"
+    },
+    {
+      "id": "inspired",
+      "title": "Inspired",
+      "artist": "Kevin MacLeod",
+      "moods": ["inspirational", "calm", "emotional", "hopeful", "serious"],
+      "file": "inspired.mp3",
+      "source_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Inspired.mp3",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution_required": true,
+      "attribution": "Music: \"Inspired\" by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/"
+    },
+    {
+      "id": "local_forecast_elevator",
+      "title": "Local Forecast - Elevator",
+      "artist": "Kevin MacLeod",
+      "moods": ["chill", "neutral", "relaxed", "background", "default"],
+      "file": "local_forecast_elevator.mp3",
+      "source_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Local%20Forecast%20-%20Elevator.mp3",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution_required": true,
+      "attribution": "Music: \"Local Forecast - Elevator\" by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/"
+    },
+    {
+      "id": "enter_the_party",
+      "title": "Enter the Party",
+      "artist": "Kevin MacLeod",
+      "moods": ["energetic", "hype", "exciting", "intense", "action"],
+      "file": "enter_the_party.mp3",
+      "source_url": "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Enter%20the%20Party.mp3",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "attribution_required": true,
+      "attribution": "Music: \"Enter the Party\" by Kevin MacLeod (incompetech.com), licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/"
+    }
+  ]
+}

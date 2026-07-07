@@ -17,3 +17,5 @@ logs/
 .pytest_cache/
 samples/*.mp4
 samples/*.wav
+assets/music/*.mp3
+assets/music/*.part

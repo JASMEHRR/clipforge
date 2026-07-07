@@ -21,6 +21,18 @@ log = get_logger("app")
 
 # --------------------------------------------------------------- create tab
 
+def _music_choices():
+    """(label, value) pairs for the music dropdown: None, Auto-match, tracks."""
+    choices = [("None", ""), ("Auto-match (from transcript)", "auto")]
+    try:
+        import music
+        choices += [(f"{t['title']} ({t['license']})", t["id"])
+                    for t in music.list_tracks()]
+    except Exception as e:  # noqa: BLE001 — manifest optional; UI still loads
+        log.warning("music manifest unavailable: %s", e)
+    return choices
+
+
 def _virality_badge(vir: dict | None) -> str:
     """Green >=70 / yellow 40-69 / red <40 virality badge for the score table."""
     if not vir:
@@ -30,7 +42,8 @@ def _virality_badge(vir: dict | None) -> str:
     return f"{dot} {int(score)} ({vir.get('verdict', '?')})"
 
 
-def _run_generator(file_path, url, preset, aspect, provider, n_clips):
+def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
+                   music_vol):
     from pipeline import run_job
 
     source = (url or "").strip() or file_path
@@ -60,7 +73,10 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips):
             holder["job"] = run_job(source, cfg, provider=provider or None,
                                     preset=preset or None,
                                     aspect=aspect or "9:16",
-                                    target_count=target_count, progress_cb=cb)
+                                    target_count=target_count,
+                                    music=music or None,
+                                    music_volume_db=float(music_vol),
+                                    progress_cb=cb)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
             holder["error"] = f"{e}\n{traceback.format_exc(limit=3)}"
         finally:
@@ -276,6 +292,11 @@ def build_app() -> gr.Blocks:
                     clips_in = gr.Slider(
                         0, 20, value=int(cfg["clips"].get("target_count", 0)),
                         step=1, label="Clips to keep (0 = auto)")
+                    music_in = gr.Dropdown(
+                        _music_choices(), value="",
+                        label="Background music (CC-licensed)")
+                    music_vol = gr.Slider(-40, 0, value=-22, step=1,
+                                          label="Music volume (dB)")
                     provider_in = gr.Dropdown(
                         ["", "mock", "gemini", "groq", "ollama"], value="",
                         label="LLM provider override")
@@ -286,7 +307,7 @@ def build_app() -> gr.Blocks:
                     files_out = gr.Files(label="Download clips + subtitles")
             run_btn.click(_run_generator,
                           [file_in, url_in, preset_in, aspect_in, provider_in,
-                           clips_in],
+                           clips_in, music_in, music_vol],
                           [progress_out, ranking_out, files_out])
 
         with gr.Tab("Batch"):

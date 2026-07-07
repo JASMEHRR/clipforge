@@ -61,12 +61,14 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             job_dir: str | Path | None = None, force: bool = False,
             preset: str | None = None, aspect: str = "9:16",
             debug: bool | None = None, target_count: int | None = None,
-            full_transcribe: bool = False, progress_cb=None) -> dict:
+            full_transcribe: bool = False, music: str | None = None,
+            music_volume_db: float = -22.0, progress_cb=None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
     import ingest as ingest_mod
     import metadata as metadata_mod
+    import music as music_mod
     import reframe as reframe_mod
     import scenes as scenes_mod
     import segment as segment_mod
@@ -146,6 +148,21 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             notes.append(f"only {len(candidates)} candidates — all kept "
                          "(min-keep rule)")
 
+        # resolve background music once per job (one backing track), download
+        # on first use; any failure disables music without failing the job
+        music_path, music_attr = None, ""
+        if music:
+            try:
+                track = music_mod.resolve(music, transcript.get("text", ""))
+                if track:
+                    music_path = str(music_mod.ensure_track(track))
+                    music_attr = music_mod.attribution_for(track)
+                    notes.append(f"background music: {track['title']} "
+                                 f"({track['license']})")
+            except Exception as e:  # noqa: BLE001 — music is best-effort
+                notes.append(f"music disabled: {e}")
+                log.warning("music setup failed: %s", e)
+
         clips = []
         n = max(1, len(candidates))
         workers = _worker_count(cfg, n)
@@ -157,7 +174,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     _render_one, i, cand, info, transcript, scene_data,
                     job_dir, cfg, provider, preset, aspect, debug_dir,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
-                    scenes_mod): i for i, cand in enumerate(candidates)}
+                    scenes_mod, music_path, music_attr, music_volume_db):
+                    i for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
                     done += 1
@@ -208,7 +226,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
-                metadata_mod, scenes_mod) -> dict:
+                metadata_mod, scenes_mod, music_path=None, music_attr="",
+                music_volume_db=-22.0) -> dict:
     clip_dir = job_dir / f"clip_{i:02d}"
     clip_dir.mkdir(exist_ok=True)
     start, end = cand["start"], cand["end"]
@@ -237,8 +256,16 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                                       clip_dir / "final.mp4", cfg,
                                       preset_name=preset)
 
+    if music_path:
+        import music as music_mod
+        tmp = clip_dir / "final_music.mp4"
+        music_mod.add_music(final, music_path, tmp, cfg, music_volume_db)
+        tmp.replace(final)
+
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
+    if music_attr:  # license requires attribution in the description
+        meta = {**meta, "description": f"{meta['description']} {music_attr}"}
 
     import virality as virality_mod
     vir = virality_mod.rate_virality(clip_text, cand["hook"], end - start, cfg,
@@ -292,6 +319,11 @@ def main(argv=None):
                          "shortlisting)")
     ap.add_argument("--clips", type=int, default=None,
                     help="keep exactly N clips (1-20); default uses config")
+    ap.add_argument("--music", default=None,
+                    help="background music: 'auto' (mood match) or a track id "
+                         "(see music.py --list)")
+    ap.add_argument("--music-volume", type=float, default=-22.0,
+                    help="background music volume in dB (default -22)")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -306,7 +338,8 @@ def main(argv=None):
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
                   force=a.force, preset=a.preset, aspect=a.aspect,
                   debug=a.debug or None, target_count=a.clips,
-                  full_transcribe=a.full_transcribe)
+                  full_transcribe=a.full_transcribe, music=a.music,
+                  music_volume_db=a.music_volume)
     kept = [c for c in job["clips"] if c.get("kept")]
     print(f"job {job['job_id']}: {len(kept)} clips kept of "
           f"{len(job['clips'])} rendered -> {job['job_dir']}")
