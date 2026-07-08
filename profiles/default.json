@@ -1,0 +1,31 @@
+{
+  "name": "default",
+  "references": [],
+  "hook": {
+    "dominant_type": "curiosity-gap",
+    "type_distribution": {
+      "curiosity-gap": 0.4,
+      "shocking-statement": 0.3,
+      "question": 0.2,
+      "statement": 0.1
+    }
+  },
+  "silence": {
+    "median_gap_s": 0.18,
+    "p90_gap_s": 0.45
+  },
+  "pacing": {
+    "scene_cuts_per_min": 18.0,
+    "words_per_sec": 2.8
+  },
+  "ending": {
+    "resolves_ratio": 0.9,
+    "cta_ratio": 0.6
+  },
+  "captions": {
+    "vertical_anchor": 0.6,
+    "words_per_line": 3,
+    "emphasis": "active-word-pop"
+  },
+  "frames": []
+}
