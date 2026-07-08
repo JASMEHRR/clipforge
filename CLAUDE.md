@@ -27,6 +27,15 @@ Local Opus Clip alternative: long video → ranked 30–60s vertical clips with 
 - Keyless sample: `.venv/Scripts/python.exe pipeline.py --sample --provider mock`
 - UI: `.venv/Scripts/python.exe app.py` (http://127.0.0.1:7860; if port busy, set GRADIO_SERVER_PORT)
 
+## Style refiner (feature/style-refiner)
+- Analyze reference Shorts → profile: `.venv/Scripts/python.exe style_profile.py refs/ --name user` (also accepts video files and URLs); set `style.profile: profiles/user.json` in config.yaml to use it. Frames land in `cache/style_frames/` for hand-tuning the JSON.
+- Run with refinement (on by default via `style.enabled`): `pipeline.py --sample --provider mock`
+- Pick burned-subtitle handling: `pipeline.py <src> --subs-mode auto|replace|keep|ignore`
+- Disable refinement (reproduces pre-feature output): `pipeline.py <src> --no-style`
+- Re-render one clip honoring refinement: `rerender.rerender_clip(job_dir, i, start, end)` (pass `style_refine=False` to skip).
+- Module self-checks: `python subtitle_detect.py` (synthetic smoke), `python style_refiner.py` (EditPlan invariants).
+- refs/ is gitignored (reference videos may be copyrighted). The refine stage lives between highlights and render; `style.enabled: false` skips it entirely.
+
 ## Conventions
 - Flat top-level modules; schemas in schemas.py only; all JSON validated at module boundaries.
 - Structured errors from errors.py; a failing clip/stage never kills the pipeline or queue.

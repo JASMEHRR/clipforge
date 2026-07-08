@@ -102,8 +102,57 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `render.use_nvenc` | `auto` = NVENC when an NVIDIA GPU is present | `auto` |
 | `render.parallel_workers` | `auto` = cpu_count/2 | `auto` |
 | `debug` | persist transcripts, prompts, raw LLM responses, rankings, reframe frames | `false` |
+| `style.enabled` | run the style refinement layer (`false` = pre-feature output) | `true` |
+| `style.profile` | StyleProfile JSON steering hook/pacing/caption targets | `profiles/user.json` |
+| `style.max_pause_s` / `target_pause_s` | pause above this is compressed to this | 0.6 / 0.35 |
+| `style.max_removal_ratio` | cap on total time removed per clip | 0.20 |
+| `style.hook_search_window_s` | forward search for a self-contained hook | 5.0 |
+| `style.captions.vertical_anchor` | caption block center (hard-clamped to [0.52, 0.66]) | 0.60 |
+| `style.cta.enabled` / `text` / `duration_s` | end-of-clip call-to-action overlay | true / "Follow for more" / 1.5 |
+| `style.existing_subs.mode` | burned-in subtitle handling: `auto`/`replace`/`keep`/`ignore` | `auto` |
+| `style.existing_subs.max_band_ratio` | REPLACE only if the detected band ≤ this fraction of frame height | 0.18 |
 
 Secrets live **only** in `.env` (see `.env.example`). Never commit `.env`.
+
+## Style refinement
+
+After the highlight is chosen, ClipForge rewrites each clip's **timeline** (never
+the finished pixels) so the output reads like a native Short: a self-contained
+hook in the first seconds, dead-air pauses compressed, a complete/resolved
+ending, punchy captions pinned in a fixed mid-lower band, an optional CTA, and
+clean handling of source videos that already carry burned-in subtitles. It runs
+*before* cut/reframe/captions, so every clip is still rendered exactly once. Set
+`style.enabled: false` (or `--no-style`) to reproduce the pre-feature output
+byte-for-byte.
+
+**Teach it your style.** Point the analyzer at example Shorts (a folder, files,
+or URLs) to distil their hook type, pacing, silence and endings into a profile:
+
+```bat
+.venv\Scripts\python.exe style_profile.py refs\ --name user
+```
+
+Then set `style.profile: profiles/user.json` in `config.yaml`. Sample frames are
+written to `cache/style_frames/` so you can eyeball the references and hand-edit
+the JSON (e.g. `captions.vertical_anchor`, which is clamped to [0.52, 0.66]).
+`refs/` is gitignored — reference videos are never committed.
+
+**Existing (burned-in) subtitles** — `style.existing_subs.mode`, or per run
+`--subs-mode`:
+
+| Mode | Behaviour |
+|---|---|
+| `auto` (default) | detect a band; if it's thin enough to crop away, exclude it and add fresh captions (**replace**); otherwise keep the source subs and bias the crop to keep them centered (**keep**) |
+| `replace` | force crop-above-the-band + fresh captions when a band is detected |
+| `keep` | never add captions; bias the crop to preserve the source subs |
+| `ignore` | treat the clip as having none; always add captions |
+
+Honest limits: burned-in subtitles are pixels — they cannot be moved or erased
+(no OCR/inpainting). In **keep** mode, source subtitles **wider than the 9:16
+window cannot be fully preserved** — that is a physical limit of cropping. The
+detector can also fire on on-screen title cards; tune
+`style.subtitle_detect.persistence_ratio` / `existing_subs.max_band_ratio` if it
+is over-eager.
 
 ## Outputs
 

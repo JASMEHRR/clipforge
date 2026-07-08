@@ -2,7 +2,22 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: RELEASED — v1.0.0 tagged. All gates passed. Remaining manual items: run Docker build on a machine with a daemon; optional YouTube OAuth (user).
+Current: **feature/style-refiner** in progress — timeline refinement layer built + verified keyless; branch pushed. Remaining manual items unchanged (Docker daemon build; optional YouTube OAuth).
+
+## Phase S — Style refiner (feature/style-refiner)
+- [x] schemas: STYLE_PROFILE, SUBTITLE_DETECT_RESULT, EDIT_PLAN, HOOK_CLASSIFY, ENDING_CLASSIFY (caption anchor clamped [0.52,0.66] at schema level); StyleError; config `style:` block
+- [x] subtitle_detect.py — OpenCV burned-in band detector, cached, font-free synthetic self-test
+- [x] style_profile.py — reference analyzer (ingest/transcribe/scenes reuse); profiles/default.json; frames to cache/style_frames/
+- [x] style_refiner.py — start fixer, pacing cleaner, ending optimizer, word-timeline remap, existing-subs ladder → EditPlan; 13 pure-logic tests
+- [x] cut.py cut_segments() — concat filter + declick fades; single-segment fast path unchanged
+- [x] reframe.py — bottom_exclusion_ratio (REPLACE) + h_bias_center (KEEP), no-op by default
+- [x] captions.py — CAPTION POSITION LAW (\pos anchor), CTA overlay, KEEP no-caption, envelope fades + zoom; legacy path byte-identical
+- [x] pipeline.py refine stage (marker-cached, profile+config-hashed) + _render_one EditPlan wiring; run_job style_refine/subs_mode; --no-style/--subs-mode CLI
+- [x] rerender.py mirrors refinement for edited bounds
+- [x] app.py Create-tab: style toggle, profile dropdown, subs-mode selector
+- [x] verify: pytest green (123 passed / 1 skipped); `--sample --provider mock` style-on (EditPlan summaries, no gap>max_pause, durations in bounds, anchor in band); `--no-style` skips stage; analyzer on refs/ → profiles/user.json activated + re-verified
+- [!] Known: multi-segment reframe drops scene-cut smoothing resets across concat joins (joins are removed silence — low risk). Burned-sub KEEP cannot preserve subs wider than the 9:16 crop (physical limit). subtitle_detect can fire on on-screen title cards (e.g. the sample film) → REPLACE; tune persistence_ratio/max_band_ratio if over-eager.
+- [!] Env: this venv had corrupted installs (protobuf, gradio, fsspec, google-api-python-client missing files) repaired via `pip install --force-reinstall --no-deps`; keep protobuf==4.25.9 (mediapipe needs <5).
 
 ## Phase 0 — Scaffold
 - [x] git init + local identity (builder/builder@local), GIT_TERMINAL_PROMPT=0

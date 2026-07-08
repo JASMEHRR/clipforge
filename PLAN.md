@@ -52,6 +52,28 @@ Zero-touch build; every gate runs keyless (mock LLM provider + deterministic fal
 | pipeline.py | source, options | job folder with everything above + `job.json` |
 | youtube_upload.py | clip + metadata + creds | upload result / setup guidance (never live in build) |
 | history.py (ph3) | job events | SQLite rows; query API for UI |
+| **style_profile.py** | refs/ dir, files, and/or URLs | `profiles/<name>.json` (StyleProfile), sample frames in `cache/style_frames/` |
+| **subtitle_detect.py** | video.mp4, start, end | SubtitleDetectResult `{present, band_top_pct, band_bottom_pct, confidence, sampled_frames}` (cached) |
+| **style_refiner.py** | candidate + transcript + scenes + subs + profile | EditPlan `{segments, words(remapped), start/ending_action, fades, cta, existing_subs, flags, caption_anchor}` |
+
+### Style refinement layer (feature/style-refiner)
+
+Inserted between highlight selection and rendering — a TIMELINE layer on source
+timestamps + the word transcript, never on finished pixels, so the render path
+still produces each clip once:
+
+```
+highlights ─► [refine stage]  ─► render per clip
+              subtitle_detect(clip)      cut(_segments) ─► reframe ─► captions
+              style_refiner.refine_clip  (EditPlan drives all three)
+              → EditPlan per candidate
+```
+
+`style.enabled: false` skips the stage entirely — output is byte-identical to
+pre-feature main. EditPlan drives: `cut_segments` (multi-segment pause removal),
+`reframe_clip` (bottom-band exclusion / horizontal bias for burned subtitles),
+and `caption_clip` (position law, CTA, remapped karaoke, envelope fades, weak-hook
+zoom).
 
 ## 3. Data contracts
 
@@ -141,6 +163,14 @@ Live calls never happen in gates (gates force `--provider mock`).
 | Gradio 4.x pinned | Streamlit | spec mandates Gradio |
 | Docker: static validation only | install Docker | no daemon on host (rule 6) |
 | Windows host runs: `py -3.11` venv `.venv` | conda | stdlib venv sufficient |
+| **Style refiner is a timeline layer (source timestamps → EditPlan), not post-processing** | filter finished mp4s | captions are burned pixels; re-chunking/repositioning a finished clip is impossible and re-encoding loses quality — refine BEFORE render so the clip is still produced once |
+| Refine stage runs per-clip subtitle_detect (not once per whole source) | one detect over the source | per-clip range is more accurate (subs often appear only in parts) and is cached, so cost is the same |
+| Multi-segment clips: cut_segments concat first, then reframe the cut file | teach reframe a segment list | keeps reframe's single-re-encode + crop math unchanged; scene-cut resets across concat joins are dropped (joins are removed silence, rarely mid-motion) |
+| Envelope (audio fades, video fade-out, zoom-punch) applied in captions.py final pass | in cut or reframe | captions is the last full-frame re-encode and always yields final.mp4 (incl. KEEP no-caption mode); one place, always runs |
+| Segment-join declick = short non-overlapping afade at each boundary | true acrossfade overlap | overlap shifts the timeline and would break the exact word-remap; a brief fade-to-zero kills the click without moving timestamps |
+| hook/ending classifiers: rule heuristic is BOTH the LLM fallback and the mock answer | separate mock branch in llm.py | one deterministic rule path; mock runs are meaningful and stable with no llm.py change |
+| Feature branch off origin/v2.0, not main | branch off main (spec text) | local main is v1.0.1 and lacks the v2 modules the working tree imports (segment/virality/music); v2.0 is the live line |
+| Caption anchor clamped to [0.52,0.66] at BOTH schema and code | trust config value | position law is a hard invariant; enforced even if a profile is hand-edited out of range |
 
 ## 9. Phase gates (summary)
 
