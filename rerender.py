@@ -57,13 +57,18 @@ def snap_bounds(job_dir: str | Path, start: float, end: float) -> tuple[float, f
 
 def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
                   end: float, preset: str | None = None,
-                  cfg: dict | None = None, provider: str | None = None) -> dict:
-    """Re-render one clip with new (snapped) bounds. Returns the updated clip
-    record; job.json is updated in place."""
+                  cfg: dict | None = None, provider: str | None = None,
+                  style_refine: bool | None = None,
+                  subs_mode: str | None = None) -> dict:
+    """Re-render one clip with new (snapped) bounds. Style refinement is applied
+    to the edited bounds the same way the pipeline does, unless disabled.
+    Returns the updated clip record; job.json is updated in place."""
     import captions as captions_mod
     import cut as cut_mod
     import reframe as reframe_mod
     import scenes as scenes_mod
+    import style_refiner as style_mod
+    import subtitle_detect as subs_detect
 
     cfg = cfg or load_config()
     job_dir = Path(job_dir)
@@ -82,32 +87,74 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
     log.info("re-render clip %02d: %.2f–%.2f preset=%s", clip_index, start,
              end, preset)
 
-    if aspect == "16:9":
-        cut_path = cut_mod.cut_clip(info["video_path"], start, end,
-                                    clip_dir / "cut.mp4", cfg)
-        src, metrics = cut_path, {"aspect": "16:9", "passthrough": True}
+    # Refine the edited bounds unless disabled (mirrors pipeline _render_one).
+    style_on = (cfg.get("style", {}).get("enabled", False)
+                if style_refine is None else style_refine)
+    edit_plan = None
+    if style_on:
+        cand = {"start": start, "end": end, "hook": clip.get("hook", ""),
+                "reason": clip.get("reason", ""), "score": clip.get("candidate_score", 0)}
+        subs = subs_detect.detect_subtitles(info["video_path"], start, end, cfg)
+        edit_plan = style_mod.refine_clip(cand, transcript, scene_data, subs,
+                                          style_mod.load_profile(cfg), cfg,
+                                          provider=provider, subs_mode=subs_mode)
+
+    if edit_plan:
+        segments = edit_plan["segments"]
+        out_start, out_end = segments[0][0], segments[-1][1]
+        excl = edit_plan["existing_subs"]["bottom_exclusion_ratio"]
+        hbias = edit_plan["existing_subs"]["h_bias_center"]
+        multi = len(segments) > 1
     else:
-        cuts_rel = [t - start for t in
-                    scenes_mod.scene_cuts_in_range(scene_data, start, end)]
+        out_start, out_end, excl, hbias, multi = start, end, 0.0, -1.0, False
+        segments = [[start, end]]
+
+    if aspect == "16:9":
+        cut_path = (cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4", cfg)
+                    if multi else
+                    cut_mod.cut_clip(info["video_path"], out_start, out_end, clip_dir / "cut.mp4", cfg))
+        src, metrics = cut_path, {"aspect": "16:9", "passthrough": True}
+    elif multi:
+        cut_path = cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4", cfg)
+        cut_dur = reframe_mod.probe(cut_path)["duration"]
         metrics = reframe_mod.reframe_clip(
-            info["video_path"], start, end, clip_dir / "reframed.mp4",
-            cuts_rel, cfg, aspect=aspect, info=info)
+            cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
+            aspect=aspect, info=None, bottom_exclusion_ratio=excl, h_bias_center=hbias)
+        src = clip_dir / "reframed.mp4"
+    else:
+        cuts_rel = [t - out_start for t in
+                    scenes_mod.scene_cuts_in_range(scene_data, out_start, out_end)]
+        metrics = reframe_mod.reframe_clip(
+            info["video_path"], out_start, out_end, clip_dir / "reframed.mp4",
+            cuts_rel, cfg, aspect=aspect,
+            info=(info if out_start == start and out_end == end else None),
+            bottom_exclusion_ratio=excl, h_bias_center=hbias)
         src = clip_dir / "reframed.mp4"
 
-    words = [{"word": w["word"],
-              "start": round(max(0.0, w["start"] - start), 3),
-              "end": round(max(0.0, w["end"] - start), 3)}
-             for w in transcript["words"]
-             if w["start"] >= start - 0.05 and w["end"] <= end + 0.05]
+    if edit_plan:
+        words = edit_plan["words"]
+        cap_kwargs = dict(anchor=edit_plan["caption_anchor"], cta=edit_plan["cta"],
+                          captions_enabled=edit_plan["captions_enabled"],
+                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"])
+    else:
+        words = [{"word": w["word"],
+                  "start": round(max(0.0, w["start"] - out_start), 3),
+                  "end": round(max(0.0, w["end"] - out_start), 3)}
+                 for w in transcript["words"]
+                 if w["start"] >= out_start - 0.05 and w["end"] <= out_end + 0.05]
+        cap_kwargs = {}
     final = captions_mod.caption_clip(src, words, clip_dir / "final.mp4", cfg,
-                                      preset_name=preset)
+                                      preset_name=preset, **cap_kwargs)
 
-    clip.update({"start": start, "end": end,
-                 "duration": round(end - start, 3), "preset": preset,
+    duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
+    clip.update({"start": out_start, "end": out_end,
+                 "duration": duration, "preset": preset,
                  "reframe": metrics, "path": str(final),
-                 "srt": str(final.with_suffix(".srt"))})
+                 "srt": str(final.with_suffix(".srt")),
+                 "style": style_mod.summarize(edit_plan) if edit_plan else None})
     job.setdefault("notes", []).append(
-        f"clip {clip_index:02d} re-rendered to {start:.2f}-{end:.2f}")
+        f"clip {clip_index:02d} re-rendered to {out_start:.2f}-{out_end:.2f}"
+        + (" (refined)" if edit_plan else ""))
     _save_job(job_dir, job)
     return clip
 

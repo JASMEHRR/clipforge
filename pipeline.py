@@ -63,7 +63,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             debug: bool | None = None, target_count: int | None = None,
             full_transcribe: bool = False, music: str | None = None,
             music_volume_db: float = -22.0, progress_cb=None,
-            tracker=None) -> dict:
+            tracker=None, style_refine: bool | None = None,
+            subs_mode: str | None = None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -73,7 +74,10 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     import reframe as reframe_mod
     import scenes as scenes_mod
     import segment as segment_mod
+    import style_refiner as style_mod
+    import subtitle_detect as subs_mod
     import transcribe as transcribe_mod
+    from config import config_hash
     from llm import resolve_provider
 
     from progress import ProgressTracker
@@ -176,6 +180,42 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             notes.append(f"only {len(candidates)} candidates — all kept "
                          "(min-keep rule)")
 
+        # style refinement: rewrite each rough window into an EditPlan (hooks,
+        # pacing, endings, burned-sub handling) BEFORE rendering, so the render
+        # path still produces each clip exactly once. Skipped entirely when
+        # style.enabled is false — output then matches pre-feature behaviour.
+        style_on = (cfg.get("style", {}).get("enabled", False)
+                    if style_refine is None else style_refine)
+        job["settings"]["style_refine"] = bool(style_on)
+        edit_plans = None
+        if style_on:
+            profile = style_mod.load_profile(cfg)
+            prof_tag = (profile or {}).get("name", "none")
+            refine_key = config_hash(cfg, "style", "clips") + "_" + prof_tag
+            marker = job_dir / ".done_refine.json"
+            if marker.exists() and not force and \
+                    json.loads(marker.read_text(encoding="utf-8")).get("key") == refine_key:
+                edit_plans = json.loads(marker.read_text(encoding="utf-8"))["plans"]
+                tracker.skip("refine")
+                timings["refine"] = {"status": "skipped", "seconds": 0.0}
+                log.info("stage refine: marker present — skipped")
+            else:
+                tracker.start("refine", "refining clip timelines")
+                with stage_timer(log, "refine", timings):
+                    edit_plans = []
+                    for cand in candidates:
+                        subs = subs_mod.detect_subtitles(
+                            info["video_path"], cand["start"], cand["end"], cfg)
+                        plan = style_mod.refine_clip(
+                            cand, transcript, scene_data, subs, profile, cfg,
+                            provider=provider, subs_mode=subs_mode)
+                        edit_plans.append(plan)
+                marker.write_text(json.dumps({"key": refine_key, "plans": edit_plans}),
+                                  encoding="utf-8")
+                tracker.finish("refine")
+                notes.append(f"style refinement applied to {len(edit_plans)} clips "
+                             f"(profile: {prof_tag})")
+
         # resolve background music once per job (one backing track), download
         # on first use; any failure disables music without failing the job
         music_path, music_attr = None, ""
@@ -206,7 +246,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     job_dir, cfg, provider, preset, aspect, debug_dir,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
                     scenes_mod, music_path, music_attr, music_volume_db,
-                    tracker): i for i, cand in enumerate(candidates)}
+                    tracker, edit_plans[i] if edit_plans else None): i
+                    for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
                     done += 1
@@ -268,39 +309,73 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
                 metadata_mod, scenes_mod, music_path=None, music_attr="",
-                music_volume_db=-22.0, tracker=None) -> dict:
+                music_volume_db=-22.0, tracker=None, edit_plan=None) -> dict:
     def _sub(frac: float) -> None:
         if tracker:
             tracker.item("render", f"clip_{i:02d}", frac)
 
     clip_dir = job_dir / f"clip_{i:02d}"
     clip_dir.mkdir(exist_ok=True)
-    start, end = cand["start"], cand["end"]
     source = info["video_path"]
+
+    # EditPlan (when present) supplies refined segments, remapped words, caption
+    # anchor/CTA/fades, and burned-sub reframe hints. Absent → today's path.
+    if edit_plan:
+        segments = edit_plan["segments"]
+        out_start, out_end = segments[0][0], segments[-1][1]
+        excl = edit_plan["existing_subs"]["bottom_exclusion_ratio"]
+        hbias = edit_plan["existing_subs"]["h_bias_center"]
+        multi = len(segments) > 1
+    else:
+        out_start, out_end = cand["start"], cand["end"]
+        excl, hbias, multi, segments = 0.0, -1.0, False, [[out_start, out_end]]
 
     if aspect == "16:9":
         # passthrough: a frame-accurate cut is the clip (captions burn onto it)
-        cut_path = cut_mod.cut_clip(source, start, end, clip_dir / "cut.mp4", cfg)
+        if multi:
+            cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4", cfg)
+        else:
+            cut_path = cut_mod.cut_clip(source, out_start, out_end,
+                                        clip_dir / "cut.mp4", cfg)
         source_for_captions, metrics = cut_path, {"aspect": "16:9",
                                                   "passthrough": True}
+    elif multi:
+        # cut the multi-segment concat first, then reframe the contiguous file
+        # (keeps a single reframe re-encode; scene resets omitted across joins)
+        cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4", cfg)
+        cut_dur = reframe_mod.probe(cut_path)["duration"]
+        metrics = reframe_mod.reframe_clip(
+            cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
+            aspect=aspect, debug_dir=debug_dir, info=None,
+            bottom_exclusion_ratio=excl, h_bias_center=hbias)
+        source_for_captions = clip_dir / "reframed.mp4"
     else:
         # single re-encode straight from the source (no full-res intermediate)
-        cuts_rel = [t - start for t in
-                    scenes_mod.scene_cuts_in_range(scene_data, start, end)]
+        cuts_rel = [t - out_start for t in
+                    scenes_mod.scene_cuts_in_range(scene_data, out_start, out_end)]
         metrics = reframe_mod.reframe_clip(
-            source, start, end, clip_dir / "reframed.mp4", cuts_rel, cfg,
-            aspect=aspect, debug_dir=debug_dir, info=info)
+            source, out_start, out_end, clip_dir / "reframed.mp4", cuts_rel, cfg,
+            aspect=aspect, debug_dir=debug_dir,
+            info=(info if out_start == cand["start"] and out_end == cand["end"] else None),
+            bottom_exclusion_ratio=excl, h_bias_center=hbias)
         source_for_captions = clip_dir / "reframed.mp4"
     _sub(0.5)
 
-    words = [{"word": w["word"],
-              "start": round(max(0.0, w["start"] - start), 3),
-              "end": round(max(0.0, w["end"] - start), 3)}
-             for w in transcript["words"]
-             if w["start"] >= start - 0.05 and w["end"] <= end + 0.05]
+    if edit_plan:
+        words = edit_plan["words"]
+        cap_kwargs = dict(anchor=edit_plan["caption_anchor"], cta=edit_plan["cta"],
+                          captions_enabled=edit_plan["captions_enabled"],
+                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"])
+    else:
+        words = [{"word": w["word"],
+                  "start": round(max(0.0, w["start"] - out_start), 3),
+                  "end": round(max(0.0, w["end"] - out_start), 3)}
+                 for w in transcript["words"]
+                 if w["start"] >= out_start - 0.05 and w["end"] <= out_end + 0.05]
+        cap_kwargs = {}
     final = captions_mod.caption_clip(source_for_captions, words,
                                       clip_dir / "final.mp4", cfg,
-                                      preset_name=preset)
+                                      preset_name=preset, **cap_kwargs)
     _sub(0.75)
 
     if music_path:
@@ -310,23 +385,30 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         tmp.replace(final)
     _sub(0.85)
 
+    duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
     if music_attr:  # license requires attribution in the description
         meta = {**meta, "description": f"{meta['description']} {music_attr}"}
 
     import virality as virality_mod
-    vir = virality_mod.rate_virality(clip_text, cand["hook"], end - start, cfg,
+    vir = virality_mod.rate_virality(clip_text, cand["hook"], duration, cfg,
                                      provider)
+    payload = {**meta, "virality": vir}
+    if edit_plan:
+        import style_refiner as style_mod
+        payload["style"] = style_mod.summarize(edit_plan)
+        log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
     (clip_dir / "metadata.json").write_text(
-        json.dumps({**meta, "virality": vir}, indent=2), encoding="utf-8")
+        json.dumps(payload, indent=2), encoding="utf-8")
 
-    return {"index": i, "start": start, "end": end,
-            "duration": round(end - start, 3),
+    return {"index": i, "start": out_start, "end": out_end,
+            "duration": duration,
             "hook": cand["hook"], "reason": cand.get("reason", ""),
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "metadata": meta, "virality": vir, "reframe": metrics,
+            "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
 
 
@@ -374,6 +456,11 @@ def main(argv=None):
                     help="background music volume in dB (default -22)")
     ap.add_argument("--zip", action="store_true",
                     help="also write a clips_bundle.zip of kept clips")
+    ap.add_argument("--no-style", action="store_true",
+                    help="disable the style refinement stage (config style.enabled)")
+    ap.add_argument("--subs-mode", default=None,
+                    choices=["auto", "replace", "keep", "ignore"],
+                    help="burned-in subtitle handling (default: config style.existing_subs.mode)")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -389,7 +476,9 @@ def main(argv=None):
                   force=a.force, preset=a.preset, aspect=a.aspect,
                   debug=a.debug or None, target_count=a.clips,
                   full_transcribe=a.full_transcribe, music=a.music,
-                  music_volume_db=a.music_volume)
+                  music_volume_db=a.music_volume,
+                  style_refine=False if a.no_style else None,
+                  subs_mode=a.subs_mode)
     kept = [c for c in job["clips"] if c.get("kept")]
     print(f"job {job['job_id']}: {len(kept)} clips kept of "
           f"{len(job['clips'])} rendered -> {job['job_dir']}")
