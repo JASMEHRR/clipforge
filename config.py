@@ -2,6 +2,7 @@
 startup check and config hashing for cache keys."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -98,6 +99,78 @@ def _load_dotenv(env_path: Path) -> None:
         key, value = key.strip(), value.strip().strip('"').strip("'")
         if key and value and key not in os.environ:
             os.environ[key] = value
+
+
+def hex_to_ass(hex_color: str) -> str:
+    """Color → ASS '&H00BBGGRR'. Accepts '#RRGGBB', 'RRGGBB', 'rgb(r,g,b)' /
+    'rgba(r,g,b,a)' (as Gradio's ColorPicker emits), and passes through values
+    already in ASS form. Invalid input raises ConfigError."""
+    s = (hex_color or "").strip()
+    if s.upper().startswith("&H"):
+        return s
+    if s.lower().startswith(("rgb(", "rgba(")):
+        nums = s[s.index("(") + 1:s.index(")")].split(",")
+        try:
+            r, g, b = (int(round(float(nums[i]))) for i in range(3))
+        except (ValueError, IndexError) as e:
+            raise ConfigError(f"invalid rgb color: {hex_color!r}") from e
+        return f"&H00{b:02X}{g:02X}{r:02X}"
+    s = s.lstrip("#")
+    if len(s) != 6 or any(c not in "0123456789abcdefABCDEF" for c in s):
+        raise ConfigError(f"invalid hex color: {hex_color!r}")
+    rr, gg, bb = s[0:2], s[2:4], s[4:6]
+    return f"&H00{bb}{gg}{rr}".upper()
+
+
+def apply_run_options(cfg: dict, opts: dict) -> dict:
+    """Return a DEEP COPY of cfg with per-run UI options applied. Pure (never
+    mutates the shared singleton), so it also feeds re-render safely. Every
+    option is optional; absent/blank keys leave cfg untouched, so an empty opts
+    yields today's behaviour exactly.
+
+    Recognised keys: cta_text, highlight_hex, preset, pacing (0..1 aggressiveness),
+    clip_min, clip_max, watermark_text, watermark_position.
+    """
+    c = copy.deepcopy(cfg)
+    o = opts or {}
+
+    cta_text = (o.get("cta_text") or "").strip()
+    if cta_text:
+        c.setdefault("style", {}).setdefault("cta", {})
+        c["style"]["cta"]["enabled"] = True
+        c["style"]["cta"]["text"] = cta_text
+
+    hi = (o.get("highlight_hex") or "").strip()
+    preset = o.get("preset") or c.get("captions", {}).get("preset")
+    if hi and preset and preset in c.get("captions", {}).get("presets", {}):
+        c["captions"]["presets"][preset]["highlight_color"] = hex_to_ass(hi)
+
+    pacing = o.get("pacing")
+    if pacing is not None and pacing != "":
+        agg = max(0.0, min(1.0, float(pacing)))
+        st = c.setdefault("style", {})
+        # gentle (0) → keep long pauses; aggressive (1) → tight cuts. Bounds
+        # stay inside the safe range the refiner already clamps to.
+        st["max_pause_s"] = round(0.9 - 0.55 * agg, 3)      # 0.90 → 0.35
+        st["target_pause_s"] = round(0.5 - 0.25 * agg, 3)   # 0.50 → 0.25
+
+    cmin, cmax = o.get("clip_min"), o.get("clip_max")
+    if cmin:
+        c.setdefault("clips", {})["min_seconds"] = int(cmin)
+    if cmax:
+        c.setdefault("clips", {})["max_seconds"] = int(cmax)
+    if cmin and cmax and int(cmin) > int(cmax):  # guard: keep a valid range
+        c["clips"]["min_seconds"], c["clips"]["max_seconds"] = int(cmax), int(cmin)
+
+    wm_text = (o.get("watermark_text") or "").strip()
+    if wm_text:
+        wm = c.setdefault("captions", {}).setdefault("watermark", {})
+        wm["enabled"] = True
+        wm["text"] = wm_text
+        if o.get("watermark_position"):
+            wm["position"] = o["watermark_position"]
+
+    return c
 
 
 def config_hash(cfg: dict, *sections: str) -> str:

@@ -51,7 +51,10 @@ def _virality_badge(vir: dict | None) -> str:
 
 def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                    music_vol, style_on=True, style_profile="default",
-                   subs_mode="auto"):
+                   subs_mode="auto", cta_text="", highlight_hex="",
+                   pacing="", clip_min="", clip_max="", watermark_text="",
+                   watermark_pos="bottom-right"):
+    from config import apply_run_options
     from pipeline import run_job
 
     source = (url or "").strip() or file_path
@@ -60,7 +63,17 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
         return
     target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
-    cfg = load_config()
+    # Per-run options applied onto a private deep copy (never the singleton).
+    try:
+        cfg = apply_run_options(load_config(), {
+            "cta_text": cta_text, "highlight_hex": highlight_hex,
+            "preset": preset or None, "pacing": pacing,
+            "clip_min": clip_min, "clip_max": clip_max,
+            "watermark_text": watermark_text,
+            "watermark_position": watermark_pos})
+    except Exception as e:  # noqa: BLE001 — a bad option must not crash the run
+        yield f"Invalid option: {e}", "", [], ""
+        return
     if style_profile:  # point the refiner at the chosen profile
         cfg["style"]["profile"] = f"profiles/{style_profile}.json"
     q: queue.Queue = queue.Queue()
@@ -478,6 +491,31 @@ def build_app() -> gr.Blocks:
                     subs_in = gr.Dropdown(
                         ["auto", "replace", "keep", "ignore"], value="auto",
                         label="Burned-in subtitles")
+                    with gr.Accordion("More options", open=False):
+                        cta_in = gr.Textbox(
+                            label="Custom CTA text (blank = config default)",
+                            placeholder=cfg.get("style", {}).get("cta", {})
+                            .get("text", "Follow for more"))
+                        highlight_in = gr.ColorPicker(
+                            label="Keyword highlight color (blank = preset default)",
+                            value="")
+                        pacing_in = gr.Slider(
+                            0, 1, value=0.5, step=0.05,
+                            label="Pacing aggressiveness (0 gentle → 1 tight cuts)")
+                        with gr.Row():
+                            clip_min_in = gr.Number(
+                                value=int(cfg["clips"]["min_seconds"]),
+                                label="Min clip length (s)", precision=0)
+                            clip_max_in = gr.Number(
+                                value=int(cfg["clips"]["max_seconds"]),
+                                label="Max clip length (s)", precision=0)
+                        watermark_in = gr.Textbox(
+                            label="Watermark / brand text (blank = off)",
+                            placeholder="@yourhandle")
+                        watermark_pos_in = gr.Dropdown(
+                            ["top-left", "top-right", "bottom-left",
+                             "bottom-right", "center"], value="bottom-right",
+                            label="Watermark position")
                     run_btn = gr.Button("Create clips", variant="primary")
                 with gr.Column(scale=2):
                     progress_out = gr.Textbox(label="Progress", lines=10)
@@ -490,7 +528,10 @@ def build_app() -> gr.Blocks:
             run_btn.click(_run_generator,
                           [file_in, url_in, preset_in, aspect_in, provider_in,
                            clips_in, music_in, music_vol,
-                           style_in, profile_in, subs_in],
+                           style_in, profile_in, subs_in,
+                           cta_in, highlight_in, pacing_in,
+                           clip_min_in, clip_max_in,
+                           watermark_in, watermark_pos_in],
                           [progress_out, ranking_out, files_out, job_dir_state])
             zip_btn.click(_zip_current, [job_dir_state], [zip_out])
 

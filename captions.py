@@ -72,6 +72,31 @@ def _clamp_anchor(value: float) -> float:
     return min(0.66, max(0.52, float(value)))
 
 
+_WM_XY = {
+    "top-left":     ("{m}", "{m}"),
+    "top-right":    ("w-tw-{m}", "{m}"),
+    "bottom-left":  ("{m}", "h-th-{m}"),
+    "bottom-right": ("w-tw-{m}", "h-th-{m}"),
+    "center":       ("(w-tw)/2", "(h-th)/2"),
+}
+
+
+def watermark_filter(wm: dict) -> str:
+    """Build a drawtext filter for the brand/handle overlay. Pure (returns the
+    filter string); off-by-default so absent config never adds a filter."""
+    text = str(wm.get("text", "")).replace("\\", "").replace(":", r"\:") \
+        .replace("'", "").replace("%", "")
+    size = int(wm.get("font_size", 36))
+    op = max(0.0, min(1.0, float(wm.get("opacity", 0.6))))
+    margin = int(wm.get("margin_px", 40))
+    x, y = _WM_XY.get(wm.get("position", "bottom-right"), _WM_XY["bottom-right"])
+    font = ROOT / wm.get("font_file", "assets/fonts/Montserrat-Bold.ttf")
+    return (f"drawtext=fontfile='{filter_path(font)}':text='{text}'"
+            f":fontsize={size}:fontcolor=white@{op:.2f}"
+            f":x={x.format(m=margin)}:y={y.format(m=margin)}"
+            f":box=1:boxcolor=black@{op * 0.4:.2f}:boxborderw=8")
+
+
 def write_ass(words: list[dict], ass_path: Path, cfg: dict, preset_name: str,
               play_w: int = 1080, play_h: int = 1920,
               anchor: float | None = None, cta: dict | None = None,
@@ -226,6 +251,9 @@ def caption_clip(video_path: str | Path, words: list[dict],
         fontsdir = ROOT / cfg["captions"]["font_dir"]
         vf_parts.append(f"subtitles=filename='{filter_path(ass_path)}'"
                         f":fontsdir='{filter_path(fontsdir)}'")
+    wm = cfg["captions"].get("watermark", {})
+    if wm.get("enabled") and str(wm.get("text", "")).strip():
+        vf_parts.append(watermark_filter(wm))
     if fades and float(fades.get("video_out_ms", 0)) > 0:
         vo = float(fades["video_out_ms"]) / 1000.0
         vf_parts.append(f"fade=t=out:st={max(0.0, dur - vo):.3f}:d={vo:.3f}")

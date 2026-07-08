@@ -44,6 +44,14 @@ captions:
   font_dir: assets/fonts
   max_words_per_line: 3
   bottom_margin_px: 220     # keeps text out of platform UI zones (1920px frame)
+  watermark:                # brand/handle overlay burned onto every clip (off by default)
+    enabled: false
+    text: ""                # e.g. "@yourhandle"
+    position: bottom-right  # top-left | top-right | bottom-left | bottom-right | center
+    font_size: 36
+    opacity: 0.6            # 0..1
+    margin_px: 40
+    font_file: assets/fonts/Montserrat-Bold.ttf
   presets:
     karaoke-pop:
       font: Montserrat ExtraBold
@@ -177,6 +185,12 @@ render:
   compute: auto                 # auto | gpu | cpu — forces Whisper device + encoder
   use_nvenc: auto               # auto | never  (auto: NVENC when NVIDIA GPU present)
   parallel_workers: auto        # auto = min(clips, max(1, cpu_count // 2))
+
+music:
+  # Background music is chosen per run in the UI (dropdown + volume). These are
+  # the defaults used when the UI leaves them unset.
+  default_track: ""             # "" = no music unless picked in the UI
+  default_volume_db: -22        # ducked under speech
 
 ui:
   auto_open: true               # open the UI automatically when app.py starts
