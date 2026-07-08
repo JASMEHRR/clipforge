@@ -79,3 +79,13 @@ each choice logged here.
   keys to `config.local.yaml` (gitignored), which `load_config()` deep-merges
   over `config.yaml` on load. This keeps `config.yaml`'s comments intact
   instead of rewriting it with a comment-stripping yaml dump.
+
+## Overnight run 2026-07-09 (feature/overnight-upgrades)
+- **Branch base**: feature/style-refiner was green (123 passed, 1 skipped;
+  sample pipeline OK), but `origin/main` had diverged (NVENC probe, ETA-log,
+  gitignore commits) and merging it produced a 12-hunk conflict in pipeline.py.
+  Resolving a divergent merge that touches core pipeline logic unattended risks
+  corrupting decision behavior, which the protocol forbids. DECISION: build on
+  the known-green feature/style-refiner via new branch feature/overnight-upgrades;
+  **defer main reconciliation with origin/main to a human** (see REPORT.md).
+- Deleted stray root file `tatus` (accidental `git status >` redirect artifact).
