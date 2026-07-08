@@ -147,6 +147,20 @@ VIRALITY = {
             "items": {"type": "string"},
             "minItems": 1,
         },
+        # v2 engagement-signals breakdown (optional; legacy records omit these)
+        "band": {"type": "string", "enum": ["Strong", "Promising", "Weak"]},
+        "signals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "score": {"type": "number", "minimum": 0, "maximum": 10},
+                    "reason": {"type": "string"},
+                },
+                "required": ["name", "score", "reason"],
+            },
+        },
     },
     "required": ["score", "verdict", "reasons"],
     "additionalProperties": False,

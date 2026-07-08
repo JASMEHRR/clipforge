@@ -405,13 +405,25 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     if music_attr:  # license requires attribution in the description
         meta = {**meta, "description": f"{meta['description']} {music_attr}"}
 
+    import style_refiner as style_mod
     import virality as virality_mod
-    vir = virality_mod.rate_virality(clip_text, cand["hook"], duration, cfg,
-                                     provider)
+    refine_summary = style_mod.summarize(edit_plan) if edit_plan else None
+    # cuts within this clip (real pacing signal for the engagement score)
+    n_cuts = len(scenes_mod.scene_cuts_in_range(scene_data, out_start, out_end))
+    cuts_per_min = (n_cuts / (duration / 60.0)) if duration > 0 else None
+    try:
+        profile = style_mod.load_profile(cfg)
+    except Exception:  # noqa: BLE001 — profile is optional context
+        profile = None
+    vir = virality_mod.rate_virality(
+        clip_text, cand["hook"], duration, cfg, provider,
+        refine=refine_summary, profile=profile,
+        extra={"cuts_per_min": cuts_per_min,
+               "captions_enabled": (edit_plan["captions_enabled"]
+                                    if edit_plan else True)})
     payload = {**meta, "virality": vir}
-    if edit_plan:
-        import style_refiner as style_mod
-        payload["style"] = style_mod.summarize(edit_plan)
+    if refine_summary:
+        payload["style"] = refine_summary
         log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
     (clip_dir / "metadata.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8")
