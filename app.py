@@ -33,6 +33,13 @@ def _music_choices():
     return choices
 
 
+def _profile_choices():
+    """Stems of profiles/*.json for the style-profile dropdown."""
+    from config import ROOT
+    pdir = ROOT / "profiles"
+    return sorted(p.stem for p in pdir.glob("*.json")) if pdir.exists() else ["default"]
+
+
 def _virality_badge(vir: dict | None) -> str:
     """Green >=70 / yellow 40-69 / red <40 virality badge for the score table."""
     if not vir:
@@ -43,7 +50,8 @@ def _virality_badge(vir: dict | None) -> str:
 
 
 def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
-                   music_vol):
+                   music_vol, style_on=True, style_profile="default",
+                   subs_mode="auto"):
     from pipeline import run_job
 
     source = (url or "").strip() or file_path
@@ -53,6 +61,8 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
     target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
     cfg = load_config()
+    if style_profile:  # point the refiner at the chosen profile
+        cfg["style"]["profile"] = f"profiles/{style_profile}.json"
     q: queue.Queue = queue.Queue()
     holder: dict = {}
 
@@ -76,7 +86,9 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                                     target_count=target_count,
                                     music=music or None,
                                     music_volume_db=float(music_vol),
-                                    progress_cb=cb)
+                                    progress_cb=cb,
+                                    style_refine=bool(style_on),
+                                    subs_mode=subs_mode or None)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
             holder["error"] = f"{e}\n{traceback.format_exc(limit=3)}"
         finally:
@@ -412,6 +424,17 @@ def build_app() -> gr.Blocks:
                     provider_in = gr.Dropdown(
                         ["", "mock", "gemini", "groq", "ollama"], value="",
                         label="LLM provider override")
+                    style_in = gr.Checkbox(
+                        value=bool(cfg.get("style", {}).get("enabled", True)),
+                        label="Style refinement (hooks, pacing, endings, captions)")
+                    profile_in = gr.Dropdown(
+                        _profile_choices(),
+                        value=(cfg.get("style", {}).get("profile", "profiles/default.json")
+                               .split("/")[-1].removesuffix(".json")),
+                        label="Style profile")
+                    subs_in = gr.Dropdown(
+                        ["auto", "replace", "keep", "ignore"], value="auto",
+                        label="Burned-in subtitles")
                     run_btn = gr.Button("Create clips", variant="primary")
                 with gr.Column(scale=2):
                     progress_out = gr.Textbox(label="Progress", lines=10)
@@ -423,7 +446,8 @@ def build_app() -> gr.Blocks:
                     zip_out = gr.File(label="Bundle (.zip)")
             run_btn.click(_run_generator,
                           [file_in, url_in, preset_in, aspect_in, provider_in,
-                           clips_in, music_in, music_vol],
+                           clips_in, music_in, music_vol,
+                           style_in, profile_in, subs_in],
                           [progress_out, ranking_out, files_out, job_dir_state])
             zip_btn.click(_zip_current, [job_dir_state], [zip_out])
 
