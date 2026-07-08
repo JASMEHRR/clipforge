@@ -7,6 +7,7 @@ Relies on the pipeline's completion markers: .done_transcribe.json,
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from config import load_config
@@ -59,10 +60,17 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
                   end: float, preset: str | None = None,
                   cfg: dict | None = None, provider: str | None = None,
                   style_refine: bool | None = None,
-                  subs_mode: str | None = None) -> dict:
+                  subs_mode: str | None = None, tracker=None) -> dict:
     """Re-render one clip with new (snapped) bounds. Style refinement is applied
     to the edited bounds the same way the pipeline does, unless disabled.
-    Returns the updated clip record; job.json is updated in place."""
+    Returns the updated clip record; job.json is updated in place.
+
+    ``tracker`` (optional ProgressTracker) receives stage-by-stage progress on
+    the "render" stage so the UI can show a live bar + ETA, matching the main
+    pipeline. None keeps the old silent behaviour."""
+    def _prog(frac: float, msg: str) -> None:
+        if tracker:
+            tracker.update("render", frac, msg)
     import captions as captions_mod
     import cut as cut_mod
     import reframe as reframe_mod
@@ -77,6 +85,10 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
     if clip is None:
         raise ClipForgeError(f"no clip index {clip_index} in {job_dir}")
 
+    _t0 = time.perf_counter()
+    if tracker:
+        tracker.start("render", f"re-rendering clip {clip_index:02d}")
+    _prog(0.05, "loading job markers")
     info = _load_marker(job_dir, "ingest")
     transcript = _load_marker(job_dir, "transcribe")
     scene_data = _load_marker(job_dir, "scenes")
@@ -90,6 +102,7 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
     # Refine the edited bounds unless disabled (mirrors pipeline _render_one).
     style_on = (cfg.get("style", {}).get("enabled", False)
                 if style_refine is None else style_refine)
+    _prog(0.15, "refining timeline" if style_on else "preparing cut")
     edit_plan = None
     if style_on:
         cand = {"start": start, "end": end, "hook": clip.get("hook", ""),
@@ -109,6 +122,7 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
         out_start, out_end, excl, hbias, multi = start, end, 0.0, -1.0, False
         segments = [[start, end]]
 
+    _prog(0.3, "cutting / reframing")
     if aspect == "16:9":
         cut_path = (cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4", cfg)
                     if multi else
@@ -143,12 +157,14 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
                  for w in transcript["words"]
                  if w["start"] >= out_start - 0.05 and w["end"] <= out_end + 0.05]
         cap_kwargs = {}
+    _prog(0.7, "burning captions")
     final = captions_mod.caption_clip(src, words, clip_dir / "final.mp4", cfg,
                                       preset_name=preset, **cap_kwargs)
 
     duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
+    render_s = round(time.perf_counter() - _t0, 2)
     clip.update({"start": out_start, "end": out_end,
-                 "duration": duration, "preset": preset,
+                 "duration": duration, "preset": preset, "render_s": render_s,
                  "reframe": metrics, "path": str(final),
                  "srt": str(final.with_suffix(".srt")),
                  "style": style_mod.summarize(edit_plan) if edit_plan else None})
@@ -156,6 +172,8 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
         f"clip {clip_index:02d} re-rendered to {out_start:.2f}-{out_end:.2f}"
         + (" (refined)" if edit_plan else ""))
     _save_job(job_dir, job)
+    if tracker:
+        tracker.finish("render", f"rendered in {render_s:.0f}s")
     return clip
 
 

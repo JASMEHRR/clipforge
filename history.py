@@ -67,6 +67,36 @@ def list_jobs(cfg: dict | None = None, limit: int = 100) -> list[dict]:
     return out
 
 
+def render_rate_history(cfg: dict | None = None, limit: int = 10) -> list[float]:
+    """Past render throughput as output-seconds rendered per wall-clock second,
+    oldest→newest, for ETA estimation. Prefers per-clip ``render_s`` when present,
+    else the aggregate ``render_clips`` stage timing. Best-effort — [] on error."""
+    try:
+        with _db(cfg) as conn:
+            rows = conn.execute(
+                "SELECT stages, clips FROM jobs WHERE status='done' "
+                "ORDER BY created DESC LIMIT ?", (limit,)).fetchall()
+    except Exception as e:  # noqa: BLE001
+        log.error("history rate read failed: %s", e)
+        return []
+    rates = []
+    for stages_json, clips_json in rows:
+        try:
+            stages = json.loads(stages_json)
+            clips = json.loads(clips_json)
+            out_secs = sum(float(c.get("duration", 0) or 0) for c in clips)
+            wall = sum(float(c.get("render_s", 0) or 0) for c in clips)
+            if wall <= 0:  # fall back to the aggregate render stage timing
+                st = stages.get("render_clips") or stages.get("render") or {}
+                wall = float(st.get("seconds", 0) or 0)
+            if out_secs > 0 and wall > 0:
+                rates.append(out_secs / wall)
+        except Exception:  # noqa: BLE001 — skip malformed rows
+            continue
+    rates.reverse()  # oldest→newest for EMA
+    return rates
+
+
 def get_job(job_id: str, cfg: dict | None = None) -> dict | None:
     with _db(cfg) as conn:
         row = conn.execute("SELECT job_id, created, source, status, job_dir, "

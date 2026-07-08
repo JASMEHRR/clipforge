@@ -14,6 +14,7 @@ import datetime as dt
 import json
 import re
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -235,6 +236,18 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         n = max(1, len(candidates))
         workers = _worker_count(cfg, n)
         tracker.start("render", f"rendering {n} clips ({workers} workers)")
+        # Seed an upfront render ETA from this machine's past throughput so the
+        # UI shows an estimate before the first clip finishes.
+        try:
+            from history import render_rate_history
+            from progress import estimate_eta
+            out_secs = sum(max(0.0, c["end"] - c["start"]) for c in candidates)
+            hist = render_rate_history(cfg, limit=10)
+            hint = estimate_eta(out_secs / max(1, workers), history_rates=hist)
+            if hint:
+                tracker.set_hint("render", hint)
+        except Exception as e:  # noqa: BLE001 — ETA hint is cosmetic
+            log.debug("render ETA hint skipped: %s", e)
         for i in range(len(candidates)):
             tracker.item("render", f"clip_{i:02d}", 0.0)
         with stage_timer(log, "render_clips", timings):
@@ -314,6 +327,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         if tracker:
             tracker.item("render", f"clip_{i:02d}", frac)
 
+    _t0 = time.perf_counter()
     clip_dir = job_dir / f"clip_{i:02d}"
     clip_dir.mkdir(exist_ok=True)
     source = info["video_path"]
@@ -404,6 +418,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
 
     return {"index": i, "start": out_start, "end": out_end,
             "duration": duration,
+            "render_s": round(time.perf_counter() - _t0, 2),
             "hook": cand["hook"], "reason": cand.get("reason", ""),
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),

@@ -67,7 +67,9 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
     holder: dict = {}
 
     import time
+    from progress import _fmt_secs
     last = {"t": 0.0}
+    t0 = time.monotonic()
 
     def cb(stage, frac, msg):
         now = time.monotonic()
@@ -76,7 +78,9 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
         last["t"] = now
         filled = int(frac * 24)
         bar = "█" * filled + "░" * (24 - filled)
-        q.put(f"{bar} {frac * 100:3.0f}%  {stage}: {msg}")
+        el = now - t0
+        eta = el * (1.0 - frac) / frac if frac > 0.03 else None
+        q.put(f"{bar} {frac * 100:3.0f}%  {stage}: {msg} · ETA {_fmt_secs(eta)}")
 
     def work():
         try:
@@ -224,19 +228,58 @@ def _job_clips(job_name):
 
 
 def _edit_rerender(job_name, clip_choice, start, end, preset):
+    """Streams live re-render progress (bar + ETA) then yields the final clip."""
+    import queue as _queue
+    import time
+    from progress import ProgressTracker, _fmt_secs
     from rerender import rerender_clip
     if not (job_name and clip_choice):
-        return None, "select a job and a clip"
-    try:
-        idx = int(clip_choice.split("|")[0].strip())
-        job_dir = ROOT / load_config()["paths"]["output_dir"] / job_name
-        clip = rerender_clip(job_dir, idx, float(start), float(end),
-                             preset or None)
-        return clip["path"], (f"re-rendered clip {idx:02d}: "
-                              f"{clip['start']:.2f}–{clip['end']:.2f}s "
-                              f"(snapped to sentence boundaries)")
-    except Exception as e:  # noqa: BLE001
-        return None, f"re-render failed: {e}"
+        yield None, "select a job and a clip"
+        return
+    idx = int(clip_choice.split("|")[0].strip())
+    job_dir = ROOT / load_config()["paths"]["output_dir"] / job_name
+    q: _queue.Queue = _queue.Queue()
+    holder: dict = {}
+    t0 = time.monotonic()
+
+    def on_change(tr):
+        snap = tr.snapshot()
+        row = next((s for s in snap["stages"] if s["key"] == "render"), None)
+        if not row:
+            return
+        frac = row["fraction"]
+        filled = int(frac * 24)
+        bar = "█" * filled + "░" * (24 - filled)
+        q.put(f"{bar} {frac * 100:3.0f}%  {row['message']} · "
+              f"ETA {_fmt_secs(row['eta'])}")
+
+    tracker = ProgressTracker(on_change=on_change)
+
+    def work():
+        try:
+            holder["clip"] = rerender_clip(job_dir, idx, float(start),
+                                           float(end), preset or None,
+                                           tracker=tracker)
+        except Exception as e:  # noqa: BLE001 — UI must show, not crash
+            holder["error"] = str(e)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+    yield None, f"re-rendering clip {idx:02d}…"
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        yield None, item
+    if "error" in holder:
+        yield None, f"re-render failed: {holder['error']}"
+        return
+    clip = holder["clip"]
+    yield clip["path"], (f"re-rendered clip {idx:02d} in "
+                         f"{clip.get('render_s', 0):.0f}s: "
+                         f"{clip['start']:.2f}–{clip['end']:.2f}s "
+                         f"(snapped to sentence boundaries)")
 
 
 def _edit_regen_meta(job_name, clip_choice):

@@ -48,6 +48,45 @@ PENDING, RUNNING, DONE, SKIPPED, FAILED = (
     "pending", "running", "done", "skipped", "failed")
 
 
+def ema(values, alpha: float = 0.4) -> float | None:
+    """Exponential moving average, oldest→newest. None if empty."""
+    it = [float(v) for v in (values or []) if v and v > 0]
+    if not it:
+        return None
+    acc = it[0]
+    for v in it[1:]:
+        acc = alpha * v + (1.0 - alpha) * acc
+    return acc
+
+
+def estimate_eta(remaining_units: float,
+                 live_rate: float | None = None,
+                 history_rates=None,
+                 live_weight: float = 0.6,
+                 alpha: float = 0.4) -> float | None:
+    """Pure ETA math for a stage measured in units of work (e.g. output
+    seconds rendered).
+
+    remaining_units : work left, in the same unit the rates are per-second of.
+    live_rate       : units/sec observed so far in THIS run (None if too early).
+    history_rates   : units/sec from past runs on this machine, oldest→newest.
+    Blends an EMA of history with the live rate (live weighted higher because
+    it reflects current machine load); falls back to whichever exists. Returns
+    remaining seconds, or None when no rate and no history are known.
+    """
+    if remaining_units <= 0:
+        return 0.0
+    hist = ema(history_rates, alpha)
+    live = live_rate if (live_rate and live_rate > 0) else None
+    if live is not None and hist is not None:
+        rate = live_weight * live + (1.0 - live_weight) * hist
+    else:
+        rate = live if live is not None else hist
+    if not rate or rate <= 0:
+        return None
+    return max(0.0, remaining_units / rate)
+
+
 def _fmt_secs(s: float | None) -> str:
     if s is None or s < 0:
         return "--:--"
@@ -70,6 +109,7 @@ class _Stage:
     # sub-items (per-file progress during multi-clip rendering)
     items: dict = field(default_factory=dict)   # name -> fraction 0..1
     last_logged: float = 0.0        # monotonic time of last ETA log line
+    hint_eta: float | None = None   # upfront ETA (e.g. from run history)
 
     def elapsed(self, now: float) -> float:
         if self.started is None:
@@ -77,14 +117,19 @@ class _Stage:
         return (self.finished or now) - self.started
 
     def eta(self, now: float) -> float | None:
-        """Rate-based remaining-time estimate for the running stage."""
-        if self.state != RUNNING or self.fraction <= 0.02:
+        """Remaining-time estimate for the running stage. Prefers the live
+        rate once there's enough signal; before that, falls back to an upfront
+        ``hint_eta`` (from past-run history) counting down as time passes."""
+        if self.state != RUNNING:
             return None
         el = self.elapsed(now)
-        if el < 1.0:
-            return None
-        rate = self.fraction / el
-        return max(0.0, (1.0 - self.fraction) / rate) if rate > 0 else None
+        if self.fraction > 0.02 and el >= 1.0:
+            rate = self.fraction / el
+            if rate > 0:
+                return max(0.0, (1.0 - self.fraction) / rate)
+        if self.hint_eta is not None:
+            return max(0.0, self.hint_eta - el)
+        return None
 
 
 class ProgressTracker:
@@ -163,6 +208,11 @@ class ProgressTracker:
             st.started = st.started or time.monotonic()
             st.finished = time.monotonic()
         self._emit(key)
+
+    def set_hint(self, key: str, eta_seconds: float | None) -> None:
+        """Seed an upfront ETA for a stage (used before a live rate exists)."""
+        with self._lock:
+            self._stages[key].hint_eta = eta_seconds
 
     def fail(self, key: str, message: str) -> None:
         with self._lock:
