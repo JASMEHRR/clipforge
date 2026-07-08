@@ -39,6 +39,57 @@ def cut_clip(video_path: str | Path, start: float, end: float,
     return out_path
 
 
+def cut_segments(video_path: str | Path, segments: list[list[float]],
+                 out_path: str | Path, cfg: dict | None = None) -> Path:
+    """Extract an ordered list of source spans and concat them into ONE clip
+    (single re-encode via the concat filter). A short audio fade at every
+    internal join removes the click of a hard cut WITHOUT overlapping audio, so
+    the EditPlan's word-timeline remap stays exact. Single-segment lists take
+    the cut_clip fast path unchanged."""
+    cfg = cfg or load_config()
+    video_path, out_path = Path(video_path), Path(out_path)
+    if not segments:
+        raise CutError("no segments to cut")
+    if len(segments) == 1:
+        return cut_clip(video_path, segments[0][0], segments[0][1], out_path, cfg)
+    if not video_path.exists():
+        raise CutError(f"video not found: {video_path}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    r = cfg["render"]
+    cf = max(0.0, float(cfg["style"].get("crossfade_ms", 30)) / 1000.0)
+    parts, labels = [], []
+    total = 0.0
+    for i, (s, e) in enumerate(segments):
+        if e <= s:
+            raise CutError(f"invalid segment {i}: start={s} end={e}")
+        d = e - s
+        total += d
+        parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]")
+        af = f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS"
+        if cf > 0 and i > 0:                       # fade in at internal joins
+            af += f",afade=t=in:st=0:d={cf:.3f}"
+        if cf > 0 and i < len(segments) - 1:       # fade out into internal joins
+            af += f",afade=t=out:st={max(0.0, d - cf):.3f}:d={cf:.3f}"
+        af += f"[a{i}]"
+        parts.append(af)
+        labels.append(f"[v{i}][a{i}]")            # concat wants v,a interleaved
+    n = len(segments)
+    parts.append("".join(labels) + f"concat=n={n}:v=1:a=1[vout][aout]")
+    filtergraph = ";".join(parts)
+
+    run_ffmpeg(["-i", video_path, "-filter_complex", filtergraph,
+                "-map", "[vout]", "-map", "[aout]"]
+               + video_encode_args(cfg)
+               + ["-c:a", "aac", "-b:a", r["audio_bitrate"],
+                  "-movflags", "+faststart", out_path])
+    got = probe(out_path)["duration"]
+    if abs(got - total) > 1.5:
+        raise CutError(f"segment concat off: wanted {total:.2f}s got {got:.2f}s")
+    log.info("cut %d segments (%.1fs) -> %s", n, got, out_path.name)
+    return out_path
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="smoke: cut a clip")
     ap.add_argument("video")
