@@ -111,8 +111,41 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `style.cta.enabled` / `text` / `duration_s` | end-of-clip call-to-action overlay | true / "Follow for more" / 1.5 |
 | `style.existing_subs.mode` | burned-in subtitle handling: `auto`/`replace`/`keep`/`ignore` | `auto` |
 | `style.existing_subs.max_band_ratio` | REPLACE only if the detected band ≤ this fraction of frame height | 0.18 |
+| `captions.watermark.enabled` / `text` / `position` | brand/handle overlay burned on every clip (`top-left`/`top-right`/`bottom-left`/`bottom-right`/`center`) | false / "" / bottom-right |
+| `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling | 36 / 0.6 / 40 |
+| `music.default_track` / `default_volume_db` | background-music defaults when the UI leaves them unset | "" / -22 |
+| `ui.auto_open` | open the UI automatically when `app.py` starts | true |
+| `ui.window_mode` | `app` = chromeless Edge/Chrome window (`--app`); `tab` = normal browser tab | app |
 
 Secrets live **only** in `.env` (see `.env.example`). Never commit `.env`.
+
+### Per-run options (Create → "More options")
+
+These override the config **for one run** (applied to a private copy — the saved
+config is never mutated) and thread through both the pipeline and single-clip
+re-render via the shared render path:
+
+| Option | Maps to | Default (no-op) |
+|---|---|---|
+| Custom CTA text | `style.cta.text` (+ enables CTA) | config value |
+| Keyword highlight color | active caption preset's `highlight_color` (hex/rgb → ASS) | preset value |
+| Pacing aggressiveness (0–1) | `style.max_pause_s` / `target_pause_s` within safe bounds | 0.5 |
+| Min / max clip length | `clips.min_seconds` / `max_seconds` | config bounds |
+| Watermark text + position | `captions.watermark.*` | off |
+| Background music + volume | per-run music track + dB | none |
+| Clips to keep | `clips.target_count` | 0 (auto) |
+
+## Engagement signals (virality v2)
+
+Each clip gets an explainable **engagement-signals** score (0–100, banded
+Strong / Promising / Weak) — never presented as a guarantee. Six sub-scores
+(0–10) are computed from data the pipeline already has: **hook, completeness,
+pacing, captions, duration, delivery** (weights and sources in `RESEARCH.md`).
+The card gallery shows the band badge and an expandable per-signal breakdown;
+the full breakdown is stored in each clip's `metadata.json`. A real LLM key adds
+one rubric sub-score; under the mock provider the heuristics carry it (so the
+keyless path stays deterministic). This score drives display/sort only — it does
+**not** change how many clips are kept.
 
 ## Style refinement
 

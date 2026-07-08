@@ -533,8 +533,8 @@ def build_app() -> gr.Blocks:
     updater.check_async()
     cfg = load_config()
     presets = list(cfg["captions"]["presets"].keys())
-    with gr.Blocks(title="ClipForge", theme=gr.themes.Soft(),
-                   css=CARD_CSS) as demo:
+    with gr.Blocks(title="ClipForge") as demo:
+        gr.HTML(f"<style>{CARD_CSS}</style>")  # scoped card styling (version-proof)
         gr.Markdown("# ClipForge — local video repurposing\n"
                     "Long video in → ranked vertical clips with animated "
                     "captions out. No API key required (mock provider); add "
@@ -743,4 +743,5 @@ if __name__ == "__main__":
         from launcher import open_ui
         open_ui(f"http://127.0.0.1:{port}", load_config())
     build_app().queue().launch(server_name=host, server_port=port,
-                               inbrowser=False, quiet=True)
+                               inbrowser=False, quiet=True,
+                               theme=gr.themes.Soft())

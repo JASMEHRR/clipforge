@@ -36,6 +36,14 @@ Local Opus Clip alternative: long video → ranked 30–60s vertical clips with 
 - Module self-checks: `python subtitle_detect.py` (synthetic smoke), `python style_refiner.py` (EditPlan invariants).
 - refs/ is gitignored (reference videos may be copyrighted). The refine stage lives between highlights and render; `style.enabled: false` skips it entirely.
 
+## Overnight upgrades (feature/overnight-upgrades)
+- **Progress + ETA**: `progress.estimate_eta`/`ema` (pure, tested); `history.render_rate_history` feeds an upfront render ETA (`tracker.set_hint`); per-clip `render_s` persisted in job.json; `rerender_clip(..., tracker=)` streams stage progress; Create + Edit tabs show live ETA.
+- **Virality v2**: `virality.engagement_signals(features)` → 6 sub-scores + band (Strong/Promising/Weak); reuses refiner flags + StyleProfile; optional LLM rubric only on a real provider. Display/sort only — keep logic unchanged.
+- **Per-run options**: `config.apply_run_options(cfg, opts)` (pure deep-copy; never mutates the singleton) — CTA text, highlight color (`config.hex_to_ass`), pacing slider, clip length, watermark (`captions.watermark_filter`). Threads through pipeline AND rerender via shared render-time config keys.
+- **Auto-open**: `launcher.py` (`build_launch_command`, `detect_browser`, `open_ui`); config `ui.auto_open`/`ui.window_mode`. Tests assert command construction only — never opens a browser.
+- **UI**: card gallery (`app._cards_html`) with band badge + expandable engagement breakdown, replaces the markdown table; History reopen renders the same gallery. `gr.themes.Soft()` passed at `launch()` (Gradio 6 moved theme/css off the Blocks constructor); card CSS injected as a `<style>` block.
+- Branch note: built on feature/style-refiner because origin/main had diverged (12-hunk pipeline.py conflict). **main reconciliation deferred to a human** (see REPORT.md).
+
 ## Conventions
 - Flat top-level modules; schemas in schemas.py only; all JSON validated at module boundaries.
 - Structured errors from errors.py; a failing clip/stage never kills the pipeline or queue.

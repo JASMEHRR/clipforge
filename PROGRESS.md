@@ -77,6 +77,15 @@ Current: **feature/style-refiner** in progress — timeline refinement layer bui
 - [x] No silent failures
 - [x] Prompting standard (task, constraints, schema, example)
 
+## Overnight upgrades (feature/overnight-upgrades, 2026-07-09)
+- [x] Feature 1 — progress + ETA everywhere (pipeline + single-clip rerender; per-clip render_s persisted; history-based render ETA)
+- [x] Feature 2 — UI card gallery (band badge + expandable engagement breakdown, render time, refine flags); History reopen renders it; Soft theme
+- [x] Feature 3 — auto-open on launch (config-driven, chromeless app window w/ tab fallback; command construction unit-tested, no browser opened)
+- [x] Feature 4 — virality v2 (6 explainable engagement sub-scores + band; reuses refiner flags; keep logic unchanged)
+- [x] Feature 5 — per-run options: CTA text, highlight color, watermark, pacing slider, clip length (config-driven, threads through pipeline + rerender)
+- [ ] Feature 5 — emoji captions CUT (bundled Montserrat has no emoji glyphs; needs an emoji-capable font asset — see REPORT.md)
+- [x] Verification: 144 passed / 1 skipped; `--sample --provider mock` OK (metadata carries breakdown, render_s recorded); app + rerender smoke pass
+
 ## Known Issues
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
 - mediapipe pinned to 0.10.14: 0.10.35 removed the legacy `solutions` API (rule 6 substitution, documented in PLAN.md Decisions).

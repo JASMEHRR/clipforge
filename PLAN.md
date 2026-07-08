@@ -171,6 +171,12 @@ Live calls never happen in gates (gates force `--provider mock`).
 | hook/ending classifiers: rule heuristic is BOTH the LLM fallback and the mock answer | separate mock branch in llm.py | one deterministic rule path; mock runs are meaningful and stable with no llm.py change |
 | Feature branch off origin/v2.0, not main | branch off main (spec text) | local main is v1.0.1 and lacks the v2 modules the working tree imports (segment/virality/music); v2.0 is the live line |
 | Caption anchor clamped to [0.52,0.66] at BOTH schema and code | trust config value | position law is a hard invariant; enforced even if a profile is hand-edited out of range |
+| **Overnight: branch off feature/style-refiner, not main** | resolve the origin/main merge | origin/main diverged (NVENC/ETA-log commits) and merging it gave a 12-hunk pipeline.py conflict; resolving core pipeline logic unattended risks corrupting decision behavior (protocol forbids). main reconciliation deferred to a human |
+| Virality v2 is display/sort only; keep logic untouched | fold score into keep | true virality isn't predictable (honesty req); keep uses `rescore_clips`, so the new score changes nothing about how many clips survive |
+| Per-run options applied via `apply_run_options` deep-copy | mutate the cfg singleton (existing pattern) | the singleton leaks overrides across runs; a deep copy keeps runs isolated and lets rerender reuse the same keys safely |
+| Emoji captions CUT | ship with bundled font | Montserrat (the only bundled font) has no emoji glyphs → burned emoji render as tofu; needs an emoji-capable font asset (a user decision), and no new deps allowed |
+| Auto-open verified by asserting the command, not opening a browser | launch a real window | protocol rule 6 (no browsers during build); `build_launch_command` is pure and unit-tested |
+| Theme/CSS: theme at `launch()`, CSS via injected `<style>` | Blocks constructor args | Gradio 6 moved theme/css off the Blocks constructor (warns + ignores); `<style>` injection is version-proof |
 
 ## 9. Phase gates (summary)
 
