@@ -235,11 +235,22 @@ def reframe_clip(source: str | Path, start: float, end: float,
                  out_path: str | Path, scene_cuts_rel: list[float] | None = None,
                  cfg: dict | None = None, aspect: str = "9:16",
                  debug_dir: str | Path | None = None,
-                 info: dict | None = None) -> dict:
+                 info: dict | None = None,
+                 bottom_exclusion_ratio: float = 0.0,
+                 h_bias_center: float = -1.0) -> dict:
     """Reframe the [start, end] window of `source` to the target aspect in a
     SINGLE re-encode (seek + crop + scale straight from the source — no
     intermediate full-res cut). Tracking runs on a 360p low-fps proxy; crop
-    coordinates are scaled back to full resolution. Returns a metrics dict."""
+    coordinates are scaled back to full resolution. Returns a metrics dict.
+
+    Style-refiner inputs (both default to no-op, so style-off output is
+    unchanged):
+      bottom_exclusion_ratio > 0 (REPLACE mode) — crop only the top
+        (1 - ratio) of the frame so a burned subtitle band at the bottom is
+        excluded; the tighter crop scales back up (natural zoom compensation).
+      h_bias_center in [0,1] (KEEP mode) — pull the horizontal crop center
+        toward this fraction of width so a centered source subtitle survives
+        the 9:16 crop. -1 disables."""
     cfg = cfg or load_config()
     rcfg = cfg["reframe"]
     source, out_path = Path(source), Path(out_path)
@@ -257,6 +268,14 @@ def reframe_clip(source: str | Path, start: float, end: float,
     ow, oh = ((rcfg["output"]["width"], rcfg["output"]["height"])
               if aspect == "9:16" else (1080, 1080))
     cw, ch, y0 = crop_geometry(w, h, aspect)
+    # REPLACE mode: exclude a bottom subtitle band by cropping only the top
+    # (1 - ratio) of the frame, then recompute the aspect crop inside it.
+    if bottom_exclusion_ratio and 0.0 < bottom_exclusion_ratio < 0.5 and aspect == "9:16":
+        eff_h = max(16, int(h * (1.0 - bottom_exclusion_ratio)) & ~1)
+        cw, ch, _ = crop_geometry(w, eff_h, aspect)
+        y0 = 0  # anchor to the top; the excluded band sits below ch
+        log.info("REPLACE: excluding bottom %.0f%% (crop %dx%d, y0=0)",
+                 bottom_exclusion_ratio * 100, cw, ch)
     n_frames = max(1, int(round(dur * fps)))
 
     proxy_h = int(rcfg.get("proxy_height", 360))
@@ -288,6 +307,14 @@ def reframe_clip(source: str | Path, start: float, end: float,
     sample_times = np.arange(len(sampled)) / proxy_fps
     frame_times = np.arange(n_frames) / fps
     full = np.interp(frame_times, sample_times, sampled).tolist()
+
+    # KEEP mode: bias the horizontal crop center toward h_bias_center*width so a
+    # centered source subtitle survives the crop. Blending toward a constant
+    # target keeps the path smooth (the follower's bounds still hold).
+    if 0.0 <= h_bias_center <= 1.0:
+        bias_x = float(np.clip(h_bias_center * w, half, w - half))
+        full = [float(np.clip(p + 0.6 * (bias_x - p), half, w - half)) for p in full]
+        log.info("KEEP: biasing horizontal crop toward x=%.0f", bias_x)
 
     # per-scene segments: smoothing resets at shot boundaries
     cut_frames = sorted({int(t * fps) for t in (scene_cuts_rel or [])
