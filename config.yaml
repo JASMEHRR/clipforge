@@ -103,6 +103,56 @@ reframe:
   headroom_ratio: 0.40          # face center sits 40% from top on fallback
   min_face_confidence: 0.5
 
+style:
+  # Timeline refinement layer (runs after highlights, before cut/reframe/captions).
+  # enabled: false -> stage skipped entirely, output byte-identical to pre-feature main.
+  enabled: true
+  profile: profiles/default.json   # StyleProfile; tunes hook/pacing/caption targets
+
+  # --- start fixer ---
+  hook_search_window_s: 5.0        # forward search for a self-contained hook
+  filler_openers: [um, uh, so, okay, ok, like, well, yeah, right, anyway]
+  zoom_punch_scale: 1.06           # weak-hook punch-in target scale over first 1.5s
+  zoom_punch_seconds: 1.5
+
+  # --- pacing cleaner ---
+  max_pause_s: 0.6                 # any word gap above this is compressed
+  target_pause_s: 0.35            # compressed-to length (clamped 0.25-0.5)
+  pad_ms: 100                      # padding around each cut point (never inside a word)
+  max_removal_ratio: 0.20          # cap total removed per clip; longest pauses go first
+  crossfade_ms: 30                 # audio crossfade at segment joins (no clicks)
+
+  # --- ending optimizer ---
+  tail_ms: 250                     # silence kept after the last word
+  min_ending_words: 4              # rule-fallback: final sentence must be >= this
+  audio_fade_in_ms: 150            # every clip, both ends — no hard audio edges
+  audio_fade_out_ms: 250
+  unresolved_fade_ms: 300          # gentle A/V fade when ending can't be resolved
+
+  # --- caption position law (applies to all presets + CTA) ---
+  captions:
+    vertical_anchor: 0.60          # block center; HARD-clamped to [0.52, 0.66]
+    words_per_line: 3
+    side_margin_px: 60             # min horizontal margin
+
+  # --- call to action overlay (rendered by caption/ASS layer, never TTS) ---
+  cta:
+    enabled: true
+    text: "Follow for more"
+    duration_s: 1.5
+
+  # --- burned-in subtitle handling ---
+  existing_subs:
+    mode: auto                     # auto | replace | keep | ignore
+    max_band_ratio: 0.18           # REPLACE only if detected band <= this fraction of frame
+
+  # --- subtitle detector (OpenCV) ---
+  subtitle_detect:
+    sample_fps: 1.0                # frames sampled per second across the clip range
+    search_band_ratio: 0.45        # only inspect the lower 45% of the frame
+    persistence_ratio: 0.30        # band must persist in >= this fraction of frames
+    max_band_ratio: 0.18           # REPLACE-eligibility mirror (detector reports; refiner decides)
+
 sample:
   # Public-domain film, direct mp4 from archive.org (never YouTube for --sample).
   primary_url: "https://archive.org/download/DuckandC1951/DuckandC1951_512kb.mp4"

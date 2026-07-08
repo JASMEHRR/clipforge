@@ -50,6 +50,10 @@ class MetadataError(ClipForgeError):
     stage = "metadata"
 
 
+class StyleError(ClipForgeError):
+    stage = "style"
+
+
 class LLMError(ClipForgeError):
     stage = "llm"
 

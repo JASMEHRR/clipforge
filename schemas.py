@@ -181,6 +181,181 @@ JOB_RECORD = {
     "additionalProperties": True,
 }
 
+# --- Style refinement layer (feature/style-refiner) -----------------------
+
+_HOOK_TYPE = {"type": "string",
+              "enum": ["question", "shocking-statement", "curiosity-gap", "statement"]}
+
+# style_profile.py output: averaged viral-Shorts style descriptor.
+STYLE_PROFILE = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "references": {"type": "array", "items": {"type": "string"}},
+        "hook": {
+            "type": "object",
+            "properties": {
+                "dominant_type": _HOOK_TYPE,
+                "type_distribution": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number", "minimum": 0},
+                },
+            },
+            "required": ["dominant_type"],
+            "additionalProperties": False,
+        },
+        "silence": {
+            "type": "object",
+            "properties": {
+                "median_gap_s": {"type": "number", "minimum": 0},
+                "p90_gap_s": {"type": "number", "minimum": 0},
+            },
+            "required": ["median_gap_s", "p90_gap_s"],
+            "additionalProperties": False,
+        },
+        "pacing": {
+            "type": "object",
+            "properties": {
+                "scene_cuts_per_min": {"type": "number", "minimum": 0},
+                "words_per_sec": {"type": "number", "minimum": 0},
+            },
+            "required": ["scene_cuts_per_min", "words_per_sec"],
+            "additionalProperties": False,
+        },
+        "ending": {
+            "type": "object",
+            "properties": {
+                "resolves_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+                "cta_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "required": ["resolves_ratio", "cta_ratio"],
+            "additionalProperties": False,
+        },
+        "captions": {
+            "type": "object",
+            "properties": {
+                # Hard-clamped to the CAPTION POSITION LAW band [0.52, 0.66].
+                "vertical_anchor": {"type": "number", "minimum": 0.52, "maximum": 0.66},
+                "words_per_line": {"type": "integer", "minimum": 1, "maximum": 8},
+                "emphasis": {"type": "string"},
+            },
+            "required": ["vertical_anchor", "words_per_line"],
+            "additionalProperties": False,
+        },
+        "frames": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name", "references", "hook", "silence", "pacing", "ending", "captions"],
+    "additionalProperties": False,
+}
+
+# subtitle_detect.py output: burned-in subtitle band detection for one source range.
+SUBTITLE_DETECT_RESULT = {
+    "type": "object",
+    "properties": {
+        "present": {"type": "boolean"},
+        "band_top_pct": {"type": "number", "minimum": 0, "maximum": 1},
+        "band_bottom_pct": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "sampled_frames": {"type": "integer", "minimum": 0},
+    },
+    "required": ["present", "band_top_pct", "band_bottom_pct", "confidence", "sampled_frames"],
+    "additionalProperties": False,
+}
+
+# One kept source span [start, end] in the EditPlan segment list.
+_SEGMENT = {
+    "type": "array",
+    "items": {"type": "number", "minimum": 0},
+    "minItems": 2,
+    "maxItems": 2,
+}
+
+# style_refiner.py output: per-clip timeline edit plan consumed by cut/reframe/captions.
+EDIT_PLAN = {
+    "type": "object",
+    "properties": {
+        "segments": {"type": "array", "items": _SEGMENT, "minItems": 1},
+        # Word timeline already remapped into OUTPUT time (post pause-removal).
+        "words": {"type": "array", "items": _WORD},
+        "output_duration": {"type": "number", "minimum": 0},
+        "start_action": {"type": "string",
+                         "enum": ["keep", "trim_silence", "shift_to_hook"]},
+        "ending_action": {"type": "string",
+                          "enum": ["keep", "trim_tail", "extend_forward", "pull_back"]},
+        "total_ms_removed": {"type": "number", "minimum": 0},
+        "flags": {
+            "type": "array",
+            "items": {"type": "string",
+                      "enum": ["weak_hook", "unresolved_ending", "subs_kept"]},
+        },
+        "zoom_punch": {"type": "boolean"},
+        "fades": {
+            "type": "object",
+            "properties": {
+                "audio_in_ms": {"type": "number", "minimum": 0},
+                "audio_out_ms": {"type": "number", "minimum": 0},
+                "video_out_ms": {"type": "number", "minimum": 0},
+            },
+            "required": ["audio_in_ms", "audio_out_ms", "video_out_ms"],
+            "additionalProperties": False,
+        },
+        "captions_enabled": {"type": "boolean"},
+        "caption_anchor": {"type": "number", "minimum": 0.52, "maximum": 0.66},
+        "cta": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "text": {"type": "string"},
+                "duration_s": {"type": "number", "minimum": 0},
+            },
+            "required": ["enabled", "text", "duration_s"],
+            "additionalProperties": False,
+        },
+        "existing_subs": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["auto", "replace", "keep", "ignore"]},
+                "decision": {"type": "string", "enum": ["none", "replace", "keep"]},
+                "reason": {"type": "string"},
+                # REPLACE: bottom fraction to crop above (0 = none).
+                "bottom_exclusion_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+                # KEEP: horizontal centering bias 0..1; -1 sentinel = no bias.
+                "h_bias_center": {"type": "number", "minimum": -1, "maximum": 1},
+            },
+            "required": ["mode", "decision", "reason",
+                         "bottom_exclusion_ratio", "h_bias_center"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["segments", "words", "output_duration", "start_action",
+                 "ending_action", "total_ms_removed", "flags", "zoom_punch",
+                 "fades", "captions_enabled", "caption_anchor", "cta", "existing_subs"],
+    "additionalProperties": False,
+}
+
+# LLM classifier: is the clip's opening sentence a self-contained hook?
+HOOK_CLASSIFY = {
+    "type": "object",
+    "properties": {
+        "self_contained": {"type": "boolean"},
+        "hook_type": _HOOK_TYPE,
+        "reason": {"type": "string"},
+    },
+    "required": ["self_contained", "hook_type", "reason"],
+    "additionalProperties": False,
+}
+
+# LLM classifier: does the clip's final sentence resolve the thought?
+ENDING_CLASSIFY = {
+    "type": "object",
+    "properties": {
+        "complete": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["complete", "reason"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -190,6 +365,11 @@ SCHEMAS: dict[str, dict] = {
     "clip_metadata": CLIP_METADATA,
     "virality": VIRALITY,
     "job_record": JOB_RECORD,
+    "style_profile": STYLE_PROFILE,
+    "subtitle_detect_result": SUBTITLE_DETECT_RESULT,
+    "edit_plan": EDIT_PLAN,
+    "hook_classify": HOOK_CLASSIFY,
+    "ending_classify": ENDING_CLASSIFY,
 }
 
 
