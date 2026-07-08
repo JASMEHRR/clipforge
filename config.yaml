@@ -107,7 +107,8 @@ style:
   # Timeline refinement layer (runs after highlights, before cut/reframe/captions).
   # enabled: false -> stage skipped entirely, output byte-identical to pre-feature main.
   enabled: true
-  profile: profiles/default.json   # StyleProfile; tunes hook/pacing/caption targets
+  profile: profiles/user.json      # StyleProfile; tunes hook/pacing/caption targets
+                                   # (built from refs/ via style_profile.py; default.json is the fallback)
 
   # --- start fixer ---
   hook_search_window_s: 5.0        # forward search for a self-contained hook

@@ -1,0 +1,42 @@
+{
+  "name": "user",
+  "references": [
+    "refs\\videoplayback.mp4",
+    "refs\\vidssave.com He hid the last avocado WHERE_! 720P.mp4",
+    "refs\\vidssave.com He made them lose their MONEY_ \ud83d\udcb0 720P.mp4"
+  ],
+  "hook": {
+    "dominant_type": "question",
+    "type_distribution": {
+      "question": 1.0
+    }
+  },
+  "silence": {
+    "median_gap_s": 0.23,
+    "p90_gap_s": 1.155
+  },
+  "pacing": {
+    "scene_cuts_per_min": 37.013,
+    "words_per_sec": 1.836
+  },
+  "ending": {
+    "resolves_ratio": 0.667,
+    "cta_ratio": 0.0
+  },
+  "captions": {
+    "vertical_anchor": 0.6,
+    "words_per_line": 3,
+    "emphasis": ""
+  },
+  "frames": [
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_0_0.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_0_1.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_0_2.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_1_0.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_1_1.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_1_2.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_2_0.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_2_1.jpg",
+    "E:\\imp\\projects\\clipforge\\cache\\style_frames\\user_2_2.jpg"
+  ]
+}
