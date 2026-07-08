@@ -600,5 +600,11 @@ if __name__ == "__main__":
     import os
     port = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
     host = os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1")  # 0.0.0.0 in Docker
+    # Auto-open the UI per config (ui.auto_open / ui.window_mode). A background
+    # poller waits for the server, then launches a chromeless app window (Edge/
+    # Chrome) or falls back to a browser tab. Docker (0.0.0.0) skips auto-open.
+    if host != "0.0.0.0":
+        from launcher import open_ui
+        open_ui(f"http://127.0.0.1:{port}", load_config())
     build_app().queue().launch(server_name=host, server_port=port,
                                inbrowser=False, quiet=True)

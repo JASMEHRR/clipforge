@@ -178,5 +178,9 @@ render:
   use_nvenc: auto               # auto | never  (auto: NVENC when NVIDIA GPU present)
   parallel_workers: auto        # auto = min(clips, max(1, cpu_count // 2))
 
+ui:
+  auto_open: true               # open the UI automatically when app.py starts
+  window_mode: app              # app = chromeless --app window (Edge/Chrome); tab = normal browser tab
+
 debug: false                    # true: persist transcripts, prompts, raw LLM responses,
                                 # candidate rankings, reframe debug frames
