@@ -67,14 +67,29 @@ def _font(name: str) -> tuple[str, int]:
 
 # ------------------------------------------------------------- ASS writing
 
+def _clamp_anchor(value: float) -> float:
+    """CAPTION POSITION LAW: block center inside [0.52, 0.66]."""
+    return min(0.66, max(0.52, float(value)))
+
+
 def write_ass(words: list[dict], ass_path: Path, cfg: dict, preset_name: str,
-              play_w: int = 1080, play_h: int = 1920) -> None:
+              play_w: int = 1080, play_h: int = 1920,
+              anchor: float | None = None, cta: dict | None = None,
+              clip_duration: float | None = None) -> None:
     ccfg = cfg["captions"]
     preset = ccfg["presets"][preset_name]
     family, bold = _font(preset["font"])
     margin_v = int(ccfg["bottom_margin_px"])
     scale = int(preset.get("highlight_scale", 100))
     style_kind = preset.get("style", "karaoke")
+
+    # Position law: when an anchor is given, every line's CENTER is pinned via
+    # \an5\pos at anchor*height (clamped to the band). anchor=None keeps the
+    # legacy bottom-margin behaviour byte-for-byte.
+    cx = play_w // 2
+    pos_tag = ""
+    if anchor is not None:
+        pos_tag = rf"{{\an5\pos({cx},{int(_clamp_anchor(anchor) * play_h)})}}"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -122,10 +137,28 @@ Style: Base,{family},{preset['font_size']},{preset['primary_color']},{preset['hi
                                  + tok + r"{\r}")
             events.append((start, end, " ".join(parts)))
 
+    # CTA overlay: styled per active preset, positioned per the law, shown in
+    # the final cta.duration_s. Nudged just above the caption anchor so it does
+    # not sit on top of a trailing caption line.
+    if cta and cta.get("enabled") and clip_duration:
+        dur_cta = float(cta.get("duration_s", 1.5))
+        c_start = max(0.0, clip_duration - dur_cta)
+        text = _esc(cta.get("text", "Follow for more"))
+        if preset.get("uppercase"):
+            text = text.upper()
+        if anchor is not None:
+            cta_y = int(_clamp_anchor(anchor - 0.08) * play_h)
+            cta_tag = rf"{{\an5\pos({cx},{cta_y})\b1}}"
+        else:
+            cta_tag = r"{\an2\b1}"
+        events.append((c_start, float(clip_duration), cta_tag + text))
+
     with open(ass_path, "w", encoding="utf-8-sig") as f:
         f.write(header)
         for start, end, text in events:
-            f.write(f"Dialogue: 0,{_ts(start)},{_ts(end)},Base,,0,0,0,,{text}\n")
+            # CTA already carries its own \pos; caption lines get the block pos.
+            prefix = "" if text.startswith(r"{\an") else pos_tag
+            f.write(f"Dialogue: 0,{_ts(start)},{_ts(end)},Base,,0,0,0,,{prefix}{text}\n")
 
 
 def write_srt(words: list[dict], srt_path: Path, cfg: dict) -> None:
@@ -141,10 +174,23 @@ def write_srt(words: list[dict], srt_path: Path, cfg: dict) -> None:
 
 def caption_clip(video_path: str | Path, words: list[dict],
                  out_path: str | Path, cfg: dict | None = None,
-                 preset_name: str | None = None) -> Path:
+                 preset_name: str | None = None,
+                 anchor: float | None = None, cta: dict | None = None,
+                 captions_enabled: bool = True, fades: dict | None = None,
+                 zoom_punch: bool = False) -> Path:
     """Burn animated captions onto a clip; also writes .ass and .srt next to
     the output. `words` must already be clip-relative. Empty words → video is
-    passed through re-encoded (mechanical runs) and an empty .srt is written."""
+    passed through re-encoded (mechanical runs) and an empty .srt is written.
+
+    Style-refiner inputs (all default to today's behaviour, so style-off output
+    is byte-identical):
+      anchor — CAPTION POSITION LAW block center (clamped to [0.52,0.66]).
+      cta — {enabled,text,duration_s} overlay in the final seconds.
+      captions_enabled=False — KEEP mode: burn no captions, no .srt (a source
+        clip already carries its own subtitles).
+      fades — {audio_in_ms,audio_out_ms,video_out_ms} envelope (no hard edges).
+      zoom_punch — subtle 1.0->scale punch-in over the first zoom_seconds
+        (weak-hook enhancement)."""
     cfg = cfg or load_config()
     preset_name = preset_name or cfg["captions"]["preset"]
     if preset_name not in cfg["captions"]["presets"]:
@@ -156,26 +202,57 @@ def caption_clip(video_path: str | Path, words: list[dict],
 
     ass_path = out_path.with_suffix(".ass")
     srt_path = out_path.with_suffix(".srt")
-    write_srt(words, srt_path, cfg)
-
-    if not words:
-        log.warning("no words for %s — burning skipped (mechanical run)",
-                    video_path.name)
-        run_ffmpeg(["-i", video_path] + video_encode_args(cfg, final=True)
-                   + ["-c:a", "copy", out_path])
-        return out_path
-
     info = probe(video_path)
-    write_ass(words, ass_path, cfg, preset_name,
-              play_w=info["width"], play_h=info["height"])
-    fontsdir = ROOT / cfg["captions"]["font_dir"]
-    vf = (f"subtitles=filename='{filter_path(ass_path)}'"
-          f":fontsdir='{filter_path(fontsdir)}'")
-    run_ffmpeg(["-i", video_path, "-vf", vf]
-               + video_encode_args(cfg, final=True)
-               + ["-c:a", "copy", out_path])
-    log.info("captions burned (%s, %d words) -> %s",
-             preset_name, len(words), out_path.name)
+    dur = float(info["duration"])
+    burn = captions_enabled and bool(words)
+    if captions_enabled:
+        write_srt(words, srt_path, cfg)
+
+    vf_parts: list[str] = []
+    scfg = cfg.get("style", {})
+    if zoom_punch:
+        z = float(scfg.get("zoom_punch_scale", 1.06))
+        zs = float(scfg.get("zoom_punch_seconds", 1.5))
+        fps = float(info.get("fps", 30.0)) or 30.0
+        inc = (z - 1.0) / max(1.0, zs * fps)
+        vf_parts.append(
+            f"zoompan=z='min(zoom+{inc:.6f},{z})':d=1"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":s={info['width']}x{info['height']}:fps={fps:g}")
+    if burn:
+        write_ass(words, ass_path, cfg, preset_name,
+                  play_w=info["width"], play_h=info["height"],
+                  anchor=anchor, cta=cta, clip_duration=dur)
+        fontsdir = ROOT / cfg["captions"]["font_dir"]
+        vf_parts.append(f"subtitles=filename='{filter_path(ass_path)}'"
+                        f":fontsdir='{filter_path(fontsdir)}'")
+    if fades and float(fades.get("video_out_ms", 0)) > 0:
+        vo = float(fades["video_out_ms"]) / 1000.0
+        vf_parts.append(f"fade=t=out:st={max(0.0, dur - vo):.3f}:d={vo:.3f}")
+
+    args = ["-i", video_path]
+    if vf_parts:
+        args += ["-vf", ",".join(vf_parts)]
+    args += video_encode_args(cfg, final=True)
+    if fades and (float(fades.get("audio_in_ms", 0)) > 0
+                  or float(fades.get("audio_out_ms", 0)) > 0):
+        af = []
+        ain = float(fades.get("audio_in_ms", 0)) / 1000.0
+        aout = float(fades.get("audio_out_ms", 0)) / 1000.0
+        if ain > 0:
+            af.append(f"afade=t=in:st=0:d={ain:.3f}")
+        if aout > 0:
+            af.append(f"afade=t=out:st={max(0.0, dur - aout):.3f}:d={aout:.3f}")
+        args += ["-af", ",".join(af), "-c:a", "aac",
+                 "-b:a", cfg["render"]["audio_bitrate"]]
+    else:
+        args += ["-c:a", "copy"]
+    args.append(out_path)
+    run_ffmpeg(args)
+    log.info("captions %s (%s, %d words)%s -> %s",
+             "burned" if burn else "skipped(keep)", preset_name, len(words),
+             " +cta" if (cta and cta.get('enabled') and burn) else "",
+             out_path.name)
     return out_path
 
 
