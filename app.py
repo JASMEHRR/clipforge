@@ -49,6 +49,95 @@ def _virality_badge(vir: dict | None) -> str:
     return f"{dot} {int(score)} ({vir.get('verdict', '?')})"
 
 
+# ---------------------------------------------------------- card gallery (F2)
+
+_BAND_COLOR = {"Strong": "#1a7f37", "Promising": "#9a6700", "Weak": "#b42318"}
+
+
+def _esc_html(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _signals_html(vir: dict) -> str:
+    """Expandable per-signal breakdown (name, 0-10 bar, reason)."""
+    rows = []
+    for s in vir.get("signals", []):
+        pct = max(0.0, min(10.0, float(s.get("score", 0)))) * 10.0
+        rows.append(
+            f"<div class='cf-sig'><span class='cf-sig-name'>{_esc_html(s['name'])}</span>"
+            f"<span class='cf-bar'><span class='cf-bar-fill' style='width:{pct:.0f}%'></span></span>"
+            f"<span class='cf-sig-score'>{s.get('score', 0):.1f}</span>"
+            f"<span class='cf-sig-reason'>{_esc_html(s.get('reason', ''))}</span></div>")
+    return "".join(rows)
+
+
+def _clip_card(rank: int, c: dict) -> str:
+    vir = c.get("virality") or {}
+    band = vir.get("band") or ("Strong" if vir.get("score", 0) >= 70
+                               else "Promising" if vir.get("score", 0) >= 45
+                               else "Weak")
+    color = _BAND_COLOR.get(band, "#57606a")
+    title = _esc_html((c.get("metadata") or {}).get("title", f"Clip {c.get('index', rank)}"))
+    dur = c.get("duration", 0)
+    render_s = c.get("render_s")
+    quality = c.get("weighted_score")
+    flags = ((c.get("style") or {}) or {}).get("flags") or []
+    flag_html = "".join(f"<span class='cf-flag'>{_esc_html(f)}</span>" for f in flags)
+    meta = [f"⏱ {dur:.0f}s"]
+    if quality is not None:
+        meta.append(f"★ {quality:.2f} quality")
+    if render_s is not None:
+        meta.append(f"⚙ rendered in {render_s:.0f}s")
+    meta.append(f"🎬 {_esc_html(c.get('preset', ''))}")
+    breakdown = _signals_html(vir)
+    details = (f"<details class='cf-details'><summary>engagement signals</summary>"
+               f"{breakdown}</details>") if breakdown else ""
+    return (
+        f"<div class='cf-card'>"
+        f"<div class='cf-card-head'>"
+        f"<span class='cf-rank'>#{rank}</span>"
+        f"<span class='cf-title'>{title}</span>"
+        f"<span class='cf-badge' style='background:{color}'>{band} · {int(vir.get('score', 0))}</span>"
+        f"</div>"
+        f"<div class='cf-meta'>{' · '.join(meta)}</div>"
+        f"{('<div class=cf-flags>' + flag_html + '</div>') if flag_html else ''}"
+        f"{details}"
+        f"</div>")
+
+
+def _cards_html(clips: list[dict]) -> str:
+    """Ranked card gallery HTML for kept clips (Create results + History reopen)."""
+    if not clips:
+        return "<em>No clips.</em>"
+    ranked = sorted(clips, key=lambda c: -(c.get("virality") or {}).get("score", 0))
+    return "<div class='cf-gallery'>" + "".join(
+        _clip_card(i, c) for i, c in enumerate(ranked, 1)) + "</div>"
+
+
+CARD_CSS = """
+.cf-gallery { display:flex; flex-direction:column; gap:12px; }
+.cf-card { border:1px solid var(--border-color-primary,#d0d7de); border-radius:12px;
+  padding:14px 16px; background:var(--background-fill-secondary,#fff); }
+.cf-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.cf-rank { font-weight:700; opacity:.5; }
+.cf-title { font-weight:600; flex:1; min-width:120px; }
+.cf-badge { color:#fff; font-size:.8em; font-weight:700; padding:2px 10px; border-radius:999px; }
+.cf-meta { margin-top:6px; font-size:.88em; opacity:.8; }
+.cf-flags { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+.cf-flag { font-size:.75em; background:#b4231822; color:#b42318; border-radius:6px; padding:2px 8px; }
+.cf-details { margin-top:10px; font-size:.85em; }
+.cf-details summary { cursor:pointer; opacity:.7; }
+.cf-sig { display:grid; grid-template-columns:96px 90px 34px 1fr; gap:8px;
+  align-items:center; margin:5px 0; }
+.cf-sig-name { text-transform:capitalize; }
+.cf-bar { background:#d0d7de55; border-radius:6px; height:8px; overflow:hidden; }
+.cf-bar-fill { display:block; height:100%; background:#2563eb; }
+.cf-sig-score { text-align:right; font-variant-numeric:tabular-nums; }
+.cf-sig-reason { opacity:.7; }
+"""
+
+
 def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                    music_vol, style_on=True, style_profile="default",
                    subs_mode="auto", cta_text="", highlight_hex="",
@@ -139,19 +228,12 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
 
     job = holder["job"]
     kept = [c for c in job["clips"] if c.get("kept")]
-    kept.sort(key=lambda c: -c.get("virality", {}).get("score", 0))
-    md = ["| # | virality | quality | length | title | preset |",
-          "|---|---|---|---|---|---|"]
-    for rank, c in enumerate(kept, 1):
-        md.append(f"| {rank} | {_virality_badge(c.get('virality'))} | "
-                  f"{c['weighted_score']:.2f} | "
-                  f"{c['duration']:.0f}s | {c['metadata']['title']} | "
-                  f"{c['preset']} |")
+    cards = _cards_html(kept)
     files = [c["path"] for c in kept if Path(c["path"]).exists()]
     files += [c["srt"] for c in kept if Path(c.get("srt", "")).exists()]
     lines.append(f"Done: {len(kept)} clips kept of {len(job['clips'])} "
                  f"rendered → {job['job_dir']}")
-    yield "\n".join(lines[-25:]), "\n".join(md), files, job["job_dir"]
+    yield "\n".join(lines[-25:]), cards, files, job["job_dir"]
 
 
 # -------------------------------------------------------------- bulk download
@@ -361,22 +443,31 @@ def _upload_job(job_name, privacy):
 # -------------------------------------------------------------- history tab
 
 def _history_rows():
-    from history import list_jobs
-    rows = [[j["created"], j["job_id"], j["source"][-50:], j["status"],
-             f"{j['kept']}/{j['clip_count']}"] for j in list_jobs()]
-    return rows or [["-", "-", "no jobs yet", "-", "-"]]
+    from history import get_job, list_jobs
+    rows = []
+    for j in list_jobs():
+        total = ""
+        full = get_job(j["job_id"])
+        if full:
+            secs = sum(float(s.get("seconds", 0) or 0)
+                       for s in (full.get("stages") or {}).values())
+            total = f"{secs:.0f}s"
+        rows.append([j["created"], j["job_id"], j["source"][-50:], j["status"],
+                     f"{j['kept']}/{j['clip_count']}", total])
+    return rows or [["-", "-", "no jobs yet", "-", "-", "-"]]
 
 
 def _history_open(job_id):
     from history import get_job
     if not job_id:
-        return [], "enter a job id from the table"
+        return [], "enter a job id from the table", ""
     job = get_job(job_id.strip())
     if job is None:
-        return [], f"job '{job_id}' not found"
-    files = [c["path"] for c in job["clips"]
-             if c.get("kept") and Path(c["path"]).exists()]
-    return files, f"{len(files)} downloadable clips from {job['job_dir']}"
+        return [], f"job '{job_id}' not found", ""
+    kept = [c for c in job["clips"] if c.get("kept")]
+    files = [c["path"] for c in kept if Path(c["path"]).exists()]
+    return (files, f"{len(files)} downloadable clips from {job['job_dir']}",
+            _cards_html(kept))
 
 
 # ------------------------------------------------------------- settings tab
@@ -442,7 +533,8 @@ def build_app() -> gr.Blocks:
     updater.check_async()
     cfg = load_config()
     presets = list(cfg["captions"]["presets"].keys())
-    with gr.Blocks(title="ClipForge") as demo:
+    with gr.Blocks(title="ClipForge", theme=gr.themes.Soft(),
+                   css=CARD_CSS) as demo:
         gr.Markdown("# ClipForge — local video repurposing\n"
                     "Long video in → ranked vertical clips with animated "
                     "captions out. No API key required (mock provider); add "
@@ -519,7 +611,7 @@ def build_app() -> gr.Blocks:
                     run_btn = gr.Button("Create clips", variant="primary")
                 with gr.Column(scale=2):
                     progress_out = gr.Textbox(label="Progress", lines=10)
-                    ranking_out = gr.Markdown()
+                    ranking_out = gr.HTML()
                     files_out = gr.Files(label="Download clips + subtitles")
                     job_dir_state = gr.State("")
                     with gr.Row():
@@ -599,14 +691,17 @@ def build_app() -> gr.Blocks:
                 hist_id = gr.Textbox(label="Job id to reopen")
                 hist_open = gr.Button("Open job")
             hist_table = gr.Dataframe(
-                headers=["created", "job_id", "source", "status", "kept"],
+                headers=["created", "job_id", "source", "status", "kept",
+                         "total time"],
                 value=_history_rows(), interactive=False)
             hist_msg = gr.Markdown()
+            hist_cards = gr.HTML()
             hist_files = gr.Files(label="Clips")
             hist_zip_btn = gr.Button("Download all (zip)")
             hist_zip_out = gr.File(label="Bundle (.zip)")
             hist_refresh.click(_history_rows, [], [hist_table])
-            hist_open.click(_history_open, [hist_id], [hist_files, hist_msg])
+            hist_open.click(_history_open, [hist_id],
+                            [hist_files, hist_msg, hist_cards])
             hist_zip_btn.click(_zip_history, [hist_id], [hist_zip_out])
 
         with gr.Tab("Settings"):
