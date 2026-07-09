@@ -130,7 +130,8 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
 
     Recognised keys: cta_text, highlight_hex, preset, pacing (0..1 aggressiveness),
     clip_min, clip_max, watermark_mode (off|text|image), watermark_text,
-    watermark_image (logo path), watermark_position.
+    watermark_image (logo path), watermark_position, font_family (per-preset
+    caption font override).
     """
     c = copy.deepcopy(cfg)
     o = opts or {}
@@ -145,6 +146,10 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
     preset = o.get("preset") or c.get("captions", {}).get("preset")
     if hi and preset and preset in c.get("captions", {}).get("presets", {}):
         c["captions"]["presets"][preset]["highlight_color"] = hex_to_ass(hi)
+
+    font = (o.get("font_family") or "").strip()
+    if font and preset and preset in c.get("captions", {}).get("presets", {}):
+        c["captions"]["presets"][preset]["font"] = font
 
     pacing = o.get("pacing")
     if pacing is not None and pacing != "":

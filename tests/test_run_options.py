@@ -88,6 +88,13 @@ def test_apply_run_options_image_watermark(cfg):
     assert wm["image_path"].endswith("logo.png")
 
 
+def test_font_family_override(cfg):
+    preset = cfg["captions"]["preset"]
+    out = cfgmod.apply_run_options(cfg, {"font_family": "Montserrat Black",
+                                         "preset": preset})
+    assert out["captions"]["presets"][preset]["font"] == "Montserrat Black"
+
+
 def test_cta_from_cfg_enabled():
     # No-refine path must still carry the CTA when config enables it (the fix for
     # CTA text silently dropped without Style Refinement).
@@ -115,6 +122,7 @@ if __name__ == "__main__":
     test_logo_graph_single_pass_overlay()
     test_logo_graph_empty_vf_uses_null()
     test_apply_run_options_image_watermark(c)
+    test_font_family_override(c)
     test_cta_from_cfg_enabled()
     test_cta_from_cfg_disabled_or_blank()
     print("ok")

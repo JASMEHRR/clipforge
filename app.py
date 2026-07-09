@@ -163,14 +163,38 @@ def _cards_html(clips: list[dict]) -> str:
         _clip_card(i, c) for i, c in enumerate(ranked, 1)) + "</div>"
 
 
-CARD_CSS = """
+APP_CSS = """
+:root {
+  --cf-accent:#6c5ce7; --cf-accent-ink:#ffffff;
+  --cf-strong:#1a7f37; --cf-promising:#9a6700; --cf-weak:#b42318;
+  --cf-radius:14px;
+}
+/* one accent across primary buttons, links, active tab */
+.gradio-container .primary, .gradio-container button.primary {
+  background:var(--cf-accent) !important; border-color:var(--cf-accent) !important;
+  color:var(--cf-accent-ink) !important;
+}
+.gradio-container a { color:var(--cf-accent); }
+/* tabs: clearly scannable, accent underline on the active one */
+.gradio-container .tab-nav { gap:2px; }
+.gradio-container .tab-nav button.selected {
+  color:var(--cf-accent) !important; font-weight:700;
+  border-bottom:3px solid var(--cf-accent) !important;
+}
+/* typography hierarchy for our own section headers */
+.cf-section-title { font-size:1.02rem; font-weight:700; letter-spacing:.01em;
+  margin:2px 0 2px; }
+.cf-section-sub { font-size:.85rem; opacity:.65; margin:0 0 6px; }
+
+/* ---- card gallery ---- */
 .cf-gallery { display:flex; flex-direction:column; gap:12px; }
-.cf-card { border:1px solid var(--border-color-primary,#d0d7de); border-radius:12px;
-  padding:14px 16px; background:var(--background-fill-secondary,#fff); }
+.cf-card { border:1px solid var(--border-color-primary,#d0d7de); border-radius:var(--cf-radius);
+  padding:14px 16px; background:var(--background-fill-secondary,#fff);
+  box-shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.05); }
 .cf-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.cf-rank { font-weight:700; opacity:.5; }
-.cf-title { font-weight:600; flex:1; min-width:120px; }
-.cf-badge { color:#fff; font-size:.8em; font-weight:700; padding:2px 10px; border-radius:999px; }
+.cf-rank { font-weight:700; opacity:.45; font-variant-numeric:tabular-nums; }
+.cf-title { font-weight:650; flex:1; min-width:120px; }
+.cf-badge { color:#fff; font-size:.78em; font-weight:700; padding:3px 11px; border-radius:999px; }
 .cf-meta { margin-top:6px; font-size:.88em; opacity:.8; }
 .cf-source { margin-top:4px; font-size:.82em; opacity:.6; font-variant-numeric:tabular-nums; }
 .cf-flags { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
@@ -181,9 +205,22 @@ CARD_CSS = """
   align-items:center; margin:5px 0; }
 .cf-sig-name { text-transform:capitalize; }
 .cf-bar { background:#d0d7de55; border-radius:6px; height:8px; overflow:hidden; }
-.cf-bar-fill { display:block; height:100%; background:#2563eb; }
+.cf-bar-fill { display:block; height:100%; background:var(--cf-accent); }
 .cf-sig-score { text-align:right; font-variant-numeric:tabular-nums; }
 .cf-sig-reason { opacity:.7; }
+
+/* ---- popup / modal overlay (Gradio 6 has no gr.Modal) ---- */
+.cf-modal { position:fixed !important; inset:0; z-index:1000;
+  background:rgba(9,10,20,.62); padding:4vh 3vw; overflow:auto; }
+.cf-modal > * { max-width:900px; margin:0 auto;
+  background:var(--background-fill-primary,#fff); border-radius:var(--cf-radius);
+  padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,.4); }
+
+/* ---- font gallery: vertical browse list, large real-render sample ---- */
+.cf-font-row { padding:10px 4px; border-bottom:1px solid var(--border-color-primary,#e3e6ea); }
+.cf-font-name { font-size:.78rem; letter-spacing:.02em; text-transform:uppercase;
+  opacity:.55; margin-bottom:6px; }
+.cf-font-row img { display:block; width:100%; max-width:760px; height:auto; border-radius:8px; }
 """
 
 
@@ -192,13 +229,13 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                    subs_mode="auto", cta_text="", highlight_hex="",
                    pacing="", clip_min="", clip_max="", watermark_text="",
                    watermark_pos="bottom-right", watermark_mode="text",
-                   logo_path=""):
+                   logo_path="", font_family=""):
     from config import apply_run_options
     from pipeline import run_job
 
     source = (url or "").strip() or file_path
     if not source:
-        yield "Provide a video file or a URL.", "", [], ""
+        yield "Provide a video file or a URL.", {}, [], ""
         return
     target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
@@ -211,9 +248,10 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
             "watermark_text": watermark_text,
             "watermark_position": watermark_pos,
             "watermark_mode": watermark_mode,
-            "watermark_image": _persist_branding(logo_path)})
+            "watermark_image": _persist_branding(logo_path),
+            "font_family": font_family})
     except Exception as e:  # noqa: BLE001 — a bad option must not crash the run
-        yield f"Invalid option: {e}", "", [], ""
+        yield f"Invalid option: {e}", {}, [], ""
         return
     if style_profile:  # point the refiner at the chosen profile
         cfg["style"]["profile"] = f"profiles/{style_profile}.json"
@@ -259,7 +297,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
 
     threading.Thread(target=work, daemon=True).start()
     lines: list[str] = [f"Job started: {source}"]
-    yield "\n".join(lines), "", [], ""
+    yield "\n".join(lines), {}, [], ""
 
     def _stage_of(s: str) -> str:
         return s.split("%", 1)[-1].split(":", 1)[0] if "%" in s else s
@@ -276,21 +314,21 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
             lines[-1] = item
         else:
             lines.append(item)
-        yield "\n".join(lines[-25:]), "", [], ""
+        yield "\n".join(lines[-25:]), {}, [], ""
 
     if "error" in holder:
         lines.append(f"FAILED: {holder['error']}")
-        yield "\n".join(lines[-25:]), "", [], ""
+        yield "\n".join(lines[-25:]), {}, [], ""
         return
 
     job = holder["job"]
     kept = [c for c in job["clips"] if c.get("kept")]
-    cards = _cards_html(kept)
     files = [c["path"] for c in kept if Path(c["path"]).exists()]
     files += [c["srt"] for c in kept if Path(c.get("srt", "")).exists()]
     lines.append(f"Done: {len(kept)} clips kept of {len(job['clips'])} "
                  f"rendered → {job['job_dir']}")
-    yield "\n".join(lines[-25:]), cards, files, job["job_dir"]
+    yield ("\n".join(lines[-25:]),
+           {"job_dir": job["job_dir"], "clips": kept}, files, job["job_dir"])
 
 
 # -------------------------------------------------------------- bulk download
@@ -377,6 +415,53 @@ def _job_clips(job_name):
             f"{len(choices)} clips"
     except Exception as e:  # noqa: BLE001
         return gr.update(choices=[]), f"error: {e}"
+
+
+def _font_upload(path, refresh):
+    """Register an uploaded font; bump the refresh counter so the gallery
+    @gr.render re-runs and shows it. Rejects non-fonts without crashing."""
+    import fontreg
+    try:
+        info = fontreg.register_upload(path)
+        return f"Added **{info['family']}**.", int(refresh or 0) + 1
+    except Exception as e:  # noqa: BLE001 — a bad upload must not break the UI
+        return f"Rejected: {e}", int(refresh or 0)
+
+
+def _clip_choices_for(job_name: str):
+    """(choice strings, clip records) for a job's clips, or ([], []) on error.
+    Choice format matches _job_clips so the Edit dropdown stays consistent."""
+    from rerender import load_job
+    try:
+        job = load_job(ROOT / load_config()["paths"]["output_dir"] / job_name)
+    except Exception as e:  # noqa: BLE001 — missing/corrupt job → empty selector
+        log.warning("could not load job %s: %s", job_name, e)
+        return [], []
+    clips = job["clips"]
+    choices = [f"{c['index']:02d} | {c['start']:.1f}-{c['end']:.1f}s | "
+               f"{c['metadata']['title'][:50]}" for c in clips]
+    return choices, clips
+
+
+def _open_edit_for(job_dir: str, index):
+    """Jump to the Edit tab pre-loaded with a specific clip (from a card's Edit
+    button). Returns updates for [main_tabs, job_dd, clip_dd, start_in, end_in,
+    edit_info]."""
+    job_name = Path(job_dir).name if job_dir else ""
+    choices, clips = _clip_choices_for(job_name)
+    match = next((c for c in clips if int(c["index"]) == int(index)), None)
+    sel = None
+    if match is not None:
+        sel = f"{match['index']:02d} | {match['start']:.1f}-{match['end']:.1f}s | " \
+              f"{match['metadata']['title'][:50]}"
+    elif choices:
+        sel = choices[0]
+    start = float(match["start"]) if match else 0.0
+    end = float(match["end"]) if match else 45.0
+    info = (f"Editing clip {int(index):02d} of {job_name}" if match
+            else f"Could not locate clip {index} in {job_name}")
+    return (gr.Tabs(selected="edit"), gr.update(value=job_name),
+            gr.update(choices=choices, value=sel), start, end, info)
 
 
 def _edit_rerender(job_name, clip_choice, start, end, preset):
@@ -591,7 +676,6 @@ def build_app() -> gr.Blocks:
     cfg = load_config()
     presets = list(cfg["captions"]["presets"].keys())
     with gr.Blocks(title="ClipForge") as demo:
-        gr.HTML(f"<style>{CARD_CSS}</style>")  # scoped card styling (version-proof)
         gr.Markdown("# ClipForge — local video repurposing\n"
                     "Long video in → ranked vertical clips with animated "
                     "captions out. No API key required (mock provider); add "
@@ -608,192 +692,281 @@ def build_app() -> gr.Blocks:
                      and _update_banner()) or _update_banner(),
             [], [update_md])
         update_btn.click(_do_update, [], [update_result, update_md])
-        with gr.Tab("Create"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    file_in = gr.File(label="Video file", type="filepath",
-                                      file_types=["video"])
-                    url_in = gr.Textbox(label="…or video URL (yt-dlp)")
-                    preset_in = gr.Dropdown(presets, label="Caption preset",
-                                            value=cfg["captions"]["preset"])
-                    aspect_in = gr.Radio(["9:16", "1:1", "16:9"], value="9:16",
-                                         label="Output aspect")
-                    clips_in = gr.Slider(
-                        0, 20, value=int(cfg["clips"].get("target_count", 0)),
-                        step=1, label="Clips to keep (0 = auto)")
-                    music_in = gr.Dropdown(
-                        _music_choices(), value="",
-                        label="Background music (CC-licensed)")
-                    music_vol = gr.Slider(-40, 0, value=-22, step=1,
-                                          label="Music volume (dB)")
-                    provider_in = gr.Dropdown(
-                        ["", "mock", "gemini", "groq", "ollama"], value="",
-                        label="LLM provider override")
-                    style_in = gr.Checkbox(
-                        value=bool(cfg.get("style", {}).get("enabled", True)),
-                        label="Style refinement (hooks, pacing, endings, captions)")
-                    profile_in = gr.Dropdown(
-                        _profile_choices(),
-                        value=(cfg.get("style", {}).get("profile", "profiles/default.json")
-                               .split("/")[-1].removesuffix(".json")),
-                        label="Style profile")
-                    subs_in = gr.Dropdown(
-                        ["auto", "replace", "keep", "ignore"], value="auto",
-                        label="Burned-in subtitles")
-                    with gr.Accordion("More options", open=False):
-                        cta_in = gr.Textbox(
-                            label="Custom CTA text (blank = config default)",
-                            placeholder=cfg.get("style", {}).get("cta", {})
-                            .get("text", "Follow for more"))
-                        highlight_in = gr.ColorPicker(
-                            label="Keyword highlight color (blank = preset default)",
-                            value="")
-                        pacing_in = gr.Slider(
-                            0, 1, value=0.5, step=0.05,
-                            label="Pacing aggressiveness (0 gentle → 1 tight cuts) "
-                                  "· needs Style Refinement")
+        with gr.Tabs() as main_tabs:
+            with gr.Tab("Create", id="create"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        file_in = gr.File(label="Video file", type="filepath",
+                                          file_types=["video"])
+                        url_in = gr.Textbox(label="…or video URL (yt-dlp)")
+                        preset_in = gr.Dropdown(presets, label="Caption preset",
+                                                value=cfg["captions"]["preset"])
+                        aspect_in = gr.Radio(["9:16", "1:1", "16:9"], value="9:16",
+                                             label="Output aspect")
+                        clips_in = gr.Slider(
+                            0, 20, value=int(cfg["clips"].get("target_count", 0)),
+                            step=1, label="Clips to keep (0 = auto)")
+                        music_in = gr.Dropdown(
+                            _music_choices(), value="",
+                            label="Background music (CC-licensed)")
+                        music_vol = gr.Slider(-40, 0, value=-22, step=1,
+                                              label="Music volume (dB)")
+                        provider_in = gr.Dropdown(
+                            ["", "mock", "gemini", "groq", "ollama"], value="",
+                            label="LLM provider override")
+                        style_in = gr.Checkbox(
+                            value=bool(cfg.get("style", {}).get("enabled", True)),
+                            label="Style refinement (hooks, pacing, endings, captions)")
+                        profile_in = gr.Dropdown(
+                            _profile_choices(),
+                            value=(cfg.get("style", {}).get("profile", "profiles/default.json")
+                                   .split("/")[-1].removesuffix(".json")),
+                            label="Style profile")
+                        subs_in = gr.Dropdown(
+                            ["auto", "replace", "keep", "ignore"], value="auto",
+                            label="Burned-in subtitles")
+                        with gr.Accordion("Style & Branding", open=False):
+                            gr.HTML("<div class='cf-section-title'>Captions</div>"
+                                    "<div class='cf-section-sub'>call-to-action "
+                                    "and keyword highlight colour</div>")
+                            cta_in = gr.Textbox(
+                                label="Custom CTA text (blank = config default)",
+                                placeholder=cfg.get("style", {}).get("cta", {})
+                                .get("text", "Follow for more"))
+                            highlight_in = gr.ColorPicker(
+                                label="Keyword highlight color (blank = preset default)",
+                                value="")
+                            gr.HTML("<div class='cf-section-title'>Timing</div>"
+                                    "<div class='cf-section-sub'>pacing and clip "
+                                    "length</div>")
+                            pacing_in = gr.Slider(
+                                0, 1, value=0.5, step=0.05,
+                                label="Pacing aggressiveness (0 gentle → 1 tight cuts) "
+                                      "· needs Style Refinement")
+                            with gr.Row():
+                                clip_min_in = gr.Number(
+                                    value=int(cfg["clips"]["min_seconds"]),
+                                    label="Min clip length (s)", precision=0)
+                                clip_max_in = gr.Number(
+                                    value=int(cfg["clips"]["max_seconds"]),
+                                    label="Max clip length (s)", precision=0)
+                            gr.HTML("<div class='cf-section-title'>Branding</div>"
+                                    "<div class='cf-section-sub'>watermark text or "
+                                    "a logo overlay</div>")
+                            watermark_mode_in = gr.Radio(
+                                ["text", "image", "off"], value="text",
+                                label="Watermark mode (image = logo overlay)")
+                            watermark_in = gr.Textbox(
+                                label="Watermark / brand text (blank = off)",
+                                placeholder="@yourhandle")
+                            watermark_pos_in = gr.Dropdown(
+                                ["top-left", "top-right", "bottom-left",
+                                 "bottom-right", "center"], value="bottom-right",
+                                label="Watermark position")
+                            logo_in = gr.Image(
+                                type="filepath", height=90,
+                                label="Logo PNG (used when mode = image)")
+                            gr.HTML("<div class='cf-section-title'>Fonts</div>"
+                                    "<div class='cf-section-sub'>preview each font "
+                                    "through the real caption burn, then pick one</div>")
+                            font_label = gr.Markdown("**Font:** preset default")
+                            browse_fonts_btn = gr.Button("Browse fonts", size="sm")
+                        font_override_state = gr.State("")
+                        run_btn = gr.Button("Create clips", variant="primary")
+                    with gr.Column(scale=2):
+                        progress_out = gr.Textbox(label="Progress", lines=10)
+                        results_state = gr.State({})
+
+                        @gr.render(inputs=[results_state])
+                        def _render_results(res):
+                            clips = (res or {}).get("clips") or []
+                            job_dir = (res or {}).get("job_dir") or ""
+                            if not clips:
+                                gr.HTML("<em>Ranked clips appear here after a "
+                                        "run.</em>")
+                                return
+                            ranked = sorted(clips, key=lambda c:
+                                            -(c.get("virality") or {}).get("score", 0))
+                            for i, c in enumerate(ranked, 1):
+                                with gr.Column():
+                                    gr.HTML(_clip_card(i, c))
+                                    eb = gr.Button("Edit this clip", size="sm")
+                                    eb.click(
+                                        (lambda jd=job_dir, ix=c.get("index"):
+                                         _open_edit_for(jd, ix)),
+                                        None,
+                                        [main_tabs, job_dd, clip_dd,
+                                         start_in, end_in, edit_info])
+                        files_out = gr.Files(label="Download clips + subtitles")
+                        job_dir_state = gr.State("")
                         with gr.Row():
-                            clip_min_in = gr.Number(
-                                value=int(cfg["clips"]["min_seconds"]),
-                                label="Min clip length (s)", precision=0)
-                            clip_max_in = gr.Number(
-                                value=int(cfg["clips"]["max_seconds"]),
-                                label="Max clip length (s)", precision=0)
-                        watermark_in = gr.Textbox(
-                            label="Watermark / brand text (blank = off)",
-                            placeholder="@yourhandle")
-                        watermark_pos_in = gr.Dropdown(
-                            ["top-left", "top-right", "bottom-left",
-                             "bottom-right", "center"], value="bottom-right",
-                            label="Watermark position")
-                        watermark_mode_in = gr.Radio(
-                            ["text", "image", "off"], value="text",
-                            label="Watermark mode (image = logo overlay)")
-                        logo_in = gr.Image(
-                            type="filepath", height=90,
-                            label="Logo PNG (used when mode = image)")
-                    run_btn = gr.Button("Create clips", variant="primary")
-                with gr.Column(scale=2):
-                    progress_out = gr.Textbox(label="Progress", lines=10)
-                    ranking_out = gr.HTML()
-                    files_out = gr.Files(label="Download clips + subtitles")
-                    job_dir_state = gr.State("")
-                    with gr.Row():
-                        zip_btn = gr.Button("Download all (zip)")
-                    zip_out = gr.File(label="Bundle (.zip)")
-            run_btn.click(_run_generator,
-                          [file_in, url_in, preset_in, aspect_in, provider_in,
-                           clips_in, music_in, music_vol,
-                           style_in, profile_in, subs_in,
-                           cta_in, highlight_in, pacing_in,
-                           clip_min_in, clip_max_in,
-                           watermark_in, watermark_pos_in,
-                           watermark_mode_in, logo_in],
-                          [progress_out, ranking_out, files_out, job_dir_state])
-            zip_btn.click(_zip_current, [job_dir_state], [zip_out])
+                            zip_btn = gr.Button("Download all (zip)")
+                        zip_out = gr.File(label="Bundle (.zip)")
+                run_btn.click(_run_generator,
+                              [file_in, url_in, preset_in, aspect_in, provider_in,
+                               clips_in, music_in, music_vol,
+                               style_in, profile_in, subs_in,
+                               cta_in, highlight_in, pacing_in,
+                               clip_min_in, clip_max_in,
+                               watermark_in, watermark_pos_in,
+                               watermark_mode_in, logo_in, font_override_state],
+                              [progress_out, results_state, files_out, job_dir_state])
+                zip_btn.click(_zip_current, [job_dir_state], [zip_out])
 
-        with gr.Tab("Batch"):
-            batch_in = gr.Textbox(label="One file path or URL per line",
-                                  lines=5)
-            with gr.Row():
-                batch_btn = gr.Button("Add to queue", variant="primary")
-                refresh_btn = gr.Button("Refresh status")
-                inbox_cb = gr.Checkbox(label=f"Watch {cfg['paths']['inbox_dir']}/ "
-                                             "folder for new videos")
-            batch_msg = gr.Markdown()
-            batch_table = gr.Dataframe(
-                headers=["id", "source", "status", "message"],
-                interactive=False)
-            with gr.Row():
-                batch_zip_btn = gr.Button("Download everything (zip)")
-            batch_zip_out = gr.File(label="All jobs bundle (.zip)")
-            batch_btn.click(_batch_add, [batch_in], [batch_msg, batch_table])
-            refresh_btn.click(_batch_rows, [], [batch_table])
-            inbox_cb.change(_inbox_toggle, [inbox_cb], [batch_msg])
-            batch_zip_btn.click(_zip_batch_all, [], [batch_zip_out])
+                # ---- font gallery popup (Gradio 6 has no gr.Modal) ----
+                font_refresh_state = gr.State(0)
+                with gr.Column(visible=False,
+                               elem_classes=["cf-modal"]) as font_modal:
+                    gr.Markdown("### Browse fonts\nEach sample is rendered "
+                                "through the real caption burn for the active "
+                                "preset. Pick one to use on this run.")
+                    font_upload = gr.File(label="Upload a font (.ttf / .otf)",
+                                          file_types=[".ttf", ".otf"])
+                    font_status = gr.Markdown()
+                    close_fonts_btn = gr.Button("Close")
 
-        with gr.Tab("Edit clips"):
-            with gr.Row():
-                job_dd = gr.Dropdown(_list_job_dirs(), label="Job")
-                jobs_refresh = gr.Button("Refresh jobs")
-            clip_dd = gr.Dropdown([], label="Clip")
-            edit_info = gr.Markdown()
-            with gr.Row():
-                start_in = gr.Number(label="New start (s)", value=0.0)
-                end_in = gr.Number(label="New end (s)", value=45.0)
-                preset_edit = gr.Dropdown([""] + presets,
-                                          label="Preset (blank = keep)")
-            with gr.Row():
-                rerender_btn = gr.Button("Re-render this clip",
-                                         variant="primary")
-                regen_btn = gr.Button("Regenerate metadata")
-            edit_video = gr.Video(label="Re-rendered clip")
-            edit_meta = gr.Code(label="Metadata", language="json")
-            jobs_refresh.click(lambda: gr.update(choices=_list_job_dirs()),
-                               [], [job_dd])
-            job_dd.change(_job_clips, [job_dd], [clip_dd, edit_info])
-            rerender_btn.click(_edit_rerender,
-                               [job_dd, clip_dd, start_in, end_in, preset_edit],
-                               [edit_video, edit_info])
-            regen_btn.click(_edit_regen_meta, [job_dd, clip_dd], [edit_meta])
+                    @gr.render(inputs=[preset_in, font_refresh_state])
+                    def _font_gallery(preset_name, _refresh):
+                        import fontreg
+                        import style_preview
+                        cfg2 = load_config()
+                        pname = preset_name or cfg2["captions"]["preset"]
+                        fonts = fontreg.list_fonts(cfg2)
+                        if not fonts:
+                            gr.Markdown("_No fonts found._")
+                            return
+                        for f in fonts:
+                            fam = f["family"]
+                            try:
+                                png = style_preview.preview_png(pname, fam, cfg=cfg2)
+                            except Exception as e:  # noqa: BLE001 — skip a bad font
+                                log.warning("preview failed for %s: %s", fam, e)
+                                continue
+                            with gr.Column(elem_classes=["cf-font-row"]):
+                                gr.HTML(f"<div class='cf-font-name'>"
+                                        f"{_esc_html(fam)} · {f['source']}</div>")
+                                gr.Image(value=str(png), interactive=False,
+                                         show_label=False,
+                                         show_download_button=False,
+                                         container=False)
+                                pick = gr.Button(f"Use {fam}", size="sm")
+                                pick.click(
+                                    (lambda family=fam:
+                                     (family, f"**Font:** {family}",
+                                      gr.update(visible=False))),
+                                    None,
+                                    [font_override_state, font_label, font_modal])
 
-        with gr.Tab("YouTube upload"):
-            upload_md = gr.Markdown(_upload_status())
-            with gr.Row():
-                auth_btn = gr.Button("Authorize YouTube")
-                upload_job_dd = gr.Dropdown(_list_job_dirs(), label="Job")
-                privacy_dd = gr.Dropdown(["private", "unlisted", "public"],
-                                         value="private", label="Privacy")
-                upload_btn = gr.Button("Upload kept clips", variant="primary")
-            upload_result = gr.Markdown()
-            auth_btn.click(_authorize, [], [upload_md])
-            upload_btn.click(_upload_job, [upload_job_dd, privacy_dd],
-                             [upload_result])
+                browse_fonts_btn.click(lambda: gr.update(visible=True), None,
+                                       [font_modal])
+                close_fonts_btn.click(lambda: gr.update(visible=False), None,
+                                      [font_modal])
+                font_upload.upload(_font_upload,
+                                   [font_upload, font_refresh_state],
+                                   [font_status, font_refresh_state])
 
-        with gr.Tab("History"):
-            with gr.Row():
-                hist_refresh = gr.Button("Refresh")
-                hist_id = gr.Textbox(label="Job id to reopen")
-                hist_open = gr.Button("Open job")
-            hist_table = gr.Dataframe(
-                headers=["created", "job_id", "source", "status", "kept",
-                         "total time"],
-                value=_history_rows(), interactive=False)
-            hist_msg = gr.Markdown()
-            hist_cards = gr.HTML()
-            hist_files = gr.Files(label="Clips")
-            hist_zip_btn = gr.Button("Download all (zip)")
-            hist_zip_out = gr.File(label="Bundle (.zip)")
-            hist_refresh.click(_history_rows, [], [hist_table])
-            hist_open.click(_history_open, [hist_id],
-                            [hist_files, hist_msg, hist_cards])
-            hist_zip_btn.click(_zip_history, [hist_id], [hist_zip_out])
+            with gr.Tab("Batch", id="batch"):
+                batch_in = gr.Textbox(label="One file path or URL per line",
+                                      lines=5)
+                with gr.Row():
+                    batch_btn = gr.Button("Add to queue", variant="primary")
+                    refresh_btn = gr.Button("Refresh status")
+                    inbox_cb = gr.Checkbox(label=f"Watch {cfg['paths']['inbox_dir']}/ "
+                                                 "folder for new videos")
+                batch_msg = gr.Markdown()
+                batch_table = gr.Dataframe(
+                    headers=["id", "source", "status", "message"],
+                    interactive=False)
+                with gr.Row():
+                    batch_zip_btn = gr.Button("Download everything (zip)")
+                batch_zip_out = gr.File(label="All jobs bundle (.zip)")
+                batch_btn.click(_batch_add, [batch_in], [batch_msg, batch_table])
+                refresh_btn.click(_batch_rows, [], [batch_table])
+                inbox_cb.change(_inbox_toggle, [inbox_cb], [batch_msg])
+                batch_zip_btn.click(_zip_batch_all, [], [batch_zip_out])
 
-        with gr.Tab("Settings"):
-            hw_md = gr.Markdown(_detected_hardware())
-            compute_in = gr.Radio(["auto", "gpu", "cpu"],
-                                  value=cfg["render"].get("compute", "auto"),
-                                  label="Compute (Whisper device + encoder)")
-            whisper_model_in = gr.Dropdown(
-                ["", "tiny", "base", "small", "medium", "large-v3"],
-                value=cfg["whisper"].get("model_override", ""),
-                label="Whisper model (blank = matrix default)")
-            provider_set = gr.Dropdown(
-                ["auto", "mock", "gemini", "groq", "ollama"],
-                value=cfg["llm"].get("provider", "auto"),
-                label="LLM provider")
-            gemini_model_in = gr.Textbox(value=cfg["llm"].get("gemini_model", ""),
-                                         label="Gemini model")
-            groq_model_in = gr.Textbox(value=cfg["llm"].get("groq_model", ""),
-                                       label="Groq model")
-            ollama_model_in = gr.Textbox(value=cfg["llm"].get("ollama_model", ""),
-                                         label="Ollama model")
-            save_btn = gr.Button("Save settings", variant="primary")
-            settings_status = gr.Markdown()
-            save_btn.click(_save_settings,
-                           [compute_in, whisper_model_in, provider_set,
-                            gemini_model_in, groq_model_in, ollama_model_in],
-                           [settings_status])
+            with gr.Tab("Edit clips", id="edit"):
+                with gr.Row():
+                    job_dd = gr.Dropdown(_list_job_dirs(), label="Job")
+                    jobs_refresh = gr.Button("Refresh jobs")
+                clip_dd = gr.Dropdown([], label="Clip")
+                edit_info = gr.Markdown()
+                with gr.Row():
+                    start_in = gr.Number(label="New start (s)", value=0.0)
+                    end_in = gr.Number(label="New end (s)", value=45.0)
+                    preset_edit = gr.Dropdown([""] + presets,
+                                              label="Preset (blank = keep)")
+                with gr.Row():
+                    rerender_btn = gr.Button("Re-render this clip",
+                                             variant="primary")
+                    regen_btn = gr.Button("Regenerate metadata")
+                edit_video = gr.Video(label="Re-rendered clip")
+                edit_meta = gr.Code(label="Metadata", language="json")
+                jobs_refresh.click(lambda: gr.update(choices=_list_job_dirs()),
+                                   [], [job_dd])
+                job_dd.change(_job_clips, [job_dd], [clip_dd, edit_info])
+                rerender_btn.click(_edit_rerender,
+                                   [job_dd, clip_dd, start_in, end_in, preset_edit],
+                                   [edit_video, edit_info])
+                regen_btn.click(_edit_regen_meta, [job_dd, clip_dd], [edit_meta])
+
+            with gr.Tab("YouTube upload", id="youtube"):
+                upload_md = gr.Markdown(_upload_status())
+                with gr.Row():
+                    auth_btn = gr.Button("Authorize YouTube")
+                    upload_job_dd = gr.Dropdown(_list_job_dirs(), label="Job")
+                    privacy_dd = gr.Dropdown(["private", "unlisted", "public"],
+                                             value="private", label="Privacy")
+                    upload_btn = gr.Button("Upload kept clips", variant="primary")
+                upload_result = gr.Markdown()
+                auth_btn.click(_authorize, [], [upload_md])
+                upload_btn.click(_upload_job, [upload_job_dd, privacy_dd],
+                                 [upload_result])
+
+            with gr.Tab("History", id="history"):
+                with gr.Row():
+                    hist_refresh = gr.Button("Refresh")
+                    hist_id = gr.Textbox(label="Job id to reopen")
+                    hist_open = gr.Button("Open job")
+                hist_table = gr.Dataframe(
+                    headers=["created", "job_id", "source", "status", "kept",
+                             "total time"],
+                    value=_history_rows(), interactive=False)
+                hist_msg = gr.Markdown()
+                hist_cards = gr.HTML()
+                hist_files = gr.Files(label="Clips")
+                hist_zip_btn = gr.Button("Download all (zip)")
+                hist_zip_out = gr.File(label="Bundle (.zip)")
+                hist_refresh.click(_history_rows, [], [hist_table])
+                hist_open.click(_history_open, [hist_id],
+                                [hist_files, hist_msg, hist_cards])
+                hist_zip_btn.click(_zip_history, [hist_id], [hist_zip_out])
+
+            with gr.Tab("Settings", id="settings"):
+                hw_md = gr.Markdown(_detected_hardware())
+                compute_in = gr.Radio(["auto", "gpu", "cpu"],
+                                      value=cfg["render"].get("compute", "auto"),
+                                      label="Compute (Whisper device + encoder)")
+                whisper_model_in = gr.Dropdown(
+                    ["", "tiny", "base", "small", "medium", "large-v3"],
+                    value=cfg["whisper"].get("model_override", ""),
+                    label="Whisper model (blank = matrix default)")
+                provider_set = gr.Dropdown(
+                    ["auto", "mock", "gemini", "groq", "ollama"],
+                    value=cfg["llm"].get("provider", "auto"),
+                    label="LLM provider")
+                gemini_model_in = gr.Textbox(value=cfg["llm"].get("gemini_model", ""),
+                                             label="Gemini model")
+                groq_model_in = gr.Textbox(value=cfg["llm"].get("groq_model", ""),
+                                           label="Groq model")
+                ollama_model_in = gr.Textbox(value=cfg["llm"].get("ollama_model", ""),
+                                             label="Ollama model")
+                save_btn = gr.Button("Save settings", variant="primary")
+                settings_status = gr.Markdown()
+                save_btn.click(_save_settings,
+                               [compute_in, whisper_model_in, provider_set,
+                                gemini_model_in, groq_model_in, ollama_model_in],
+                               [settings_status])
     return demo
 
 
@@ -807,6 +980,9 @@ if __name__ == "__main__":
     if host != "0.0.0.0":
         from launcher import open_ui
         open_ui(f"http://127.0.0.1:{port}", load_config())
+    # allow serving generated font previews + branding/font assets as <img> src
+    allowed = [str(ROOT / "cache" / "font_previews"), str(ROOT / "assets")]
     build_app().queue().launch(server_name=host, server_port=port,
                                inbrowser=False, quiet=True,
-                               theme=gr.themes.Soft())
+                               theme=gr.themes.Soft(primary_hue="violet"),
+                               css=APP_CSS, allowed_paths=allowed)
