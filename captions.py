@@ -295,7 +295,8 @@ def caption_clip(video_path: str | Path, words: list[dict],
         write_ass(words, ass_path, cfg, preset_name,
                   play_w=info["width"], play_h=info["height"],
                   anchor=anchor, cta=cta, clip_duration=dur)
-        fontsdir = ROOT / cfg["captions"]["font_dir"]
+        import fontreg
+        fontsdir = fontreg.fonts_dir(cfg)       # bundled dir, or combined w/ user fonts
         vf_parts.append(f"subtitles=filename='{filter_path(ass_path)}'"
                         f":fontsdir='{filter_path(fontsdir)}'")
     wm = cfg["captions"].get("watermark", {})
