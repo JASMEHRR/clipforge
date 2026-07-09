@@ -156,7 +156,7 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
                   "end": round(max(0.0, w["end"] - out_start), 3)}
                  for w in transcript["words"]
                  if w["start"] >= out_start - 0.05 and w["end"] <= out_end + 0.05]
-        cap_kwargs = {}
+        cap_kwargs = captions_mod.cta_from_cfg(cfg)
     _prog(0.7, "burning captions")
     final = captions_mod.caption_clip(src, words, clip_dir / "final.mp4", cfg,
                                       preset_name=preset, **cap_kwargs)

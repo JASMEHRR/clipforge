@@ -20,6 +20,9 @@ picks the moments and writes the metadata instead.
   limits; scene-aware resets
 - Animated captions: 4 presets (karaoke-pop, bold-impact, clean-minimal,
   highlight-box), bundled OFL Montserrat fonts, `.srt` exported per clip
+- Branding: text or **image logo** watermark (single-pass alpha overlay), plus
+  **custom font upload** with a gallery that previews each font through the real
+  caption-burn pipeline (not a CSS mock)
 - Post-render re-scoring: weak clips dropped (bottom 30%), at least 3 kept
 - Gradio UI: create, batch queue (+ watched `inbox/` folder), clip editing
   with sentence-snapped re-render, YouTube upload, job history
@@ -111,8 +114,10 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `style.cta.enabled` / `text` / `duration_s` | end-of-clip call-to-action overlay | true / "Follow for more" / 1.5 |
 | `style.existing_subs.mode` | burned-in subtitle handling: `auto`/`replace`/`keep`/`ignore` | `auto` |
 | `style.existing_subs.max_band_ratio` | REPLACE only if the detected band ≤ this fraction of frame height | 0.18 |
+| `captions.watermark.mode` | `off` / `text` / `image` (image overlays a logo PNG). Legacy configs with no `mode` fall back to `enabled` → text | off |
 | `captions.watermark.enabled` / `text` / `position` | brand/handle overlay burned on every clip (`top-left`/`top-right`/`bottom-left`/`bottom-right`/`center`) | false / "" / bottom-right |
-| `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling | 36 / 0.6 / 40 |
+| `captions.watermark.image_path` / `scale` | image mode: logo PNG (alpha respected) and its width as a fraction of the frame | "" / 0.12 |
+| `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling (opacity applies to text and image) | 36 / 0.6 / 40 |
 | `music.default_track` / `default_volume_db` | background-music defaults when the UI leaves them unset | "" / -22 |
 | `ui.auto_open` | open the UI automatically when `app.py` starts | true |
 | `ui.window_mode` | `app` = chromeless Edge/Chrome window (`--app`); `tab` = normal browser tab | app |
@@ -131,9 +136,31 @@ re-render via the shared render path:
 | Keyword highlight color | active caption preset's `highlight_color` (hex/rgb → ASS) | preset value |
 | Pacing aggressiveness (0–1) | `style.max_pause_s` / `target_pause_s` within safe bounds | 0.5 |
 | Min / max clip length | `clips.min_seconds` / `max_seconds` | config bounds |
-| Watermark text + position | `captions.watermark.*` | off |
+| Watermark mode + text/logo + position | `captions.watermark.*` (`text`, or `image` with an uploaded logo persisted to `assets/user_branding/`) | off |
+| Caption font | active preset's `font` — pick from the font gallery (see below) | preset font |
 | Background music + volume | per-run music track + dB | none |
 | Clips to keep | `clips.target_count` | 0 (auto) |
+
+### Branding & fonts (Create → "Style & Branding")
+
+- **Logo watermark**: choose watermark mode `image`, upload a transparent PNG.
+  It is overlaid in the same encode as the captions (single pass, alpha
+  respected) and scales to `captions.watermark.scale` of the frame width. Logos
+  persist to `assets/user_branding/` (gitignored — your logo is never committed).
+- **Custom fonts + real-preview gallery**: click **Browse fonts** for a popup
+  listing every bundled and uploaded font, each shown as a large sample rendered
+  through the *actual* caption-burn pipeline (`style_preview.py` reuses
+  `captions.write_ass` + the FFmpeg subtitles filter), not a browser
+  approximation. Upload `.ttf`/`.otf` files (validated, real family name read via
+  fonttools; stored in `assets/user_fonts/`, gitignored). Picking a font sets it
+  as the caption font for that run.
+- **Clip provenance**: each result card shows `Source: mm:ss–mm:ss` — the
+  original window the clip came from in the source video, before refinement
+  shifted the bounds (`original_source_start_s`/`end_s` in `metadata.json`).
+- **Direct edit**: each card has an **Edit this clip** button that opens the Edit
+  tab pre-loaded with that clip's bounds.
+
+Design screenshots of the reworked UI live in `design/screenshots/`.
 
 ## Engagement signals (virality v2)
 
@@ -217,6 +244,14 @@ git pull
 pip install --no-input -r requirements.txt
 ```
 
+There is also a built-in one-click self-updater (launch banner → **Install
+update**): it checks GitHub, downloads only changed files (full-zipball
+fallback), verifies every `.py` compiles, backs up and applies, and rolls back
+automatically on any failure. Your `config.yaml` is preserved (the incoming one
+lands as `config.yaml.new`). Observed behaviour and its one gap (no dry-run;
+live network delta path not exercised in tests) are documented in
+`UPDATER-STATUS.md`.
+
 Job outputs, caches, and your `.env` are untouched by updates (all gitignored).
 
 ## Content rights disclaimer
@@ -233,8 +268,15 @@ any platform you post to. The authors accept no liability for misuse.
 .venv/Scripts/python.exe pipeline.py --sample --provider mock --debug
 ```
 
+Optional UI screenshots (dev-only, not in `requirements.txt`):
+
+```bash
+pip install playwright && python -m playwright install chromium
+.venv/Scripts/python.exe scripts/screenshot_ui.py   # → design/screenshots/
+```
+
 Architecture and design decisions: `PLAN.md`. Requirement checklist and known
-issues: `PROGRESS.md`.
+issues: `PROGRESS.md`. Feature-5 wiring audit: `AUDIT.md`.
 
 ## License
 

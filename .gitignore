@@ -19,6 +19,9 @@ samples/*.mp4
 samples/*.wav
 assets/music/*.mp3
 assets/music/*.part
+assets/user_branding/          # user-uploaded logos — never commit
+assets/user_fonts/             # user-uploaded fonts (often licensed) — never commit
+cache/font_previews/           # generated preview thumbnails
 config.local.yaml
 
 # Reference videos for the style analyzer — never commit (may be copyrighted).

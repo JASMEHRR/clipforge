@@ -2,7 +2,21 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: **feature/style-refiner** in progress — timeline refinement layer built + verified keyless; branch pushed. Remaining manual items unchanged (Docker daemon build; optional YouTube OAuth).
+Current: **feature/ui-rework** merged to main — UI rework + branding/fonts/provenance/updater verification complete (see Phase U below). Remaining manual items unchanged (Docker daemon build; optional YouTube OAuth).
+
+## Phase U — UI rework + branding/fonts/provenance (feature/ui-rework)
+- [x] AUDIT.md — every Feature-5 option traced end to end; found CTA text silently dropped without style refinement (cap_kwargs={}); fixed via shared `captions.cta_from_cfg` in pipeline.py + rerender.py; pacing made honest (label + gr.Warning, no fake wiring)
+- [x] Provenance — `original_source_start_s`/`_end_s` + `source_name` persisted in clip record + metadata.json; cards show `Source: mm:ss–mm:ss`
+- [x] Logo watermark — `captions.watermark.mode` off|text|image (backward compatible); image mode = single-pass scale2ref+overlay -filter_complex (alpha-aware, audio fade routed through graph); uploads persist to assets/user_branding/ (gitignored); validated via ffprobe frame extraction (magenta logo present top-right, absent bottom-right)
+- [x] fontreg.py — real family names via fonttools; validates/rejects non-fonts; fonts_dir resolves bundled-only (unchanged) or combined cache/fonts_all when user fonts exist; assets/user_fonts/ gitignored
+- [x] style_preview.py — one still frame through the exact write_ass + FFmpeg subtitles burn; cached per (preset, font, text); shared by preset + font pickers; proven two fonts render differently (Impact vs Montserrat pixel diff)
+- [x] UI — accent theme + CSS (theme/css at launch per Gradio 6); "Style & Branding" section; font-gallery popup (gr.Column overlay; no gr.Modal in 6.19) with real-burn previews; per-card "Edit this clip" via @gr.render → Edit tab pre-loaded (desired-clip State avoids the job-change clobber); allowed_paths serves previews/branding
+- [x] scripts/screenshot_ui.py (dev-only, playwright) → design/screenshots/ 01–06: themed Create, font gallery, History, card gallery w/ provenance + Edit buttons, Edit tab pre-loaded
+- [x] updater — tests/test_updater.py sandboxed apply/preserve-config/reject-broken/rollback (monkeypatch updater.ROOT); live read-only check reaches GitHub; UPDATER-STATUS.md from observed behaviour
+- [x] verify: pytest 164 passed / 1 skipped; `--sample --provider mock` with image logo confirmed via frame extraction; font override confirmed via caption-region pixel diff
+- [!] Known: font-gallery previews are generated at page load for the active preset (cached after first time; 4 ffmpeg frames). style_preview positions the sample for the strip via anchor; color/highlight/stroke/font are production-exact. Live-network updater delta/download path guarded by integrity checks but not exercised against real GitHub (see UPDATER-STATUS.md).
+
+## Phase S — Style refiner (feature/style-refiner)
 
 ## Phase S — Style refiner (feature/style-refiner)
 - [x] schemas: STYLE_PROFILE, SUBTITLE_DETECT_RESULT, EDIT_PLAN, HOOK_CLASSIFY, ENDING_CLASSIFY (caption anchor clamped [0.52,0.66] at schema level); StyleError; config `style:` block

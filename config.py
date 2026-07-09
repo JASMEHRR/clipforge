@@ -129,7 +129,9 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
     yields today's behaviour exactly.
 
     Recognised keys: cta_text, highlight_hex, preset, pacing (0..1 aggressiveness),
-    clip_min, clip_max, watermark_text, watermark_position.
+    clip_min, clip_max, watermark_mode (off|text|image), watermark_text,
+    watermark_image (logo path), watermark_position, font_family (per-preset
+    caption font override).
     """
     c = copy.deepcopy(cfg)
     o = opts or {}
@@ -144,6 +146,10 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
     preset = o.get("preset") or c.get("captions", {}).get("preset")
     if hi and preset and preset in c.get("captions", {}).get("presets", {}):
         c["captions"]["presets"][preset]["highlight_color"] = hex_to_ass(hi)
+
+    font = (o.get("font_family") or "").strip()
+    if font and preset and preset in c.get("captions", {}).get("presets", {}):
+        c["captions"]["presets"][preset]["font"] = font
 
     pacing = o.get("pacing")
     if pacing is not None and pacing != "":
@@ -162,11 +168,19 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
     if cmin and cmax and int(cmin) > int(cmax):  # guard: keep a valid range
         c["clips"]["min_seconds"], c["clips"]["max_seconds"] = int(cmax), int(cmin)
 
+    wm_mode = (o.get("watermark_mode") or "").strip().lower()
     wm_text = (o.get("watermark_text") or "").strip()
-    if wm_text:
+    wm_image = (o.get("watermark_image") or "").strip()
+    if wm_mode or wm_text or wm_image:
         wm = c.setdefault("captions", {}).setdefault("watermark", {})
-        wm["enabled"] = True
-        wm["text"] = wm_text
+        # explicit mode wins; otherwise infer from which field was provided
+        mode = wm_mode or ("image" if wm_image else "text" if wm_text else "off")
+        wm["mode"] = mode
+        wm["enabled"] = (mode == "text")          # keep legacy flag consistent
+        if wm_text:
+            wm["text"] = wm_text
+        if wm_image:
+            wm["image_path"] = wm_image
         if o.get("watermark_position"):
             wm["position"] = o["watermark_position"]
 

@@ -2,7 +2,9 @@
 
 **Resume pointer: current phase and next task → see top of PROGRESS.md.** Architecture/decisions → PLAN.md and DECISIONS.md. User docs → README.md.
 
-Release state: v1.0.0 and v1.1.0 tagged on main. Current work lives on branch **v2.0** (pushed to origin), which contains all v2 features PLUS the v1.1 progress tracker and self-updater merged in (commit 672a081). main is still at v1.0.1 — do not assume main is current. Next milestone: merge v2.0 → main and tag v2.0.0 (bump VERSION file so the self-updater offers it).
+Release state: v1.0.0 and v1.1.0 tagged. The v2 line (segment-first transcribe, virality, music, updater) plus the overnight per-run options and card gallery are now merged into **main** (VERSION 1.1.0). The **feature/ui-rework** branch (merged to main) adds the UI rework + branding/fonts/provenance + updater verification — see PROGRESS.md "Phase U". New modules: `fontreg.py` (font registry + fontsdir), `style_preview.py` (real-burn caption/font previews), `scripts/screenshot_ui.py` (dev-only playwright). New docs: AUDIT.md, UPDATER-STATUS.md, design/screenshots/.
+
+Watermark now supports `captions.watermark.mode` off|text|image (image = single-pass logo overlay). Caption font is a per-run override (`apply_run_options` `font_family`). User uploads persist to `assets/user_branding/` and `assets/user_fonts/` (both gitignored). Next milestone: tag v2.0.0 (bump VERSION so the self-updater offers it).
 
 ## What this is
 Local Opus Clip alternative: long video → ranked 30–60s vertical clips with karaoke captions + metadata. Keyless operation is first-class (`--provider mock`, no .env needed).

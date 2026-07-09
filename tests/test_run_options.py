@@ -2,7 +2,7 @@
 import copy
 
 import config as cfgmod
-from captions import watermark_filter
+from captions import _logo_graph, _wm_mode, cta_from_cfg, watermark_filter
 
 
 def test_hex_to_ass_forms():
@@ -57,6 +57,57 @@ def test_watermark_filter_positions():
     assert "(w-tw)/2" in center
 
 
+def test_wm_mode_backward_compat():
+    assert _wm_mode({"mode": "image"}) == "image"
+    assert _wm_mode({"mode": "off"}) == "off"
+    assert _wm_mode({"enabled": True}) == "text"       # legacy config, no mode
+    assert _wm_mode({"enabled": False}) == "off"
+    assert _wm_mode({}) == "off"
+
+
+def test_logo_graph_single_pass_overlay():
+    g = _logo_graph(["subtitles=x"], {"scale": 0.2, "opacity": 0.85,
+                                      "position": "bottom-right", "margin_px": 30})
+    # one filtergraph: alpha logo scaled to frame width, overlaid, ends at [vout]
+    assert "colorchannelmixer=aa=0.85" in g
+    assert "scale2ref=w=main_w*0.2" in g
+    assert g.endswith("[vout]") and "overlay=W-w-30:H-h-30" in g
+    assert "[0:v]subtitles=x[base0]" in g
+
+
+def test_logo_graph_empty_vf_uses_null():
+    g = _logo_graph([], {"position": "top-right"})
+    assert "[0:v]null[base0]" in g
+
+
+def test_apply_run_options_image_watermark(cfg):
+    out = cfgmod.apply_run_options(cfg, {"watermark_mode": "image",
+                                         "watermark_image": "assets/user_branding/logo.png"})
+    wm = out["captions"]["watermark"]
+    assert wm["mode"] == "image" and wm["enabled"] is False
+    assert wm["image_path"].endswith("logo.png")
+
+
+def test_font_family_override(cfg):
+    preset = cfg["captions"]["preset"]
+    out = cfgmod.apply_run_options(cfg, {"font_family": "Montserrat Black",
+                                         "preset": preset})
+    assert out["captions"]["presets"][preset]["font"] == "Montserrat Black"
+
+
+def test_cta_from_cfg_enabled():
+    # No-refine path must still carry the CTA when config enables it (the fix for
+    # CTA text silently dropped without Style Refinement).
+    cfg = {"style": {"cta": {"enabled": True, "text": "Sub now", "duration_s": 1.5}}}
+    assert cta_from_cfg(cfg) == {"cta": cfg["style"]["cta"]}
+
+
+def test_cta_from_cfg_disabled_or_blank():
+    assert cta_from_cfg({"style": {"cta": {"enabled": False, "text": "x"}}}) == {}
+    assert cta_from_cfg({"style": {"cta": {"enabled": True, "text": "  "}}}) == {}
+    assert cta_from_cfg({}) == {}                       # missing style/cta → no-op
+
+
 if __name__ == "__main__":
     from config import load_config
     c = load_config()
@@ -67,4 +118,11 @@ if __name__ == "__main__":
     test_clip_length_range_guard(c)
     test_empty_opts_is_noop(c)
     test_watermark_filter_positions()
+    test_wm_mode_backward_compat()
+    test_logo_graph_single_pass_overlay()
+    test_logo_graph_empty_vf_uses_null()
+    test_apply_run_options_image_watermark(c)
+    test_font_family_override(c)
+    test_cta_from_cfg_enabled()
+    test_cta_from_cfg_disabled_or_blank()
     print("ok")
