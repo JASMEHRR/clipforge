@@ -97,6 +97,41 @@ def watermark_filter(wm: dict) -> str:
             f":box=1:boxcolor=black@{op * 0.4:.2f}:boxborderw=8")
 
 
+# overlay=x:y expressions for an image logo (W/H = frame, w/h = scaled logo)
+_LOGO_XY = {
+    "top-left":     ("{m}", "{m}"),
+    "top-right":    ("W-w-{m}", "{m}"),
+    "bottom-left":  ("{m}", "H-h-{m}"),
+    "bottom-right": ("W-w-{m}", "H-h-{m}"),
+    "center":       ("(W-w)/2", "(H-h)/2"),
+}
+
+
+def _wm_mode(wm: dict) -> str:
+    """Watermark mode with backward compatibility: an explicit off|text|image
+    wins; legacy configs (no `mode`) map `enabled` → text, else off."""
+    m = str(wm.get("mode", "") or "").lower()
+    if m in ("off", "text", "image"):
+        return m
+    return "text" if wm.get("enabled") else "off"
+
+
+def _logo_graph(vf_parts: list[str], wm: dict) -> str:
+    """One-pass video filtergraph for an alpha logo overlay. Applies the caption/
+    fade chain to the source, scales the logo (ffmpeg input 1) to a fraction of
+    the FRAME width preserving its aspect and PNG transparency, and overlays it.
+    Ends at label [vout]. scale2ref keeps it a single encode (no second pass)."""
+    scale = max(0.01, min(1.0, float(wm.get("scale", 0.12))))
+    op = max(0.0, min(1.0, float(wm.get("opacity", 0.85))))
+    margin = int(wm.get("margin_px", 40))
+    x, y = _LOGO_XY.get(wm.get("position", "top-right"), _LOGO_XY["top-right"])
+    base = ",".join(vf_parts) if vf_parts else "null"
+    return (f"[1:v]format=rgba,colorchannelmixer=aa={op:.2f}[wm0];"
+            f"[0:v]{base}[base0];"
+            f"[wm0][base0]scale2ref=w=main_w*{scale:g}:h=ow/a[wm][base];"
+            f"[base][wm]overlay={x.format(m=margin)}:{y.format(m=margin)}[vout]")
+
+
 def write_ass(words: list[dict], ass_path: Path, cfg: dict, preset_name: str,
               play_w: int = 1080, play_h: int = 1920,
               anchor: float | None = None, cta: dict | None = None,
@@ -264,29 +299,56 @@ def caption_clip(video_path: str | Path, words: list[dict],
         vf_parts.append(f"subtitles=filename='{filter_path(ass_path)}'"
                         f":fontsdir='{filter_path(fontsdir)}'")
     wm = cfg["captions"].get("watermark", {})
-    if wm.get("enabled") and str(wm.get("text", "")).strip():
+    wm_mode = _wm_mode(wm)
+    if wm_mode == "text" and str(wm.get("text", "")).strip():
         vf_parts.append(watermark_filter(wm))
+    logo = None
+    if wm_mode == "image":
+        ip = str(wm.get("image_path", "") or "").strip()
+        logo = (ROOT / ip) if ip else None
+        if not (logo and logo.exists()):
+            log.warning("watermark image mode but image_path missing (%r); "
+                        "rendering without logo", ip)
+            logo = None
     if fades and float(fades.get("video_out_ms", 0)) > 0:
         vo = float(fades["video_out_ms"]) / 1000.0
         vf_parts.append(f"fade=t=out:st={max(0.0, dur - vo):.3f}:d={vo:.3f}")
 
-    args = ["-i", video_path]
-    if vf_parts:
-        args += ["-vf", ",".join(vf_parts)]
-    args += video_encode_args(cfg, final=True)
-    if fades and (float(fades.get("audio_in_ms", 0)) > 0
-                  or float(fades.get("audio_out_ms", 0)) > 0):
-        af = []
+    # audio fade chain (shared: -af on the plain path, filtergraph on the logo path)
+    af = []
+    if fades:
         ain = float(fades.get("audio_in_ms", 0)) / 1000.0
         aout = float(fades.get("audio_out_ms", 0)) / 1000.0
         if ain > 0:
             af.append(f"afade=t=in:st=0:d={ain:.3f}")
         if aout > 0:
             af.append(f"afade=t=out:st={max(0.0, dur - aout):.3f}:d={aout:.3f}")
-        args += ["-af", ",".join(af), "-c:a", "aac",
-                 "-b:a", cfg["render"]["audio_bitrate"]]
+
+    args = ["-i", video_path]
+    if logo:
+        # Alpha logo overlaid in the same encode. -filter_complex cannot coexist
+        # with -af for the same file, so route the audio fade through the graph.
+        args += ["-i", logo]
+        graph = _logo_graph(vf_parts, wm)
+        maps = ["-map", "[vout]"]
+        if af:
+            graph += f";[0:a]{','.join(af)}[aout]"
+            maps += ["-map", "[aout]"]
+        else:
+            maps += ["-map", "0:a?"]
+        args += ["-filter_complex", graph] + maps
+        args += video_encode_args(cfg, final=True)
+        args += (["-c:a", "aac", "-b:a", cfg["render"]["audio_bitrate"]]
+                 if af else ["-c:a", "copy"])
     else:
-        args += ["-c:a", "copy"]
+        if vf_parts:
+            args += ["-vf", ",".join(vf_parts)]
+        args += video_encode_args(cfg, final=True)
+        if af:
+            args += ["-af", ",".join(af), "-c:a", "aac",
+                     "-b:a", cfg["render"]["audio_bitrate"]]
+        else:
+            args += ["-c:a", "copy"]
     args.append(out_path)
     run_ffmpeg(args)
     log.info("captions %s (%s, %d words)%s -> %s",

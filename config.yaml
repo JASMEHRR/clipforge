@@ -44,12 +44,15 @@ captions:
   font_dir: assets/fonts
   max_words_per_line: 3
   bottom_margin_px: 220     # keeps text out of platform UI zones (1920px frame)
-  watermark:                # brand/handle overlay burned onto every clip (off by default)
-    enabled: false
-    text: ""                # e.g. "@yourhandle"
+  watermark:                # brand overlay burned onto every clip (off by default)
+    mode: off               # off | text | image  (image overlays a logo PNG)
+    enabled: false          # legacy flag; honored when `mode` is absent
+    text: ""                # text mode: e.g. "@yourhandle"
+    image_path: ""          # image mode: logo under assets/user_branding/ (alpha PNG)
+    scale: 0.12             # image mode: logo width as fraction of frame width
     position: bottom-right  # top-left | top-right | bottom-left | bottom-right | center
     font_size: 36
-    opacity: 0.6            # 0..1
+    opacity: 0.6            # 0..1 (applies to text and image modes)
     margin_px: 40
     font_file: assets/fonts/Montserrat-Bold.ttf
   presets:

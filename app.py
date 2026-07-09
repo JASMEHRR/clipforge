@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import queue
+import re
+import shutil
 import threading
 import traceback
 from pathlib import Path
@@ -17,6 +19,29 @@ from config import ROOT, load_config
 from logutil import get_logger
 
 log = get_logger("app")
+
+BRANDING_DIR = ROOT / "assets" / "user_branding"
+
+
+def _persist_branding(upload_path: str | None) -> str:
+    """Copy an uploaded logo into assets/user_branding/ so it survives Gradio's
+    temp-cache cleanup and process restarts, returning its repo-relative path
+    (''=no upload). Re-uploading the same filename replaces it."""
+    if not upload_path:
+        return ""
+    src = Path(upload_path)
+    if not src.exists():
+        log.warning("logo upload path does not exist: %s", upload_path)
+        return ""
+    try:
+        BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", src.name) or "logo.png"
+        dest = BRANDING_DIR / safe
+        shutil.copyfile(src, dest)
+        return str(dest.relative_to(ROOT)).replace("\\", "/")
+    except OSError as e:
+        log.warning("could not persist logo %s: %s", src, e)
+        return ""
 
 
 # --------------------------------------------------------------- create tab
@@ -166,7 +191,8 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                    music_vol, style_on=True, style_profile="default",
                    subs_mode="auto", cta_text="", highlight_hex="",
                    pacing="", clip_min="", clip_max="", watermark_text="",
-                   watermark_pos="bottom-right"):
+                   watermark_pos="bottom-right", watermark_mode="text",
+                   logo_path=""):
     from config import apply_run_options
     from pipeline import run_job
 
@@ -183,7 +209,9 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
             "preset": preset or None, "pacing": pacing,
             "clip_min": clip_min, "clip_max": clip_max,
             "watermark_text": watermark_text,
-            "watermark_position": watermark_pos})
+            "watermark_position": watermark_pos,
+            "watermark_mode": watermark_mode,
+            "watermark_image": _persist_branding(logo_path)})
     except Exception as e:  # noqa: BLE001 — a bad option must not crash the run
         yield f"Invalid option: {e}", "", [], ""
         return
@@ -638,6 +666,12 @@ def build_app() -> gr.Blocks:
                             ["top-left", "top-right", "bottom-left",
                              "bottom-right", "center"], value="bottom-right",
                             label="Watermark position")
+                        watermark_mode_in = gr.Radio(
+                            ["text", "image", "off"], value="text",
+                            label="Watermark mode (image = logo overlay)")
+                        logo_in = gr.Image(
+                            type="filepath", height=90,
+                            label="Logo PNG (used when mode = image)")
                     run_btn = gr.Button("Create clips", variant="primary")
                 with gr.Column(scale=2):
                     progress_out = gr.Textbox(label="Progress", lines=10)
@@ -653,7 +687,8 @@ def build_app() -> gr.Blocks:
                            style_in, profile_in, subs_in,
                            cta_in, highlight_in, pacing_in,
                            clip_min_in, clip_max_in,
-                           watermark_in, watermark_pos_in],
+                           watermark_in, watermark_pos_in,
+                           watermark_mode_in, logo_in],
                           [progress_out, ranking_out, files_out, job_dir_state])
             zip_btn.click(_zip_current, [job_dir_state], [zip_out])
 
