@@ -59,6 +59,28 @@ def _esc_html(s) -> str:
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+def _fmt_ts(seconds: float) -> str:
+    """mm:ss, or hh:mm:ss once the source passes an hour."""
+    s = int(round(max(0.0, float(seconds))))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
+
+def _source_html(c: dict) -> str:
+    """'Source: mm:ss–mm:ss · name' from provenance fields; '' for old jobs
+    (rendered before provenance was tracked) that lack the bounds."""
+    a = c.get("original_source_start_s")
+    b = c.get("original_source_end_s")
+    if a is None or b is None:
+        return ""
+    name = str(c.get("source_name") or "").strip()
+    if len(name) > 40:
+        name = name[:37] + "…"
+    tail = f" · {_esc_html(name)}" if name else ""
+    return (f"<div class='cf-source'>Source: {_fmt_ts(a)}–{_fmt_ts(b)}{tail}</div>")
+
+
 def _signals_html(vir: dict) -> str:
     """Expandable per-signal breakdown (name, 0-10 bar, reason)."""
     rows = []
@@ -101,6 +123,7 @@ def _clip_card(rank: int, c: dict) -> str:
         f"<span class='cf-badge' style='background:{color}'>{band} · {int(vir.get('score', 0))}</span>"
         f"</div>"
         f"<div class='cf-meta'>{' · '.join(meta)}</div>"
+        f"{_source_html(c)}"
         f"{('<div class=cf-flags>' + flag_html + '</div>') if flag_html else ''}"
         f"{details}"
         f"</div>")
@@ -124,6 +147,7 @@ CARD_CSS = """
 .cf-title { font-weight:600; flex:1; min-width:120px; }
 .cf-badge { color:#fff; font-size:.8em; font-weight:700; padding:2px 10px; border-radius:999px; }
 .cf-meta { margin-top:6px; font-size:.88em; opacity:.8; }
+.cf-source { margin-top:4px; font-size:.82em; opacity:.6; font-variant-numeric:tabular-nums; }
 .cf-flags { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
 .cf-flag { font-size:.75em; background:#b4231822; color:#b42318; border-radius:6px; padding:2px 8px; }
 .cf-details { margin-top:10px; font-size:.85em; }

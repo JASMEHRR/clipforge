@@ -137,6 +137,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                           source, job_dir, cfg,
                           progress_cb=lambda f, msg: tracker.update(
                               "ingest", f, msg, current_file=src_name)))
+        info["source_name"] = src_name          # for clip provenance display
 
         scene_data = _stage("scenes", "detecting shots",
                             lambda: scenes_mod.detect_scenes(
@@ -421,7 +422,15 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         extra={"cuts_per_min": cuts_per_min,
                "captions_enabled": (edit_plan["captions_enabled"]
                                     if edit_plan else True)})
-    payload = {**meta, "virality": vir}
+    # Provenance: the ORIGINAL source window this clip came from, before the
+    # refiner's pause-removal / hook-shift / ending-extend changed the bounds.
+    # Distinct from start/end below (the final rendered window).
+    orig_start, orig_end = cand["start"], cand["end"]
+    source_name = info.get("source_name", "")
+    payload = {**meta, "virality": vir,
+               "original_source_start_s": orig_start,
+               "original_source_end_s": orig_end,
+               "source_name": source_name}
     if refine_summary:
         payload["style"] = refine_summary
         log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
@@ -429,6 +438,9 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         json.dumps(payload, indent=2), encoding="utf-8")
 
     return {"index": i, "start": out_start, "end": out_end,
+            "original_source_start_s": orig_start,
+            "original_source_end_s": orig_end,
+            "source_name": source_name,
             "duration": duration,
             "render_s": round(time.perf_counter() - _t0, 2),
             "hook": cand["hook"], "reason": cand.get("reason", ""),
