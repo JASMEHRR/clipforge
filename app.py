@@ -165,6 +165,11 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
         return
     if style_profile:  # point the refiner at the chosen profile
         cfg["style"]["profile"] = f"profiles/{style_profile}.json"
+    # Pacing only has a consumer inside the style refiner; say so honestly rather
+    # than let the slider silently do nothing.
+    if not style_on and str(pacing) not in ("", "0.5"):
+        gr.Warning("Pacing aggressiveness only affects runs with Style "
+                   "Refinement enabled — it was ignored this run.")
     q: queue.Queue = queue.Queue()
     holder: dict = {}
 
@@ -593,7 +598,8 @@ def build_app() -> gr.Blocks:
                             value="")
                         pacing_in = gr.Slider(
                             0, 1, value=0.5, step=0.05,
-                            label="Pacing aggressiveness (0 gentle → 1 tight cuts)")
+                            label="Pacing aggressiveness (0 gentle → 1 tight cuts) "
+                                  "· needs Style Refinement")
                         with gr.Row():
                             clip_min_in = gr.Number(
                                 value=int(cfg["clips"]["min_seconds"]),

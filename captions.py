@@ -197,6 +197,18 @@ def write_srt(words: list[dict], srt_path: Path, cfg: dict) -> None:
 
 # --------------------------------------------------------------- burn entry
 
+def cta_from_cfg(cfg: dict) -> dict:
+    """caption_clip kwargs carrying the CTA for the NO-refine path: the config
+    `style.cta` dict when enabled with non-blank text, else `{}` (adds nothing,
+    preserving today's behaviour). Used by both pipeline._render_one and
+    rerender_clip so CTA text is not silently dropped when Style Refinement is
+    off (the refine path supplies its own CTA via the edit plan)."""
+    cta = (cfg.get("style") or {}).get("cta") or {}
+    if cta.get("enabled") and str(cta.get("text", "")).strip():
+        return {"cta": cta}
+    return {}
+
+
 def caption_clip(video_path: str | Path, words: list[dict],
                  out_path: str | Path, cfg: dict | None = None,
                  preset_name: str | None = None,

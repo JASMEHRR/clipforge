@@ -2,7 +2,7 @@
 import copy
 
 import config as cfgmod
-from captions import watermark_filter
+from captions import cta_from_cfg, watermark_filter
 
 
 def test_hex_to_ass_forms():
@@ -57,6 +57,19 @@ def test_watermark_filter_positions():
     assert "(w-tw)/2" in center
 
 
+def test_cta_from_cfg_enabled():
+    # No-refine path must still carry the CTA when config enables it (the fix for
+    # CTA text silently dropped without Style Refinement).
+    cfg = {"style": {"cta": {"enabled": True, "text": "Sub now", "duration_s": 1.5}}}
+    assert cta_from_cfg(cfg) == {"cta": cfg["style"]["cta"]}
+
+
+def test_cta_from_cfg_disabled_or_blank():
+    assert cta_from_cfg({"style": {"cta": {"enabled": False, "text": "x"}}}) == {}
+    assert cta_from_cfg({"style": {"cta": {"enabled": True, "text": "  "}}}) == {}
+    assert cta_from_cfg({}) == {}                       # missing style/cta → no-op
+
+
 if __name__ == "__main__":
     from config import load_config
     c = load_config()
@@ -67,4 +80,6 @@ if __name__ == "__main__":
     test_clip_length_range_guard(c)
     test_empty_opts_is_noop(c)
     test_watermark_filter_positions()
+    test_cta_from_cfg_enabled()
+    test_cta_from_cfg_disabled_or_blank()
     print("ok")
