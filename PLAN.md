@@ -188,6 +188,8 @@ Live calls never happen in gates (gates force `--provider mock`).
 | **Popups = `gr.Column(visible=False)` overlay; per-card buttons via `@gr.render`** | custom `gr.HTML` + `js_on_load` events | Gradio 6.19 has no `gr.Modal`; `@gr.render` gives real Python-wired buttons (no fragile JS) and survives gallery re-renders |
 | Card-Edit clip pre-selection carried via a `desired_clip` State | set clip dropdown value directly | setting `job_dd` value fires its `.change` (`_job_clips`), which would clobber the selection with the first clip; the State lets `_job_clips` honor the requested clip |
 | Playwright added dev-only (not in requirements.txt) | add to requirements | screenshots are a dev/verification tool, not a runtime dep; installed separately and documented |
+| **GPU fix = swap ffmpeg, not patch code** (feature/gpu-fix) | fix `nvenc_available()`; update NVIDIA driver | evidence disproved the "detection bug" premise: `nvenc_available()` was already correct (real smoke encode). The true cause is system ffmpeg 8.1.2 linking NVENC SDK 13.1 (needs driver ≥610) vs installed driver 581.08 (API 13.0). Driver ≥610 isn't released and needs admin+reboot; a driver-compatible gyan.dev **ffmpeg 7.1** build in `tools/` (gitignored), selected via `config.local.yaml`→`ffmpeg.binary`, makes NVENC init succeed (proven: encoder util 100%, render 66s vs 231s CPU). Transcription already ran on GPU. |
+| GPU fallbacks must name the reason | keep the single `libx264 (CPU)` line | "silent fallback" was the actual complaint; `nvenc_available()` + `transcribe.gpu_available()` now log the specific cause, and `check_gpu.py` reports it standalone |
 
 ## 9. Phase gates (summary)
 

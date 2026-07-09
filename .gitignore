@@ -23,6 +23,7 @@ assets/user_branding/          # user-uploaded logos — never commit
 assets/user_fonts/             # user-uploaded fonts (often licensed) — never commit
 cache/font_previews/           # generated preview thumbnails
 config.local.yaml
+tools/                          # local binaries (e.g. driver-compatible ffmpeg) — never commit
 
 # Reference videos for the style analyzer — never commit (may be copyrighted).
 refs/

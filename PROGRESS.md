@@ -4,6 +4,13 @@ Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] p
 
 Current: **feature/ui-rework** merged to main — UI rework + branding/fonts/provenance/updater verification complete (see Phase U below). Remaining manual items unchanged (Docker daemon build; optional YouTube OAuth).
 
+## Phase G — GPU fix (feature/gpu-fix)
+- [x] Diagnosed with hard evidence (GPU-DIAGNOSTIC.md), not the assumed "detection bug". Encoding fell back because system **ffmpeg 8.1.2 links NVENC SDK 13.1 (needs driver ≥610)** but the installed GTX 1650 driver is **581.08 (NVENC API 13.0)** — the ffmpeg binary is newer than the driver supports. `nvenc_available()` was already correct (real smoke encode); only defect was the silent fallback. Transcription already ran on GPU (ctranslate2 CUDA + cuBLAS/cuDNN present).
+- [x] `ffutil.ffmpeg_bin()`/`ffprobe_bin()` — resolvable ffmpeg (CLIPFORGE_FFMPEG env → config `ffmpeg.binary` → PATH); all ffmpeg/ffprobe calls route through them. Driver-compatible gyan.dev **ffmpeg 7.1** installed to `tools/ffmpeg-7.1/` (gitignored), selected via `config.local.yaml`.
+- [x] No silent fallbacks — `nvenc_available()` + `transcribe.gpu_available()` log the specific reason; new **`check_gpu.py`** self-reports GPU health in plain language.
+- [x] `tests/test_nvenc.py` — probe logic unit-tested with subprocess mocked (5 cases).
+- [x] Proof: `encoder: h264_nvenc (GPU)`, **NVENC encoder util peaked 100%** during render (61 samples >0%), render stage **66.1s GPU vs 231.1s CPU (~3.5×)**; transcribe `device=cuda large-v3 float16`, GPU compute 100% / ~3.4GB.
+
 ## Phase U — UI rework + branding/fonts/provenance (feature/ui-rework)
 - [x] AUDIT.md — every Feature-5 option traced end to end; found CTA text silently dropped without style refinement (cap_kwargs={}); fixed via shared `captions.cta_from_cfg` in pipeline.py + rerender.py; pacing made honest (label + gr.Warning, no fake wiring)
 - [x] Provenance — `original_source_start_s`/`_end_s` + `source_name` persisted in clip record + metadata.json; cards show `Source: mm:ss–mm:ss`

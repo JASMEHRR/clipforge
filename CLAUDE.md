@@ -55,6 +55,10 @@ Local Opus Clip alternative: long video → ranked 30–60s vertical clips with 
 - Fonts: bundled Montserrat in assets/fonts via ffmpeg `fontsdir` — never system fonts.
 - User (PJ) tests manually — no automated test suites or full-pipeline validation runs unless explicitly asked. Minimal exact fixes; one short question when ambiguous, never silent guessing on ambiguity; commit after each completed change.
 
+## GPU (feature/gpu-fix)
+- ffmpeg binary is resolvable: `ffutil.ffmpeg_bin()`/`ffprobe_bin()` = `CLIPFORGE_FFMPEG`/`CLIPFORGE_FFPROBE` env → config `ffmpeg.binary`/`ffprobe_binary` → PATH. This machine's system ffmpeg 8.1.2 links NVENC SDK 13.1 (needs driver ≥610) but the driver is 581.08 (API 13.0), so its NVENC won't init — a driver-compatible **ffmpeg 7.1** in `tools/ffmpeg-7.1/` (gitignored) is selected via `config.local.yaml` (gitignored). The `nvenc_available()` probe was already correct; the bug was only a silent fallback.
+- No silent GPU fallbacks: `nvenc_available()` and `transcribe.gpu_available()` log the specific reason. `check_gpu.py` self-reports GPU health (`.venv/Scripts/python.exe check_gpu.py`). Evidence in GPU-DIAGNOSTIC.md.
+
 ## Gotchas
 - MULTIPLE-CLONE HISTORY: this repo previously existed in several folders and work got lost/confused. There is exactly ONE canonical clone now. Always verify `git remote -v` shows JASMEHRR/clipforge and ALWAYS push after committing.
 - Windows host: ffmpeg path args in filters need escaping (`C\:` and `/` separators inside subtitles filter).

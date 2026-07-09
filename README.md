@@ -232,9 +232,15 @@ output/20260705-123456_myvideo/
 | YouTube download fails | update yt-dlp: `pip install -U yt-dlp` (YouTube changes often) |
 | Whisper model download is slow | it's cached under `cache/models` after the first run |
 | Clips look soft/upscaled | feed ≥720p sources; the bundled sample is only 240p |
+| GPU present but encoding runs on CPU | usually your ffmpeg's NVENC SDK is **newer than your NVIDIA driver** (e.g. ffmpeg 8.1.2 needs driver ≥610; log shows `Driver does not support the required nvenc API version`). Either update the driver, or point ClipForge at a driver-compatible ffmpeg build via `CLIPFORGE_FFMPEG=...\ffmpeg.exe` (or `ffmpeg.binary` in `config.local.yaml`). Run `python check_gpu.py` to see the exact reason. |
 | `provider 'auto' resolved to 'mock'` but you set a key | key must be in `.env` next to `config.yaml`, name `GEMINI_API_KEY` |
 | Upload says quota exhausted | daily API quota; resets midnight Pacific |
 | UI unreachable in Docker | the container binds 0.0.0.0:7860; check `docker compose ps` and port mapping |
+
+**GPU health check:** `.venv\Scripts\python.exe check_gpu.py` prints a plain-language
+report — driver, resolved ffmpeg, a real NVENC smoke encode (with the actual error
+if it fails), and whether faster-whisper will run on CUDA — so you never have to
+guess why a run fell back to CPU.
 
 ## Updating
 
