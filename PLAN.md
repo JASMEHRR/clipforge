@@ -177,6 +177,17 @@ Live calls never happen in gates (gates force `--provider mock`).
 | Emoji captions CUT | ship with bundled font | Montserrat (the only bundled font) has no emoji glyphs → burned emoji render as tofu; needs an emoji-capable font asset (a user decision), and no new deps allowed |
 | Auto-open verified by asserting the command, not opening a browser | launch a real window | protocol rule 6 (no browsers during build); `build_launch_command` is pure and unit-tested |
 | Theme/CSS: theme at `launch()`, CSS via injected `<style>` | Blocks constructor args | Gradio 6 moved theme/css off the Blocks constructor (warns + ignores); `<style>` injection is version-proof |
+| **UI-rework: `feature/ui-rework` off main** (main now current) | branch off v2.0 | overnight branch confirmed already merged to main (`git log main..feature/overnight-upgrades` empty); no reconciliation needed |
+| **CTA works without style refinement**: no-refine path passes `style.cta` via shared `captions.cta_from_cfg` | leave CTA refine-only; or fake it | audit found CTA silently dropped when refine off (the common path) — the actual user complaint; config default `cta.enabled: true` means no-refine runs now match the refine path |
+| **Pacing left honest, not fake-wired** | invent a non-refine consumer | pacing only has meaning inside the style refiner; relabelled slider + `gr.Warning` beats faking an effect the engine can't deliver |
+| **Watermark image = single `-filter_complex` (scale2ref+overlay)**; audio fade routed through the graph | second encode pass; keep `-vf` | one encode preserves quality; `-filter_complex` and `-af` cannot coexist, so afade moves into the graph |
+| Watermark config stays under `captions.watermark` (add `mode`) | move to `style.watermark` (brief's wording) | it already lives at `captions.watermark` and is consumed in `captions.caption_clip`; moving it would break the existing text path for no gain |
+| **`style_preview.py` renders through the real write_ass + subtitles burn**, cropping a band from a true-res frame | CSS/HTML font preview | fidelity is the whole point — a CSS mock can't show libass stroke/highlight/fallback; sharing the burn path guarantees the preview equals the clip |
+| **fontsdir: bundled dir unchanged; combined `cache/fonts_all` only once user fonts exist** | always a combined dir; copy user fonts into assets/fonts | keeps the common (bundled-only) output byte-identical; libass fontsdir is a single directory, so user fonts need a dir that also holds the bundled ones |
+| fonttools already pinned (4.63.0) — no new dep; repaired a broken venv install | add fonttools | it was already a transitive pin; the on-disk copy was missing `ttLib`, fixed with `--force-reinstall --no-deps` |
+| **Popups = `gr.Column(visible=False)` overlay; per-card buttons via `@gr.render`** | custom `gr.HTML` + `js_on_load` events | Gradio 6.19 has no `gr.Modal`; `@gr.render` gives real Python-wired buttons (no fragile JS) and survives gallery re-renders |
+| Card-Edit clip pre-selection carried via a `desired_clip` State | set clip dropdown value directly | setting `job_dd` value fires its `.change` (`_job_clips`), which would clobber the selection with the first clip; the State lets `_job_clips` honor the requested clip |
+| Playwright added dev-only (not in requirements.txt) | add to requirements | screenshots are a dev/verification tool, not a runtime dep; installed separately and documented |
 
 ## 9. Phase gates (summary)
 
