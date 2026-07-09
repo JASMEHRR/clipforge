@@ -403,18 +403,24 @@ def _list_job_dirs():
                    if d.is_dir() and (d / "job.json").exists()), reverse=True)
 
 
-def _job_clips(job_name):
+def _job_clips(job_name, desired=None):
+    """Populate the clip dropdown for a job. When `desired` (a clip index) is
+    given — set by a card's Edit button — pre-select that clip instead of the
+    first; then clear it (3rd return) so later manual job changes behave
+    normally. Returns (clip_dd update, info, cleared-desired)."""
     if not job_name:
-        return gr.update(choices=[]), "select a job"
-    from rerender import load_job
-    try:
-        job = load_job(ROOT / load_config()["paths"]["output_dir"] / job_name)
-        choices = [f"{c['index']:02d} | {c['start']:.1f}-{c['end']:.1f}s | "
-                   f"{c['metadata']['title'][:50]}" for c in job["clips"]]
-        return gr.update(choices=choices, value=choices[0] if choices else None), \
-            f"{len(choices)} clips"
-    except Exception as e:  # noqa: BLE001
-        return gr.update(choices=[]), f"error: {e}"
+        return gr.update(choices=[], value=None), "select a job", None
+    choices, clips = _clip_choices_for(job_name)
+    if not choices:
+        return gr.update(choices=[], value=None), "no clips found", None
+    sel, info = choices[0], f"{len(choices)} clips"
+    if desired is not None:
+        m = next((c for c in clips if int(c["index"]) == int(desired)), None)
+        if m is not None:
+            sel = f"{m['index']:02d} | {m['start']:.1f}-{m['end']:.1f}s | " \
+                  f"{m['metadata']['title'][:50]}"
+            info = f"Editing clip {int(desired):02d} of {job_name}"
+    return gr.update(choices=choices, value=sel), info, None
 
 
 def _font_upload(path, refresh):
@@ -445,23 +451,25 @@ def _clip_choices_for(job_name: str):
 
 def _open_edit_for(job_dir: str, index):
     """Jump to the Edit tab pre-loaded with a specific clip (from a card's Edit
-    button). Returns updates for [main_tabs, job_dd, clip_dd, start_in, end_in,
-    edit_info]."""
+    button). Sets the Job dropdown + start/end fields; the clip itself is
+    pre-selected by _job_clips via the desired-clip state (set here) once the
+    Job change fires. Returns [main_tabs, job_dd, desired_clip_state, start_in,
+    end_in, edit_info]."""
     job_name = Path(job_dir).name if job_dir else ""
-    choices, clips = _clip_choices_for(job_name)
+    _, clips = _clip_choices_for(job_name)
     match = next((c for c in clips if int(c["index"]) == int(index)), None)
-    sel = None
-    if match is not None:
-        sel = f"{match['index']:02d} | {match['start']:.1f}-{match['end']:.1f}s | " \
-              f"{match['metadata']['title'][:50]}"
-    elif choices:
-        sel = choices[0]
     start = float(match["start"]) if match else 0.0
     end = float(match["end"]) if match else 45.0
     info = (f"Editing clip {int(index):02d} of {job_name}" if match
             else f"Could not locate clip {index} in {job_name}")
-    return (gr.Tabs(selected="edit"), gr.update(value=job_name),
-            gr.update(choices=choices, value=sel), start, end, info)
+    # include the current job in the choices — a freshly-run job is not in the
+    # dropdown's build-time list, so setting only its value would be rejected.
+    jobs = _list_job_dirs()
+    if job_name and job_name not in jobs:
+        jobs = [job_name] + jobs
+    return (gr.Tabs(selected="edit"),
+            gr.update(choices=jobs, value=job_name),
+            (int(index) if match else None), start, end, info)
 
 
 def _edit_rerender(job_name, clip_choice, start, end, preset):
@@ -692,6 +700,10 @@ def build_app() -> gr.Blocks:
                      and _update_banner()) or _update_banner(),
             [], [update_md])
         update_btn.click(_do_update, [], [update_result, update_md])
+        # carries the clip a card's Edit button wants pre-selected, honored by
+        # _job_clips when the Job dropdown's change fires (avoids the change
+        # handler clobbering the selection with the first clip).
+        desired_clip_state = gr.State(None)
         with gr.Tabs() as main_tabs:
             with gr.Tab("Create", id="create"):
                 with gr.Row():
@@ -795,7 +807,7 @@ def build_app() -> gr.Blocks:
                                         (lambda jd=job_dir, ix=c.get("index"):
                                          _open_edit_for(jd, ix)),
                                         None,
-                                        [main_tabs, job_dd, clip_dd,
+                                        [main_tabs, job_dd, desired_clip_state,
                                          start_in, end_in, edit_info])
                         files_out = gr.Files(label="Download clips + subtitles")
                         job_dir_state = gr.State("")
@@ -843,12 +855,10 @@ def build_app() -> gr.Blocks:
                                 log.warning("preview failed for %s: %s", fam, e)
                                 continue
                             with gr.Column(elem_classes=["cf-font-row"]):
+                                src = f"/gradio_api/file={png.resolve().as_posix()}"
                                 gr.HTML(f"<div class='cf-font-name'>"
-                                        f"{_esc_html(fam)} · {f['source']}</div>")
-                                gr.Image(value=str(png), interactive=False,
-                                         show_label=False,
-                                         show_download_button=False,
-                                         container=False)
+                                        f"{_esc_html(fam)} · {f['source']}</div>"
+                                        f"<img src='{src}' alt='{_esc_html(fam)}'>")
                                 pick = gr.Button(f"Use {fam}", size="sm")
                                 pick.click(
                                     (lambda family=fam:
@@ -904,7 +914,8 @@ def build_app() -> gr.Blocks:
                 edit_meta = gr.Code(label="Metadata", language="json")
                 jobs_refresh.click(lambda: gr.update(choices=_list_job_dirs()),
                                    [], [job_dd])
-                job_dd.change(_job_clips, [job_dd], [clip_dd, edit_info])
+                job_dd.change(_job_clips, [job_dd, desired_clip_state],
+                              [clip_dd, edit_info, desired_clip_state])
                 rerender_btn.click(_edit_rerender,
                                    [job_dd, clip_dd, start_in, end_in, preset_edit],
                                    [edit_video, edit_info])
