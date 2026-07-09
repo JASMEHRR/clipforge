@@ -60,11 +60,24 @@ def _register_cuda_dll_dirs() -> None:
 
 
 def gpu_available() -> bool:
+    """True iff ctranslate2 was built with CUDA and a device is visible.
+    Logs the specific reason when it returns False — never a silent CPU
+    fallback."""
     try:
         import ctranslate2
-        return ctranslate2.get_cuda_device_count() > 0
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        log.warning("GPU transcribe unavailable: ctranslate2 import failed (%s)", e)
         return False
+    try:
+        n = ctranslate2.get_cuda_device_count()
+    except Exception as e:  # noqa: BLE001
+        log.warning("GPU transcribe unavailable: CUDA query failed (%s)", e)
+        return False
+    if n <= 0:
+        log.warning("GPU transcribe unavailable: no CUDA device "
+                    "(ctranslate2 CPU-only build or no NVIDIA GPU)")
+        return False
+    return True
 
 
 def model_config(cfg: dict) -> tuple[str, str, str]:
@@ -94,6 +107,7 @@ def _spans_key(spans: list[tuple] | None) -> str:
 
 def _build_model(cfg: dict):
     model_name, device, compute = model_config(cfg)
+    log.info("whisper device=%s compute=%s model=%s", device, compute, model_name)
     if device == "cuda":
         _register_cuda_dll_dirs()
     from faster_whisper import WhisperModel
