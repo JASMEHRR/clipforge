@@ -93,6 +93,15 @@ def main() -> int:
         _picker_shot("Existing subtitles in the video…", "09_subs_picker.png")
         _picker_shot("Choose style profile", "10_profile_picker.png")
         _picker_shot("Choose watermark position", "11_wmpos_picker.png")
+        _picker_shot("Choose background music", "12_music_picker.png")
+
+        try:                                    # 2c. auto-upload panel
+            _click_tab(page, "YouTube upload")
+            page.wait_for_timeout(700)
+            _shot(page, "13_upload_panel.png")
+            ok.append("upload_panel")
+        except Exception as e:
+            print("upload panel shot failed:", e)
 
         try:                                    # 3. History tab + reopen a job
             _click_tab(page, "History")

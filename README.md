@@ -187,6 +187,27 @@ re-render via the shared render path:
 | Background music + volume | per-run music track + dB | none |
 | Clips to keep | `clips.target_count` | 0 (auto) |
 
+### Picking options (popup galleries)
+
+Caption style, output shape, style profile, existing-subtitles handling,
+watermark position, background music and fonts are all chosen through popup
+galleries: each option is a card you can see (caption styles and fonts are
+rendered through the real caption burn; music tracks have a play-preview
+button) instead of a bare dropdown name.
+
+### Background music (Create → "Choose background music")
+
+- Pick a specific track (press **Preview** to listen first — tracks download
+  on first use), **Match the video** (mood-matched to the transcript),
+  **Surprise me** (random per batch job), or **No music**.
+- Music automatically ducks under speech and fades in/out; set the level with
+  the volume slider (default −22 dB).
+- When a track's license asks for credit, the attribution line is appended to
+  the clip description automatically.
+- **You are responsible for having rights to any track you add** to
+  `assets/music/manifest.json`. Stick to sources like the YouTube Audio
+  Library or Pixabay and keep the license field accurate.
+
 ### Branding & fonts (Create → "Style & Branding")
 
 - **Logo watermark**: choose watermark mode `image`, upload a transparent PNG.

@@ -10,7 +10,6 @@ import queue
 import re
 import shutil
 import threading
-import traceback
 from pathlib import Path
 
 import gradio as gr
@@ -20,7 +19,25 @@ from logutil import get_logger
 
 log = get_logger("app")
 
+# Full tracebacks land here; the UI itself only ever shows one-line messages.
+_UI_LOG = ROOT / "cache" / "logs" / "ui.log"
+try:
+    from logutil import add_file_handler
+    add_file_handler(_UI_LOG)
+except OSError as _e:
+    log.warning("could not open UI log file: %s", _e)
+
 BRANDING_DIR = ROOT / "assets" / "user_branding"
+
+
+def _friendly(e: Exception, context: str) -> str:
+    """One-line, plain-language error for the UI; the full traceback goes to
+    cache/logs/ui.log. Call from inside an except block."""
+    log.exception("%s failed", context)
+    first = str(e).strip().splitlines()[0][:200] if str(e).strip() \
+        else type(e).__name__
+    return (f"{context} didn't work: {first} "
+            f"(full details saved to cache/logs/ui.log)")
 
 
 def _persist_branding(upload_path: str | None) -> str:
@@ -375,6 +392,10 @@ APP_CSS = """
   background:var(--background-fill-primary,#fff); border-radius:var(--cf-radius);
   padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,.4); }
 
+/* picker cards must hug their content, not stretch to fill the overlay */
+.cf-modal .cf-font-row, .cf-modal > .column, .cf-modal .column {
+  flex-grow:0 !important; min-height:0 !important; }
+
 /* ---- font gallery: vertical browse list, large real-render sample ---- */
 .cf-font-row { padding:10px 4px; border-bottom:1px solid var(--border-color-primary,#e3e6ea); }
 .cf-font-name { font-size:.78rem; letter-spacing:.02em; text-transform:uppercase;
@@ -412,7 +433,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
             "watermark_image": _persist_branding(logo_path),
             "font_family": font_family})
     except Exception as e:  # noqa: BLE001 — a bad option must not crash the run
-        yield f"Invalid option: {e}", {}, [], ""
+        yield _friendly(e, "Checking your options"), {}, [], ""
         return
     if style_profile:  # point the refiner at the chosen profile
         cfg["style"]["profile"] = f"profiles/{style_profile}.json"
@@ -456,7 +477,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
                                     style_refine=bool(style_on),
                                     subs_mode=subs_mode or None)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
-            holder["error"] = f"{e}\n{traceback.format_exc(limit=3)}"
+            holder["error"] = _friendly(e, "This run")
         finally:
             q.put(None)
 
@@ -680,7 +701,7 @@ def _edit_rerender(job_name, clip_choice, start, end, preset):
                                            float(end), preset or None,
                                            tracker=tracker)
         except Exception as e:  # noqa: BLE001 — UI must show, not crash
-            holder["error"] = str(e)
+            holder["error"] = _friendly(e, "Re-rendering this clip")
         finally:
             q.put(None)
 
@@ -692,7 +713,7 @@ def _edit_rerender(job_name, clip_choice, start, end, preset):
             break
         yield None, item
     if "error" in holder:
-        yield None, f"re-render failed: {holder['error']}"
+        yield None, holder["error"]
         return
     clip = holder["clip"]
     yield clip["path"], (f"re-rendered clip {idx:02d} in "
@@ -711,7 +732,7 @@ def _edit_regen_meta(job_name, clip_choice):
         meta = regenerate_metadata(job_dir, idx)
         return json.dumps(meta, indent=2)
     except Exception as e:  # noqa: BLE001
-        return f"metadata regeneration failed: {e}"
+        return _friendly(e, "Regenerating the title and description")
 
 
 # --------------------------------------------------------------- upload tab
@@ -810,7 +831,7 @@ def _authorize():
         yt.authorize()
         return _upload_status()
     except Exception as e:  # noqa: BLE001
-        return f"authorization failed: {e}"
+        return _friendly(e, "Connecting to YouTube")
 
 
 def _upload_job(job_name, privacy):
@@ -830,7 +851,7 @@ def _upload_job(job_name, privacy):
             results.append(f"- {c['metadata']['title']} → {r['url']}")
         return "Uploaded:\n" + "\n".join(results) if results else "no kept clips"
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
-        return f"upload stopped: {e}"
+        return _friendly(e, "Uploading")
 
 
 # -------------------------------------------------------------- history tab
@@ -872,9 +893,13 @@ def _detected_hardware() -> str:
     from transcribe import gpu_available
     gpu = gpu_available()
     nvenc = nvenc_available()
-    return (f"**Detected hardware** — CUDA GPU (Whisper): "
-            f"{'yes' if gpu else 'no'} · NVENC (encoder): "
-            f"{'yes' if nvenc else 'no'} · CPU cores: {os.cpu_count()}")
+    speed = ("full GPU acceleration" if gpu and nvenc else
+             "partial GPU acceleration" if gpu or nvenc else
+             "no GPU acceleration (runs on CPU — slower but fine)")
+    return (f"**This computer:** {speed} · {os.cpu_count()} CPU cores\n\n"
+            f"<details><summary>technical detail</summary>CUDA GPU for "
+            f"transcription: {'yes' if gpu else 'no'} · NVENC video encoder: "
+            f"{'yes' if nvenc else 'no'}</details>")
 
 
 def _save_settings(compute, whisper_model, provider, gemini_model, groq_model,
@@ -889,11 +914,11 @@ def _save_settings(compute, whisper_model, provider, gemini_model, groq_model,
                     "groq_model": groq_model.strip(),
                     "ollama_model": ollama_model.strip()},
         })
-        return (f"Saved. Compute = **{compute}**, Whisper model = "
-                f"**{whisper_model or 'matrix default'}**, LLM = "
+        return (f"Saved. Compute = **{compute}**, transcription model = "
+                f"**{whisper_model or 'automatic'}**, AI provider = "
                 f"**{provider}**.\n\n" + _detected_hardware())
     except Exception as e:  # noqa: BLE001
-        return f"save failed: {e}"
+        return _friendly(e, "Saving your settings")
 
 
 # ------------------------------------------------------------------- layout
@@ -953,7 +978,8 @@ def build_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         file_in = gr.File(label="Video file", type="filepath",
                                           file_types=["video"])
-                        url_in = gr.Textbox(label="…or video URL (yt-dlp)")
+                        url_in = gr.Textbox(
+                            label="…or paste a YouTube / video link")
                         preset_state = gr.State(cfg["captions"]["preset"])
                         preset_label = gr.Markdown(
                             f"**Caption style:** {cfg['captions']['preset']}")
@@ -972,9 +998,12 @@ def build_app() -> gr.Blocks:
                         music_vol = gr.Slider(-40, 0, value=-22, step=1,
                                               label="Music volume (dB)")
                         provider_in = gr.Dropdown(
-                            ["", "mock", "gemini", "groq", "ollama",
-                             "openrouter"], value="",
-                            label="LLM provider override")
+                            [("Use my Settings choice", ""),
+                             ("Offline — no API key needed", "mock"),
+                             ("Gemini", "gemini"), ("Groq", "groq"),
+                             ("Ollama (local)", "ollama"),
+                             ("OpenRouter", "openrouter")], value="",
+                            label="AI provider for this run")
                         style_in = gr.Checkbox(
                             value=bool(cfg.get("style", {}).get("enabled", True)),
                             label="Style refinement (hooks, pacing, endings, captions)")
@@ -1399,11 +1428,14 @@ def build_app() -> gr.Blocks:
                 whisper_model_in = gr.Dropdown(
                     ["", "tiny", "base", "small", "medium", "large-v3"],
                     value=cfg["whisper"].get("model_override", ""),
-                    label="Whisper model (blank = matrix default)")
+                    label="Transcription model (blank = automatic)")
                 provider_set = gr.Dropdown(
-                    ["auto", "mock", "gemini", "groq", "ollama"],
+                    [("Automatic (best available)", "auto"),
+                     ("Offline — no API key needed", "mock"),
+                     ("Gemini", "gemini"), ("Groq", "groq"),
+                     ("Ollama (local)", "ollama")],
                     value=cfg["llm"].get("provider", "auto"),
-                    label="LLM provider")
+                    label="AI provider")
                 gemini_model_in = gr.Textbox(value=cfg["llm"].get("gemini_model", ""),
                                              label="Gemini model")
                 groq_model_in = gr.Textbox(value=cfg["llm"].get("groq_model", ""),
