@@ -122,6 +122,8 @@ Current: **feature/ui-rework** merged to main — UI rework + branding/fonts/pro
 - google-genai SDK is intentionally NOT installed in the build venv (gate 0 requires `import llm` with zero provider SDKs; the missing-SDK path raises a clean LLMError and is unit-tested). It IS pinned in requirements.txt so end-user installs get Gemini support out of the box.
 - Sample film is 320×240 (archive.org 512kb derivative) → vertical output is upscaled; fine for gates, users should feed ≥720p sources for quality.
 - Host FFmpeg is 8.1.2 (winget gyan.dev build), verified at setup; Docker image pins its own FFmpeg.
+- ~~gemini SDK errors (503/429/etc.) bypassed complete_json's retry loop~~ RESOLVED: `_gemini_complete`/`upload_media` raised raw google-genai exceptions, uncaught by the loop's `(LLMError, SchemaValidationError, ValueError)` filter — a single transient 503 killed the whole job. Fixed via `llm._classify_gemini_error` wrapping SDK errors into `LLMError(retryable=...)`; confirmed live: job survived two real consecutive 503s on `highlight_candidates` with backoff between attempts instead of crashing.
+- ~~viral_v2 Gemini video chunking never succeeded live~~ RESOLVED: `ffutil._run_with_progress` sliced the ffmpeg cmd at index 3 (before `-v error`'s value), injecting `-stats_period` as a bogus loglevel — every chunk() call crashed and silently fell back to audio-only. Fixed by slicing at index 4; confirmed live: chunk uploaded to Gemini Files API and returned 6 real timestamped viral_events.
 
 ## Performance (measured, CPU-only: 4 cores, no GPU)
 - 9m15s sample, from scratch (no caches), keyless: transcribe 213s + scenes 15s + render 736s (medium preset) = 16.1 min → over budget.

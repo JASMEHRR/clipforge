@@ -110,6 +110,7 @@ Live calls never happen in gates (gates force `--provider mock`).
 | transcribe | model download fails | retry; fall back to smaller model (base→tiny); Known Issues note |
 | scenes | detector finds 0 scenes | single scene [0, duration] |
 | highlights | invalid LLM JSON | retry w/ schema reminder → JSON repair → rule-based scorer |
+| any gemini call | raw SDK exception (503/429/500/timeout/etc.) | classify + wrap to LLMError, existing retry ladder (non-retryable 400/401/403/404 fail fast) |
 | highlights | <3 candidates | keep all, log note (min-keep rule) |
 | cut/captions | ffmpeg non-zero | structured error w/ stderr tail; clip skipped, job continues |
 | reframe | no face detected | motion tracking → center crop w/ headroom |

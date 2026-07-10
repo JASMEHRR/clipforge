@@ -141,6 +141,61 @@ def test_mock_viral_events_deterministic_and_valid(cfg):
     assert "laughter" in types and "energy_spike" in types
 
 
+# --- gemini retry classification -------------------------------------------
+
+def test_gemini_503_retries_then_succeeds(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    class FakeServerError(Exception):
+        code = 503
+
+    def flaky_dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise llm._classify_gemini_error(FakeServerError("unavailable"))
+        return {"hook_strength": 5, "retention": 5, "clarity": 5, "impact": 5}
+
+    monkeypatch.setattr(llm, "_dispatch", flaky_dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    out = llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                            cfg=cfg)
+    assert calls["n"] == 3 and out["retention"] == 5
+    assert len(slept) == 2  # backed off before attempt 2 and 3
+
+
+def test_gemini_404_fails_fast_no_retry(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    class FakeClientError(Exception):
+        code = 404
+
+    def dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        raise llm._classify_gemini_error(FakeClientError("not found"))
+
+    monkeypatch.setattr(llm, "_dispatch", dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    with pytest.raises(LLMError):
+        llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                          cfg=cfg)
+    assert calls["n"] == 1 and slept == []
+
+
+def test_classify_gemini_error_retryable_vs_not():
+    class Fake503(Exception):
+        code = 503
+
+    class Fake404(Exception):
+        code = 404
+
+    assert llm._classify_gemini_error(Fake503("x")).retryable is True
+    assert llm._classify_gemini_error(Fake404("x")).retryable is False
+    assert llm._classify_gemini_error(Exception("429 RESOURCE_EXHAUSTED")).retryable
+    assert not llm._classify_gemini_error(Exception("400 invalid argument")).retryable
+
+
 def test_mock_ignores_media(cfg):
     out = llm.complete_json(
         "viral_events", "viral_events", "p", provider="mock",

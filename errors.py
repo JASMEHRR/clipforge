@@ -8,9 +8,10 @@ class ClipForgeError(Exception):
 
     stage = "general"
 
-    def __init__(self, message: str, detail: str | None = None):
+    def __init__(self, message: str, detail: str | None = None, retryable: bool = True):
         self.message = message
         self.detail = detail
+        self.retryable = retryable
         super().__init__(f"[{self.stage}] {message}" + (f" — {detail}" if detail else ""))
 
 

@@ -113,6 +113,18 @@ each choice logged here.
 - **Reaction boundary rule runs after sentence snapping** because snapping
   would revert the extension; ending on the reaction deliberately breaks
   sentence bounds.
+- **Gemini SDK errors classified retryable vs not, reusing the one retry
+  loop**: `_gemini_complete`/`upload_media` previously let raw google-genai
+  exceptions escape uncaught by `complete_json`'s `(LLMError,
+  SchemaValidationError, ValueError)` filter — a live 503 killed the job
+  after one attempt. `llm._classify_gemini_error` wraps SDK errors into
+  `LLMError(retryable=...)` (503/500/429/504/timeout -> retryable;
+  400/401/403/404 -> not); `LLMError` gained a `retryable` flag and
+  `complete_json`'s loop stops backing off early on non-retryable errors
+  instead of burning all attempts. No second retry mechanism — `upload_media`
+  calls (which happen before `complete_json` starts) get their own small
+  loop in `gemini_chunk_events` reusing the same `max_retries`/
+  `backoff_base_seconds` config.
 - **actors_hint is treated as a presence signal only**: the reframe pins to
   the face the existing MediaPipe tracking already found at that moment; if
   tracking saw no face there, no cut happens. Re-identifying "the man on the

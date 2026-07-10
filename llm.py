@@ -85,8 +85,10 @@ def complete_json(task: str, schema_name: str, prompt: str,
             last_err = e
             log.warning("task=%s provider=%s attempt %d failed: %s",
                         task, name, attempt + 1, e)
-            if attempt < retries:
+            if attempt < retries and getattr(e, "retryable", True):
                 time.sleep(backoff * (2 ** attempt))
+            elif attempt < retries:
+                break  # non-retryable — stop burning attempts, fall through to repair/raise
 
     # Retry ladder exhausted — one last shot: JSON repair on the raw text.
     if isinstance(raw, str):
@@ -133,6 +135,30 @@ def _gemini_client():
     return genai.Client(api_key=key)
 
 
+_RETRYABLE_TOKENS = ("503", "500", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
+                     "429", "DEADLINE_EXCEEDED", "timeout", "Timeout", "Connection")
+_NONRETRYABLE_TOKENS = ("400", "401", "403", "404")
+
+
+def _classify_gemini_error(e: Exception) -> LLMError:
+    """Wrap a raw google-genai SDK exception into LLMError so it flows through
+    complete_json's existing retry loop instead of crashing unwrapped. 503/500/
+    429/timeouts are retryable; 400/401/403/404 are not (same sniffing style as
+    video_events._is_quota_error since the SDK's error types aren't stable to
+    import across versions)."""
+    code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    s = f"{type(e).__name__} {e}"
+    if code in (400, 401, 403, 404):
+        retryable = False
+    elif code in (429, 500, 503, 504):
+        retryable = True
+    elif any(tok in s for tok in _NONRETRYABLE_TOKENS):
+        retryable = False
+    else:
+        retryable = any(tok in s for tok in _RETRYABLE_TOKENS)
+    return LLMError(f"gemini request failed: {s}", detail=str(e), retryable=retryable)
+
+
 def _gemini_complete(schema, prompt, cfg, media=None):
     client = _gemini_client()
     config = {"response_mime_type": "application/json",
@@ -152,8 +178,13 @@ def _gemini_complete(schema, prompt, cfg, media=None):
         contents = parts + [prompt]
         # Video tokens dominate cost; low resolution is plenty for event spotting.
         config["media_resolution"] = "MEDIA_RESOLUTION_LOW"
-    resp = client.models.generate_content(
-        model=cfg["llm"]["gemini_model"], contents=contents, config=config)
+    try:
+        resp = client.models.generate_content(
+            model=cfg["llm"]["gemini_model"], contents=contents, config=config)
+    except LLMError:
+        raise
+    except Exception as e:  # raw google-genai SDK errors (ServerError/ClientError/...)
+        raise _classify_gemini_error(e) from e
     usage = getattr(resp, "usage_metadata", None)
     if usage is not None:
         log.info("gemini tokens: prompt=%s candidates=%s total=%s",
@@ -171,7 +202,7 @@ def upload_media(path, cfg=None, timeout_s: float = 120.0):
     try:
         f = client.files.upload(file=str(path))
     except Exception as e:  # SDK raises assorted google.* error types
-        raise LLMError(f"gemini file upload failed for {path}", detail=str(e))
+        raise _classify_gemini_error(e) from e
     t0 = time.perf_counter()
     delay = 1.0
     while getattr(f.state, "name", str(f.state)) == "PROCESSING":

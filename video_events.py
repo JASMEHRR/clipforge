@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import wave
 from datetime import date
 from pathlib import Path
@@ -349,8 +350,17 @@ def gemini_chunk_events(chunk: dict, cfg: dict, prompt: str) -> list[dict]:
         return cached
     if quota_remaining_minutes(cfg) < chunk["seconds"] / 60.0:
         raise QuotaExhausted("viral_v2.max_daily_minutes reached")
+    retries = int(cfg["llm"].get("max_retries", 2))
+    backoff = float(cfg["llm"].get("backoff_base_seconds", 1.5))
     try:
-        handle = llm.upload_media(chunk["path"], cfg)
+        for attempt in range(retries + 1):
+            try:
+                handle = llm.upload_media(chunk["path"], cfg)
+                break
+            except LLMError as e:
+                if attempt >= retries or not e.retryable:
+                    raise
+                time.sleep(backoff * (2 ** attempt))
         data = llm.complete_json(
             "viral_events", "viral_events", prompt, provider="gemini",
             cfg=cfg, media=[{"kind": "gemini_file", "handle": handle}])
