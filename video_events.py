@@ -90,7 +90,9 @@ def _read_wav(audio_path: str | Path) -> tuple[np.ndarray, int] | None:
         log.warning("audio events: unexpected wav format (width=%d) — skipping",
                     width)
         return None
-    data = np.frombuffer(frames, dtype=np.int16).astype(np.float64) / 32768.0
+    # float32: a 6-hour 16 kHz source stays ~1.4 GB smaller than float64 here
+    # and in the framed FFT below, with no effect on event detection.
+    data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
     if ch > 1:
         data = data.reshape(-1, ch).mean(axis=1)
     return data, sr
@@ -115,8 +117,14 @@ def audio_events(audio_path: str | Path, cfg: dict) -> list[dict]:
 
     rms = np.sqrt(np.mean(np.square(x), axis=1))
     zcr = np.mean(np.abs(np.diff(np.signbit(x).astype(np.int8), axis=1)), axis=1)
-    spec = np.abs(np.fft.rfft(x, axis=1)) + 1e-12
-    flatness = np.exp(np.mean(np.log(spec), axis=1)) / np.mean(spec, axis=1)
+    # framed FFT in batches: the full spectrum matrix of a multi-hour wav
+    # would not fit in memory (n_frames x 2001 floats)
+    flatness = np.empty(n_frames, dtype=np.float32)
+    batch = 4096
+    for b in range(0, n_frames, batch):
+        spec = np.abs(np.fft.rfft(x[b:b + batch], axis=1)) + 1e-12
+        flatness[b:b + batch] = (np.exp(np.mean(np.log(spec), axis=1))
+                                 / np.mean(spec, axis=1))
 
     # Robust baseline: loud events must not inflate their own threshold
     # (median/MAD instead of mean/std).

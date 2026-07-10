@@ -240,9 +240,10 @@ def _build_proxy(source: Path, start: float, dur: float, proxy: Path,
 def event_cut_bounds(cut_frames: list[int], event_frames: list[int],
                      n_frames: int, hold_frames: int) -> tuple[list[int], set[int]]:
     """Combine scene-cut and reaction-event boundaries with hysteresis: event
-    frames are hard cuts; any other boundary within hold_frames AFTER an
-    accepted event frame is suppressed so the shot never flaps. Pure,
-    unit-tested. Returns (bounds incl. 0/n_frames, accepted event frames)."""
+    frames are hard cuts; any other boundary within hold_frames of an accepted
+    event frame (either side — two resets in quick succession is exactly the
+    flap the hold prevents) is suppressed. Pure, unit-tested. Returns
+    (bounds incl. 0/n_frames, accepted event frames)."""
     hold = max(0, int(hold_frames))
     accepted: set[int] = set()
     last_event = -hold - 1
@@ -252,7 +253,7 @@ def event_cut_bounds(cut_frames: list[int], event_frames: list[int],
             last_event = f
     inner = set(accepted)
     for f in sorted(set(cut_frames)):
-        if 0 < f < n_frames and not any(0 <= f - e <= hold for e in accepted):
+        if 0 < f < n_frames and not any(abs(f - e) <= hold for e in accepted):
             inner.add(f)
     return [0] + sorted(inner) + [n_frames], accepted
 

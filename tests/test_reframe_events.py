@@ -11,11 +11,13 @@ def test_event_frame_becomes_boundary():
 
 
 def test_hysteresis_suppresses_scene_cut_inside_hold():
-    # scene cut 15 frames after the event (< hold 45) is dropped
-    bounds, accepted = event_cut_bounds(cut_frames=[135], event_frames=[120],
+    # scene cuts 15 frames after AND 15 frames before the event (< hold 45)
+    # are both dropped — two resets in quick succession is the flap
+    bounds, accepted = event_cut_bounds(cut_frames=[105, 135],
+                                        event_frames=[120],
                                         n_frames=300, hold_frames=45)
     assert bounds == [0, 120, 300]
-    # a scene cut before the event, or after the hold, survives
+    # scene cuts more than a hold away on either side survive
     bounds, _ = event_cut_bounds(cut_frames=[60, 200], event_frames=[120],
                                  n_frames=300, hold_frames=45)
     assert bounds == [0, 60, 120, 200, 300]
