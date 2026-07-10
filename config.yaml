@@ -15,7 +15,7 @@ llm:
                             # auto -> gemini when GEMINI_API_KEY set, else mock (logged at startup)
   max_retries: 2
   backoff_base_seconds: 1.5
-  gemini_model: gemini-2.5-flash
+  gemini_model: gemini-flash-latest
   groq_model: llama-3.3-70b-versatile
   ollama_model: llama3.1
   ollama_base_url: http://localhost:11434
