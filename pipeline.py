@@ -78,6 +78,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     import style_refiner as style_mod
     import subtitle_detect as subs_mod
     import transcribe as transcribe_mod
+    import video_events as events_mod
     from config import config_hash
     from llm import resolve_provider
 
@@ -170,11 +171,52 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             notes.append("empty transcript — mechanical windows used "
                          "(passed mechanically; re-verify with a real sample)")
 
+        # viral_v2: multimodal event detection (video via API, audio via DSP).
+        # Skipped entirely when disabled — highlights then run event-free and
+        # the transcript-only path is byte-identical to pre-feature behaviour.
+        viral_on = cfg.get("viral_v2", {}).get("enabled", False)
+        job["settings"]["viral_v2"] = bool(viral_on)
+        events: list = []
+        if viral_on:
+            events_key = config_hash(cfg, "viral_v2", "llm") + "_" + resolved
+            marker = job_dir / ".done_events.json"
+            if marker.exists() and not force and \
+                    json.loads(marker.read_text(encoding="utf-8")).get("key") == events_key:
+                events = json.loads(marker.read_text(encoding="utf-8"))["events"]
+                tracker.skip("events")
+                timings["events"] = {"status": "skipped", "seconds": 0.0}
+                log.info("stage events: marker present — skipped")
+            else:
+                tracker.start("events", "detecting viral events")
+                with stage_timer(log, "events", timings):
+                    try:
+                        events = events_mod.detect_events(
+                            info["video_path"], info["audio_path"],
+                            info["duration"], info, cfg, provider=provider,
+                            debug_dir=debug_dir,
+                            progress_cb=lambda f, msg: tracker.update(
+                                "events", f, msg))
+                    except Exception as e:  # noqa: BLE001 — events are additive signal
+                        log.warning("event detection failed (%s) — "
+                                    "continuing without events", e)
+                        notes.append(f"viral_v2 events failed: {e}")
+                        events = []
+                marker.write_text(json.dumps({"key": events_key,
+                                              "events": events}),
+                                  encoding="utf-8")
+                tracker.finish("events")
+            if events:
+                notes.append(f"viral_v2: {len(events)} events detected "
+                             f"({', '.join(sorted({e['source'] for e in events}))})")
+        else:
+            tracker.skip("events", "viral_v2 disabled")
+
         candidates = _stage("highlights", "selecting highlights",
                             lambda: hl.select_highlights(
                                 transcript, scene_data, info["duration"], cfg,
                                 provider=provider, debug_dir=debug_dir,
-                                max_candidates=target_count))
+                                max_candidates=target_count,
+                                events=events or None))
         if target_count and len(candidates) < target_count:
             notes.append(f"requested {target_count} clips but only "
                          f"{len(candidates)} candidates available")
@@ -260,7 +302,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     job_dir, cfg, provider, preset, aspect, debug_dir,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
                     scenes_mod, music_path, music_attr, music_volume_db,
-                    tracker, edit_plans[i] if edit_plans else None): i
+                    tracker, edit_plans[i] if edit_plans else None,
+                    events): i
                     for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
@@ -323,7 +366,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
                 metadata_mod, scenes_mod, music_path=None, music_attr="",
-                music_volume_db=-22.0, tracker=None, edit_plan=None) -> dict:
+                music_volume_db=-22.0, tracker=None, edit_plan=None,
+                events=None) -> dict:
     def _sub(frac: float) -> None:
         if tracker:
             tracker.item("render", f"clip_{i:02d}", frac)
@@ -431,6 +475,11 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                "original_source_start_s": orig_start,
                "original_source_end_s": orig_end,
                "source_name": source_name}
+    # viral_v2 audit trail: which detected events fall inside this clip
+    clip_events = [e for e in (events or [])
+                   if e["t_start_s"] < out_end and e["t_end_s"] > out_start]
+    if clip_events:
+        payload["events"] = clip_events
     if refine_summary:
         payload["style"] = refine_summary
         log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
@@ -447,6 +496,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "metadata": meta, "virality": vir, "reframe": metrics,
+            "events": clip_events,
             "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
 

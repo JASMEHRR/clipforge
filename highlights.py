@@ -134,6 +134,99 @@ def _dedupe(cands: list[dict], max_keep: int) -> list[dict]:
     return sorted(kept, key=lambda c: -c["score"])
 
 
+# ------------------------------------------------- viral_v2 event fusion
+
+def _events_in_span(events: list[dict], start: float, end: float) -> list[dict]:
+    return [e for e in events
+            if e["t_start_s"] < end and e["t_end_s"] > start]
+
+
+def fuse_event_scores(cands: list[dict], events: list[dict],
+                      cfg: dict) -> list[dict]:
+    """ADD event signal to candidate scores — never gates the transcript path.
+    score += density_weight * min(weighted events/min, 2.0)
+           + peak_weight * max intensity in span. Clamped to 10."""
+    vcfg = cfg["viral_v2"]
+    weights = vcfg.get("weights", {})
+    dw = float(vcfg.get("density_weight", 0.4))
+    pw = float(vcfg.get("peak_weight", 0.15))
+    out = []
+    for c in cands:
+        inside = _events_in_span(events, c["start"], c["end"])
+        if not inside:
+            out.append(c)
+            continue
+        dur_min = max(1e-6, (c["end"] - c["start"]) / 60.0)
+        weighted = sum(weights.get(e["type"], 0.3) for e in inside)
+        peak = max(e["intensity_1_10"] for e in inside)
+        bonus = dw * min(weighted / dur_min, 2.0) + pw * peak
+        out.append({**c, "score": round(min(10.0, c["score"] + bonus), 2)})
+    return out
+
+
+def apply_reaction_boundaries(cands: list[dict], events: list[dict],
+                              cfg: dict, duration: float) -> list[dict]:
+    """End on the reaction: a laughter/strong_reaction event beginning within
+    reaction_window_s after a candidate's end pulls the end out to include the
+    event (+1s tail), bounded by clips.max_seconds. Mirror at starts: never
+    begin mid-event."""
+    from video_events import REACTION_TYPES
+    vcfg = cfg["viral_v2"]
+    window = float(vcfg.get("reaction_window_s", 6.0))
+    max_s = float(cfg["clips"]["max_seconds"])
+    reactions = [e for e in events if e["type"] in REACTION_TYPES]
+    out = []
+    for c in cands:
+        start, end = c["start"], c["end"]
+        for e in reactions:
+            if end < e["t_start_s"] <= end + window:
+                end = max(end, min(e["t_end_s"] + 1.0, start + max_s, duration))
+        for e in reactions:
+            if e["t_start_s"] < start < e["t_end_s"]:
+                # orig duration <= max_s, so this only ever moves start earlier
+                start = max(e["t_start_s"] - 0.5, end - max_s, 0.0)
+        out.append({**c, "start": round(start, 3), "end": round(end, 3)})
+    return out
+
+
+def event_cluster_candidates(events: list[dict], duration: float,
+                             cfg: dict) -> list[dict]:
+    """Candidates straight from event clusters for low-speech sources (the
+    silent-recording case: a fall at 3:12:44 still becomes a clip)."""
+    min_s = float(cfg["clips"]["min_seconds"])
+    max_s = float(cfg["clips"]["max_seconds"])
+    out: list[dict] = []
+    for e in sorted(events, key=lambda e: -e["intensity_1_10"]):
+        cluster = _events_in_span(events, e["t_start_s"] - max_s / 2,
+                                  e["t_end_s"] + max_s / 2)
+        c0 = min(x["t_start_s"] for x in cluster)
+        c1 = max(x["t_end_s"] for x in cluster)
+        # centre a clip-length window on the cluster, lead-in before the event
+        span = min(max_s, max(min_s, (c1 - c0) + 8.0))
+        start = max(0.0, min(c0 - 3.0, duration - span))
+        end = min(duration, start + span)
+        if end - start < min_s:
+            continue
+        if any(_overlap_frac((start, end), (k["start"], k["end"])) >= 0.4
+               for k in out):
+            continue
+        out.append({
+            "start": round(start, 3), "end": round(end, 3),
+            "hook": e["description"][:120] or "A notable moment",
+            "reason": f"event-cluster: {len(cluster)} events, "
+                      f"peak {e['type']} {e['intensity_1_10']:.0f}/10",
+            "score": round(min(10.0, 4.0 + 0.5 * e["intensity_1_10"]), 2),
+        })
+    return out
+
+
+def _is_sparse(transcript: dict, duration: float, cfg: dict) -> bool:
+    if duration <= 0:
+        return False
+    wpm = len(transcript["text"].split()) / (duration / 60.0)
+    return wpm < float(cfg["viral_v2"].get("sparse_wpm", 40))
+
+
 # ---------------------------------------------------------- fallback scorer
 
 def rule_based_candidates(windows: list[dict], cfg: dict) -> list[dict]:
@@ -161,9 +254,12 @@ def rule_based_candidates(windows: list[dict], cfg: dict) -> list[dict]:
 def select_highlights(transcript: dict, scenes: dict, duration: float,
                       cfg: dict | None = None, provider: str | None = None,
                       debug_dir: str | Path | None = None,
-                      max_candidates: int | None = None) -> list[dict]:
+                      max_candidates: int | None = None,
+                      events: list[dict] | None = None) -> list[dict]:
     """Returns validated, sentence-snapped, deduped candidate list (desc score).
-    `max_candidates` overrides the config cap (used by the clip-count selector)."""
+    `max_candidates` overrides the config cap (used by the clip-count selector).
+    `events` (viral_v2 timeline) ADDS score/boundary signal; None or empty
+    leaves the transcript-only path untouched."""
     cfg = cfg or load_config()
     ccfg = cfg["clips"]
     min_s, max_s = ccfg["min_seconds"], ccfg["max_seconds"]
@@ -198,6 +294,14 @@ def select_highlights(transcript: dict, scenes: dict, duration: float,
                         c["start"], c["end"])
             continue
         snapped.append({**c, "start": r[0], "end": r[1]})
+
+    if events:
+        # Fusion runs AFTER sentence snapping (snapping would undo the
+        # reaction-boundary extension) and before dedupe.
+        if mechanical or _is_sparse(transcript, duration, cfg):
+            snapped += event_cluster_candidates(events, duration, cfg)
+        snapped = fuse_event_scores(snapped, events, cfg)
+        snapped = apply_reaction_boundaries(snapped, events, cfg, duration)
 
     final = _dedupe(snapped, max_n)
     result = {"candidates": final}
