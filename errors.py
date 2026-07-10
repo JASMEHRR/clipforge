@@ -59,6 +59,13 @@ class LLMError(ClipForgeError):
     stage = "llm"
 
 
+class JobCancelled(ClipForgeError):
+    """Raised between pipeline stages when the caller requested a cancel.
+    Not a failure: the job record is still written with status 'cancelled'."""
+
+    stage = "cancel"
+
+
 class UploadError(ClipForgeError):
     stage = "upload"
 

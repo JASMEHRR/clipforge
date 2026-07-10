@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 from config import ROOT, load_config
-from errors import ClipForgeError
+from errors import ClipForgeError, JobCancelled
 from ffutil import verify_ffmpeg
 from logutil import add_file_handler, get_logger, remove_file_handler, stage_timer
 from schemas import validate
@@ -65,7 +65,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             full_transcribe: bool = False, music: str | None = None,
             music_volume_db: float = -22.0, progress_cb=None,
             tracker=None, style_refine: bool | None = None,
-            subs_mode: str | None = None) -> dict:
+            subs_mode: str | None = None, cancel=None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -107,8 +107,15 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     log.info("job start: source=%s provider=%s aspect=%s dir=%s",
              source, resolved, aspect, job_dir.name)
 
+    def _check_cancel():
+        """Cooperative cancel: honoured only BETWEEN stages (a running stage
+        always finishes), so completed markers stay valid for a resume."""
+        if cancel is not None and cancel.is_set():
+            raise JobCancelled("cancelled by user")
+
     def _stage(name, label, fn):
         """Run a marker-cached stage while keeping the tracker in sync."""
+        _check_cancel()
         marker = job_dir / f".done_{name}.json"
         if marker.exists() and not force:
             result = stages.run(name, fn)   # returns cached JSON, logs skip
@@ -174,6 +181,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         # viral_v2: multimodal event detection (video via API, audio via DSP).
         # Skipped entirely when disabled — highlights then run event-free and
         # the transcript-only path is byte-identical to pre-feature behaviour.
+        _check_cancel()
         viral_on = cfg.get("viral_v2", {}).get("enabled", False)
         job["settings"]["viral_v2"] = bool(viral_on)
         events: list = []
@@ -228,6 +236,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         # pacing, endings, burned-sub handling) BEFORE rendering, so the render
         # path still produces each clip exactly once. Skipped entirely when
         # style.enabled is false — output then matches pre-feature behaviour.
+        _check_cancel()
         style_on = (cfg.get("style", {}).get("enabled", False)
                     if style_refine is None else style_refine)
         job["settings"]["style_refine"] = bool(style_on)
@@ -275,6 +284,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                 notes.append(f"music disabled: {e}")
                 log.warning("music setup failed: %s", e)
 
+        _check_cancel()
         clips = []
         n = max(1, len(candidates))
         workers = _worker_count(cfg, n)
@@ -322,6 +332,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         if not clips:
             raise ClipForgeError("no clips rendered successfully")
 
+        _check_cancel()
         tracker.start("rescore", "re-scoring rendered clips")
         with stage_timer(log, "rescore", timings):
             clips = hl.rescore_clips(clips, transcript, cfg, provider,
@@ -330,6 +341,13 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
         job["clips"] = clips
         job["status"] = "done"
+    except JobCancelled as e:
+        job["status"] = "cancelled"
+        notes.append("cancelled by user")
+        log.info("job cancelled: %s", e)
+        for row in tracker.snapshot()["stages"]:
+            if row["state"] == "running":
+                tracker.fail(row["key"], "cancelled")
     except Exception as e:  # noqa: BLE001 — job must record failure, not crash callers
         job["status"] = "failed"
         notes.append(f"job failed: {e}")
@@ -352,6 +370,9 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         remove_file_handler(fh)
         tracker.finish("cleanup")
 
+    if job["status"] == "cancelled":
+        tracker.fail("done", "cancelled")
+        raise JobCancelled(f"job {job['job_id']} cancelled")
     if job["status"] == "failed":
         tracker.fail("done", "failed")
         raise ClipForgeError(f"job {job['job_id']} failed", detail="; ".join(notes))

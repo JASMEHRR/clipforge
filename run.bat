@@ -11,6 +11,12 @@ if not exist .venv (
   .venv\Scripts\pip install --no-input -r requirements.txt
 )
 
-rem app.py auto-opens the UI window on start (config ui.auto_open / ui.window_mode);
+rem The UI auto-opens its window on start (config ui.auto_open / ui.window_mode);
 rem this console stays open for logs. No further terminal interaction needed.
-.venv\Scripts\python.exe app.py
+rem "run.bat new" launches the new UI (FastAPI, port 7861) while it is being
+rem built; the default stays the current UI until the new one reaches parity.
+if "%1"=="new" (
+  .venv\Scripts\python.exe -m server.main
+) else (
+  .venv\Scripts\python.exe app.py
+)

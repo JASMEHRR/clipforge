@@ -173,7 +173,8 @@ JOB_RECORD = {
         "created": {"type": "string"},
         "source": {"type": "string"},
         "status": {"type": "string",
-                   "enum": ["queued", "running", "done", "failed"]},
+                   "enum": ["queued", "running", "done", "failed",
+                            "cancelled"]},
         "settings": {"type": "object"},
         "stages": {
             "type": "object",
