@@ -230,6 +230,16 @@ music:
   default_track: ""             # "" = no music unless picked in the UI
   default_volume_db: -22        # ducked under speech
 
+upload:
+  auto_enabled: false            # off by default; turn on once YouTube is authorized
+  max_per_day: 3
+  max_per_run: 2
+  min_virality: 40
+  publish_slots_ist: [12, 19]    # fallback publish hours while the channel is young
+  ntfy_topic: ""                 # ntfy.sh topic for phone notifications; "" = disabled
+  category_id: "22"              # matches youtube_upload.py's default (People & Blogs)
+  watch_interval_s: 60           # poll interval for `python upload.py watch`
+
 ui:
   auto_open: true               # open the UI automatically when app.py starts
   window_mode: app              # app = chromeless --app window (Edge/Chrome); tab = normal browser tab

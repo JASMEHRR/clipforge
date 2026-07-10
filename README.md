@@ -91,6 +91,37 @@ Uploads are **private** by default — review them in YouTube Studio and flip
 to public yourself. Quota errors surface as a clear message (default quota
 allows ~6 uploads/day; it resets at midnight Pacific).
 
+### Automatic scheduled uploads (optional)
+
+Once you've completed the one-time OAuth setup above, you can turn on
+**automatic uploading**: as soon as a clip finishes rendering, ClipForge
+scores it, and if it's good enough, schedules it to publish at a set time of
+day — no manual clicking.
+
+1. Set `upload.auto_enabled: true` in `config.yaml` (or Settings tab, which
+   saves to `config.local.yaml`). It's `false` by default, so nothing changes
+   until you flip this on.
+2. Tune the rest of the `upload:` block to taste:
+   - `min_virality` (0-100) — clips scoring below this are skipped.
+   - `max_per_day` / `max_per_run` — caps so you don't flood your channel or
+     hit YouTube's daily quota.
+   - `publish_slots_ist` — hours of the day (IST) videos go live.
+   - `ntfy_topic` — set this to get a free phone notification every time a
+     clip is scheduled or an upload fails (install the [ntfy](https://ntfy.sh)
+     app, pick a unique topic name, subscribe to it, put the same name here).
+3. Clips beyond the daily cap simply wait — nothing is lost, they upload the
+   next day.
+
+Command-line alternative (same logic, useful for checking status or catching
+up on clips from before auto-upload was enabled):
+
+```
+python upload.py dry        # see what would upload, no auth needed
+python upload.py            # upload the next eligible batch once
+python upload.py watch      # poll continuously (fallback to the automatic hook)
+python upload.py report     # 28-day performance report + recommendations
+```
+
 ## Configuration (config.yaml)
 
 | Key | Meaning | Default |
@@ -119,6 +150,11 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `captions.watermark.image_path` / `scale` | image mode: logo PNG (alpha respected) and its width as a fraction of the frame | "" / 0.12 |
 | `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling (opacity applies to text and image) | 36 / 0.6 / 40 |
 | `music.default_track` / `default_volume_db` | background-music defaults when the UI leaves them unset | "" / -22 |
+| `upload.auto_enabled` | schedule qualifying clips to YouTube automatically as they render | `false` |
+| `upload.min_virality` | skip auto-upload for clips scoring below this (0-100) | 40 |
+| `upload.max_per_day` / `max_per_run` | daily cap (persists across restarts) / per-batch cap | 3 / 2 |
+| `upload.publish_slots_ist` | hours of day (IST) videos are scheduled to go live | `[12, 19]` |
+| `upload.ntfy_topic` | ntfy.sh topic for phone push notifications; `""` disables | "" |
 | `llm.openrouter_model` | OpenRouter vision model for viral_v2's frame fallback (free ids rotate — update here) | `qwen/qwen2.5-vl-72b-instruct:free` |
 | `viral_v2.enabled` | multimodal event detection (`false` = transcript-only, pre-feature output) | `true` |
 | `viral_v2.allow_upload` | **privacy gate**: upload LOCAL files for video analysis (URLs exempt) | `false` |

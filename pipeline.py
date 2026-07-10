@@ -519,6 +519,9 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     (clip_dir / "metadata.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8")
 
+    import upload_scheduler
+    upload_scheduler.trigger_after_render(clip_dir, cfg)
+
     return {"index": i, "start": out_start, "end": out_end,
             "original_source_start_s": orig_start,
             "original_source_end_s": orig_end,
