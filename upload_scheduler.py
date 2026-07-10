@@ -120,6 +120,8 @@ def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
         except (json.JSONDecodeError, OSError) as e:
             log.warning("skip %s: metadata unreadable (%s)", key, e)
             continue
+        if meta.get("upload", {}).get("exclude"):
+            continue  # user opted this clip out of auto-upload
         score = meta.get("virality", {}).get("score", 0)
         if score < min_virality:
             continue
@@ -218,6 +220,35 @@ def next_publish_times(count: int, analytics, log_data: dict,
                 break
         day += timedelta(days=1)
     return times
+
+
+# ============================================================
+# UI panel snapshot
+# ============================================================
+def panel_state(cfg: dict, log_data: dict, authorized: bool) -> dict:
+    """Everything the UI's auto-upload panel shows, as plain data. Pure given
+    its arguments (no I/O); the caller supplies config, log and auth state."""
+    upload_cfg = cfg.get("upload", {})
+    today = uploads_today(log_data)
+    max_day = upload_cfg.get("max_per_day", 3)
+    next_slot = None
+    if authorized and upload_cfg.get("auto_enabled") and today < max_day:
+        slots = next_publish_times(
+            1, None, log_data, upload_cfg.get("publish_slots_ist", [12, 19]))
+        next_slot = slots[0].isoformat() if slots else None
+    recent = sorted(log_data["uploads"].values(),
+                    key=lambda e: e.get("uploaded_at", ""), reverse=True)[:5]
+    return {
+        "auto_enabled": bool(upload_cfg.get("auto_enabled", False)),
+        "authorized": bool(authorized),
+        "uploads_today": today,
+        "max_per_day": max_day,
+        "next_slot_ist": next_slot,
+        "recent": [{"title": e.get("title", ""),
+                    "video_id": e.get("video_id", ""),
+                    "url": f"https://youtu.be/{e.get('video_id', '')}",
+                    "publish_at": e.get("publish_at", "")} for e in recent],
+    }
 
 
 # ============================================================

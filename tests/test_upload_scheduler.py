@@ -8,14 +8,17 @@ import pytest
 import upload_scheduler as sched
 
 
-def _write_clip(output_dir, job, clip, score, uploaded=False):
+def _write_clip(output_dir, job, clip, score, uploaded=False, exclude=False):
     clip_dir = output_dir / job / clip
     clip_dir.mkdir(parents=True)
     (clip_dir / "final.mp4").write_bytes(b"\x00" * 10)
-    (clip_dir / "metadata.json").write_text(json.dumps({
+    meta = {
         "title": f"Title {clip}", "description": "Desc.",
         "hashtags": ["#a", "#b"], "virality": {"score": score},
-    }), encoding="utf-8")
+    }
+    if exclude:
+        meta["upload"] = {"exclude": True}
+    (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
     return clip_dir
 
 
@@ -47,6 +50,54 @@ def test_find_candidates_filters_low_virality_and_dedupes(_isolate):
     log_data["uploads"][key] = {"video_id": "x"}
     candidates2 = sched.find_candidates(CFG, log_data)
     assert candidates2 == []
+
+
+def test_find_candidates_respects_per_clip_exclude(_isolate):
+    output_dir = _isolate
+    _write_clip(output_dir, "job1", "clip_01", score=80, exclude=True)
+    _write_clip(output_dir, "job1", "clip_02", score=70)
+    candidates = sched.find_candidates(CFG, {"uploads": {}})
+    assert [c["score"] for c in candidates] == [70]
+
+
+def test_panel_state_counts_and_urls():
+    now = datetime.now(sched.IST)
+    log_data = {"uploads": {
+        "a": {"uploaded_at": now.isoformat(), "video_id": "vid1",
+              "title": "First", "publish_at": now.isoformat()},
+        "b": {"uploaded_at": (now - timedelta(days=2)).isoformat(),
+              "video_id": "vid2", "title": "Old",
+              "publish_at": now.isoformat()},
+    }}
+    cfg = {"upload": {"auto_enabled": True, "max_per_day": 3,
+                      "publish_slots_ist": [12, 19]}}
+    st = sched.panel_state(cfg, log_data, authorized=True)
+    assert st["auto_enabled"] is True
+    assert st["authorized"] is True
+    assert st["uploads_today"] == 1
+    assert st["max_per_day"] == 3
+    assert st["next_slot_ist"] is not None
+    assert datetime.fromisoformat(st["next_slot_ist"]) > now
+    assert st["recent"][0]["url"] == "https://youtu.be/vid1"
+    assert st["recent"][0]["title"] == "First"  # newest first
+    assert len(st["recent"]) == 2
+
+
+def test_panel_state_unauthorized_or_disabled_has_no_slot():
+    log_data = {"uploads": {}}
+    cfg = {"upload": {"auto_enabled": True}}
+    assert sched.panel_state(cfg, log_data, authorized=False)["next_slot_ist"] is None
+    cfg2 = {"upload": {"auto_enabled": False}}
+    assert sched.panel_state(cfg2, log_data, authorized=True)["next_slot_ist"] is None
+
+
+def test_panel_state_cap_reached_has_no_slot():
+    now = datetime.now(sched.IST)
+    log_data = {"uploads": {
+        k: {"uploaded_at": now.isoformat(), "video_id": k}
+        for k in ("a", "b", "c")}}
+    cfg = {"upload": {"auto_enabled": True, "max_per_day": 3}}
+    assert sched.panel_state(cfg, log_data, authorized=True)["next_slot_ist"] is None
 
 
 def test_clean_hashtags_filters_junk_and_keeps_shorts():
