@@ -183,6 +183,29 @@ def test_gemini_404_fails_fast_no_retry(cfg, monkeypatch):
     assert calls["n"] == 1 and slept == []
 
 
+def test_gemini_timeout_retries_then_succeeds(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise llm._classify_gemini_error(TimeoutError("Read timed out"))
+        return {"hook_strength": 5, "retention": 5, "clarity": 5, "impact": 5}
+
+    monkeypatch.setattr(llm, "_dispatch", flaky_dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    out = llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                            cfg=cfg)
+    assert calls["n"] == 3 and out["retention"] == 5
+    assert len(slept) == 2
+
+
+def test_classify_timeout_error_is_retryable():
+    assert llm._classify_gemini_error(TimeoutError("Read timed out")).retryable
+    assert llm._classify_gemini_error(TimeoutError()).retryable
+
+
 def test_classify_gemini_error_retryable_vs_not():
     class Fake503(Exception):
         code = 503

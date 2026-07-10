@@ -123,16 +123,22 @@ def _dispatch(name, task, schema, prompt, context, cfg, media=None):
 
 # ---------------------------------------------------------------- providers
 
+_GEMINI_TIMEOUT_MS = 45_000  # a stalled SDK call must surface as a retryable
+                             # error, not hang the pipeline indefinitely
+
+
 def _gemini_client():
     try:
         from google import genai  # lazy: SDK optional
+        from google.genai import types
     except ImportError as e:
         raise LLMError("gemini selected but google-genai is not installed "
                        "(pip install google-genai)", detail=str(e))
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise LLMError("gemini selected but GEMINI_API_KEY is not set")
-    return genai.Client(api_key=key)
+    return genai.Client(api_key=key,
+                        http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS))
 
 
 _RETRYABLE_TOKENS = ("503", "500", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",

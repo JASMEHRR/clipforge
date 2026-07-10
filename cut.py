@@ -12,6 +12,18 @@ from logutil import get_logger
 
 log = get_logger("cut")
 
+_EPS = 0.05  # clamp buffer so a trim never lands exactly on/past EOF
+
+
+def _clamp_to_source(video_path: Path, start: float, end: float) -> tuple[float, float]:
+    """Clamp [start, end) to the source's real probed duration. Callers
+    (style_refiner's extend_forward, EditPlan bounds) don't verify against
+    actual container duration — this is the one place both cut paths share,
+    so clamping here catches every producer instead of patching each one."""
+    duration = probe(video_path)["duration"]
+    end = min(end, duration - _EPS)
+    return start, end
+
 
 def cut_clip(video_path: str | Path, start: float, end: float,
              out_path: str | Path, cfg: dict | None = None) -> Path:
@@ -21,6 +33,9 @@ def cut_clip(video_path: str | Path, start: float, end: float,
         raise CutError(f"video not found: {video_path}")
     if end <= start:
         raise CutError(f"invalid range: start={start} end={end}")
+    start, end = _clamp_to_source(video_path, start, end)
+    if end <= start:
+        raise CutError(f"range entirely past source duration: start={start} end={end}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     r = cfg["render"]
@@ -31,7 +46,10 @@ def cut_clip(video_path: str | Path, start: float, end: float,
                + video_encode_args(cfg)
                + ["-c:a", "aac", "-b:a", r["audio_bitrate"],
                   "-movflags", "+faststart", out_path])
-    got = probe(out_path)["duration"]
+    info = probe(out_path)  # already raises CutError-equivalent FFmpegError if no video stream
+    if not info.get("has_audio"):
+        raise CutError(f"cut produced no audio stream: {out_path}")
+    got = info["duration"]
     want = end - start
     if abs(got - want) > 1.5:
         raise CutError(f"cut duration off: wanted {want:.2f}s got {got:.2f}s")
@@ -55,6 +73,17 @@ def cut_segments(video_path: str | Path, segments: list[list[float]],
     if not video_path.exists():
         raise CutError(f"video not found: {video_path}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    duration = probe(video_path)["duration"]
+    clamped = []
+    for s, e in segments:
+        e = min(e, duration - _EPS)
+        if e > s:
+            clamped.append((s, e))
+    if not clamped:
+        raise CutError("all segments out of source bounds "
+                       f"(source duration {duration:.2f}s)")
+    segments = clamped
 
     r = cfg["render"]
     cf = max(0.0, float(cfg["style"].get("crossfade_ms", 30)) / 1000.0)
@@ -83,7 +112,10 @@ def cut_segments(video_path: str | Path, segments: list[list[float]],
                + video_encode_args(cfg)
                + ["-c:a", "aac", "-b:a", r["audio_bitrate"],
                   "-movflags", "+faststart", out_path])
-    got = probe(out_path)["duration"]
+    info = probe(out_path)
+    if not info.get("has_audio"):
+        raise CutError(f"cut produced no audio stream: {out_path}")
+    got = info["duration"]
     if abs(got - total) > 1.5:
         raise CutError(f"segment concat off: wanted {total:.2f}s got {got:.2f}s")
     log.info("cut %d segments (%.1fs) -> %s", n, got, out_path.name)

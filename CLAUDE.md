@@ -75,3 +75,4 @@ Local Opus Clip alternative: long video → ranked 30–60s vertical clips with 
 - venv breaks if the folder is moved across drives — rebuild it (py -3.11 -m venv .venv && pip install -r requirements.txt).
 - Sample film is 320×240; don't judge visual quality by it.
 - backup branch `backup-v2-working` = pre-merge v2 state, keep until v2.0.0 ships.
+- `cut.py` clamps segment bounds to the source's real probed duration — style_refiner's `extend_forward` and other EditPlan producers are not trusted to stay within it themselves.
