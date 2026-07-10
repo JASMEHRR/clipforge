@@ -389,6 +389,18 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         out_start, out_end = cand["start"], cand["end"]
         excl, hbias, multi, segments = 0.0, -1.0, False, [[out_start, out_end]]
 
+    # viral_v2 reaction cuts: reaction events with an actors_hint inside this
+    # clip, remapped to clip-relative output time (through the EditPlan's kept
+    # segments when present — events inside removed pauses are dropped).
+    event_cuts_rel = []
+    from video_events import REACTION_TYPES
+    for e in (events or []):
+        if e["type"] not in REACTION_TYPES or not e.get("actors_hint"):
+            continue
+        t = _remap_to_output(e["t_start_s"], segments)
+        if t is not None:
+            event_cuts_rel.append({"t": t, "actors_hint": e["actors_hint"]})
+
     if aspect == "16:9":
         # passthrough: a frame-accurate cut is the clip (captions burn onto it)
         if multi:
@@ -406,7 +418,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         metrics = reframe_mod.reframe_clip(
             cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
             aspect=aspect, debug_dir=debug_dir, info=None,
-            bottom_exclusion_ratio=excl, h_bias_center=hbias)
+            bottom_exclusion_ratio=excl, h_bias_center=hbias,
+            event_cuts_rel=event_cuts_rel)
         source_for_captions = clip_dir / "reframed.mp4"
     else:
         # single re-encode straight from the source (no full-res intermediate)
@@ -416,7 +429,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             source, out_start, out_end, clip_dir / "reframed.mp4", cuts_rel, cfg,
             aspect=aspect, debug_dir=debug_dir,
             info=(info if out_start == cand["start"] and out_end == cand["end"] else None),
-            bottom_exclusion_ratio=excl, h_bias_center=hbias)
+            bottom_exclusion_ratio=excl, h_bias_center=hbias,
+            event_cuts_rel=event_cuts_rel)
         source_for_captions = clip_dir / "reframed.mp4"
     _sub(0.5)
 
@@ -499,6 +513,18 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "events": clip_events,
             "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
+
+
+def _remap_to_output(t: float, segments: list) -> float | None:
+    """Absolute source time -> clip-relative output time through the kept
+    segments (EditPlan pause-removal aware). None when t falls in a removed
+    gap or outside the clip."""
+    acc = 0.0
+    for s0, s1 in segments:
+        if s0 <= t < s1:
+            return round(acc + (t - s0), 3)
+        acc += s1 - s0
+    return None
 
 
 def _worker_count(cfg: dict, n_clips: int) -> int:

@@ -160,7 +160,10 @@ def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
     cap = cv2.VideoCapture(str(clip_path))
     tracker = _FaceTracker(w)
     targets: list[float | None] = []
-    stats = {"face": 0, "motion": 0, "center": 0}
+    # per-sample provenance ("face"/"motion"/"center") — viral_v2's reaction
+    # cuts only pin to targets that actually came from a detected face
+    kinds: list[str] = []
+    stats: dict = {"face": 0, "motion": 0, "center": 0}
     prev_gray = None
 
     with mp.solutions.face_detection.FaceDetection(
@@ -200,6 +203,7 @@ def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
                 else:
                     best = faces[0]
                 targets.append(float(np.clip(best[0], 0, w)))
+                kinds.append("face")
                 stats["face"] += 1
             else:
                 gray = cv2.cvtColor(cv2.resize(frame, (w // 2 or 1, h // 2 or 1)),
@@ -213,9 +217,11 @@ def track_targets(clip_path: Path, rcfg: dict, w: int, h: int,
                         t = float(np.clip(m["m10"] / m["m00"] * 2, 0, w))
                 prev_gray = gray
                 targets.append(t)
+                kinds.append("motion" if t is not None else "center")
                 stats["motion" if t is not None else "center"] += 1
             idx += 1
     cap.release()
+    stats["kinds"] = kinds
     return targets, stats
 
 
@@ -231,13 +237,34 @@ def _build_proxy(source: Path, start: float, dur: float, proxy: Path,
                timeout=900)
 
 
+def event_cut_bounds(cut_frames: list[int], event_frames: list[int],
+                     n_frames: int, hold_frames: int) -> tuple[list[int], set[int]]:
+    """Combine scene-cut and reaction-event boundaries with hysteresis: event
+    frames are hard cuts; any other boundary within hold_frames AFTER an
+    accepted event frame is suppressed so the shot never flaps. Pure,
+    unit-tested. Returns (bounds incl. 0/n_frames, accepted event frames)."""
+    hold = max(0, int(hold_frames))
+    accepted: set[int] = set()
+    last_event = -hold - 1
+    for f in sorted(set(event_frames)):
+        if 0 < f < n_frames and f - last_event > hold:
+            accepted.add(f)
+            last_event = f
+    inner = set(accepted)
+    for f in sorted(set(cut_frames)):
+        if 0 < f < n_frames and not any(0 <= f - e <= hold for e in accepted):
+            inner.add(f)
+    return [0] + sorted(inner) + [n_frames], accepted
+
+
 def reframe_clip(source: str | Path, start: float, end: float,
                  out_path: str | Path, scene_cuts_rel: list[float] | None = None,
                  cfg: dict | None = None, aspect: str = "9:16",
                  debug_dir: str | Path | None = None,
                  info: dict | None = None,
                  bottom_exclusion_ratio: float = 0.0,
-                 h_bias_center: float = -1.0) -> dict:
+                 h_bias_center: float = -1.0,
+                 event_cuts_rel: list[dict] | None = None) -> dict:
     """Reframe the [start, end] window of `source` to the target aspect in a
     SINGLE re-encode (seek + crop + scale straight from the source — no
     intermediate full-res cut). Tracking runs on a 360p low-fps proxy; crop
@@ -250,7 +277,14 @@ def reframe_clip(source: str | Path, start: float, end: float,
         excluded; the tighter crop scales back up (natural zoom compensation).
       h_bias_center in [0,1] (KEEP mode) — pull the horizontal crop center
         toward this fraction of width so a centered source subtitle survives
-        the 9:16 crop. -1 disables."""
+        the 9:16 crop. -1 disables.
+
+    viral_v2 input (default None = no-op, output unchanged):
+      event_cuts_rel — [{"t": clip-relative seconds, "actors_hint": str}] for
+        reaction events. Each becomes a HARD CUT (smoothing never crosses it);
+        when tracking saw a face at that moment the crop snaps to it and holds
+        for viral_v2.min_shot_s (hysteresis). No face there → no pin, no cut
+        beyond the smoothing reset — never guess-jump."""
     cfg = cfg or load_config()
     rcfg = cfg["reframe"]
     source, out_path = Path(source), Path(out_path)
@@ -319,7 +353,27 @@ def reframe_clip(source: str | Path, start: float, end: float,
     # per-scene segments: smoothing resets at shot boundaries
     cut_frames = sorted({int(t * fps) for t in (scene_cuts_rel or [])
                          if 0 < t < dur})
-    bounds = [0] + [f for f in cut_frames if 0 < f < n_frames] + [n_frames]
+    # viral_v2 reaction cuts: hard-cut to the tracked face at the event start.
+    # Only events where tracking actually saw a face qualify (kinds check) —
+    # otherwise keep the current target, never guess-jump.
+    kinds = stats.get("kinds", [])
+    hold_frames = int(float(cfg.get("viral_v2", {}).get("min_shot_s", 1.5)) * fps)
+    event_frames = []
+    for e in (event_cuts_rel or []):
+        t = float(e.get("t", -1.0))
+        if not 0.0 < t < dur:
+            continue
+        s_idx = int(round(t * proxy_fps))
+        if 0 <= s_idx < len(kinds) and kinds[s_idx] == "face":
+            event_frames.append(int(t * fps))
+    bounds, accepted = event_cut_bounds(cut_frames, event_frames, n_frames,
+                                        hold_frames)
+    for f in accepted:  # pin the crop on the reacting face for the hold window
+        full[f:min(f + hold_frames, n_frames)] = \
+            [full[f]] * (min(f + hold_frames, n_frames) - f)
+    if accepted:
+        log.info("reaction cuts: %d hard cut(s) at frames %s (hold %d frames)",
+                 len(accepted), sorted(accepted), hold_frames)
     scale = ow / cw  # source px -> output px
     path, all_ok, worst = [], True, {"max_velocity": 0.0, "max_accel": 0.0}
     for a, b in zip(bounds[:-1], bounds[1:]):
@@ -346,9 +400,11 @@ def reframe_clip(source: str | Path, start: float, end: float,
                   "-movflags", "+faststart", out_path])
 
     metrics = {"aspect": aspect, "crop": [cw, ch], "output": [ow, oh],
-               "tracking": stats, "smoothness": worst,
+               "tracking": {k: v for k, v in stats.items() if k != "kinds"},
+               "smoothness": worst,
                "smoothness_ok": bool(all_ok),
-               "segments": len(bounds) - 1}
+               "segments": len(bounds) - 1,
+               "event_cuts": sorted(round(f / fps, 2) for f in accepted)}
     log.info("reframed %s [%.1f-%.1f]: tracking=%s smoothness=%s ok=%s",
              source.name, start, end, stats,
              {k: round(v, 2) for k, v in worst.items()}, all_ok)
