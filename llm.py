@@ -3,10 +3,19 @@
     complete_json(task, schema_name, prompt, provider=None, context=None) -> dict
 
 Providers:
-  mock   — first-class, deterministic, schema-valid; default when no key.
-  gemini — google-genai SDK (lazy import), structured output via response_schema.
-  groq   — OpenAI-compatible HTTP endpoint via requests (no SDK).
-  ollama — local HTTP endpoint via requests (no SDK).
+  mock       — first-class, deterministic, schema-valid; default when no key.
+  gemini     — google-genai SDK (lazy import), structured output via
+               response_schema; also the only provider with Files-API video
+               upload (upload_media) for viral_v2.
+  groq       — OpenAI-compatible HTTP endpoint via requests (no SDK).
+  ollama     — local HTTP endpoint via requests (no SDK).
+  openrouter — OpenAI-compatible HTTP endpoint via requests (no SDK);
+               supports image parts (viral_v2 frame-batch fallback).
+
+Multimodal: pass `media=[...]` to complete_json. Parts are provider-neutral:
+  {"kind": "gemini_file", "handle": <files.upload result>}   (gemini only)
+  {"kind": "image", "mime": "image/jpeg", "data": <bytes>}   (gemini/openrouter)
+mock ignores media; groq/ollama raise LLMError when media is passed.
 
 `import llm` must work with zero provider SDKs installed (lazy imports only).
 Every call retries with exponential backoff, then attempts JSON repair; if all
@@ -28,7 +37,7 @@ from schemas import SCHEMAS, SchemaValidationError, validate
 
 log = get_logger("llm")
 
-PROVIDERS = ("mock", "gemini", "groq", "ollama")
+PROVIDERS = ("mock", "gemini", "groq", "ollama", "openrouter")
 
 
 def resolve_provider(cfg: dict | None = None, override: str | None = None) -> str:
@@ -46,7 +55,8 @@ def resolve_provider(cfg: dict | None = None, override: str | None = None) -> st
 
 def complete_json(task: str, schema_name: str, prompt: str,
                   provider: str | None = None, context: dict | None = None,
-                  cfg: dict | None = None) -> dict:
+                  cfg: dict | None = None,
+                  media: list[dict] | None = None) -> dict:
     """Run an LLM task that must return JSON matching SCHEMAS[schema_name]."""
     cfg = cfg or load_config()
     schema = SCHEMAS[schema_name]
@@ -65,7 +75,7 @@ def complete_json(task: str, schema_name: str, prompt: str,
                  + json.dumps(schema) + "\nExample shape:\n"
                  + json.dumps(synthesize_from_schema(schema, seed=task)))
         try:
-            raw = _dispatch(name, task, schema, p, context, cfg)
+            raw = _dispatch(name, task, schema, p, context, cfg, media)
             data = raw if isinstance(raw, dict) else _parse_json(raw)
             validate(data, schema_name)
             log.info("task=%s provider=%s ok in %.2fs (attempt %d)",
@@ -91,21 +101,27 @@ def complete_json(task: str, schema_name: str, prompt: str,
                    detail=str(last_err))
 
 
-def _dispatch(name, task, schema, prompt, context, cfg):
+def _dispatch(name, task, schema, prompt, context, cfg, media=None):
     if name == "mock":
         return _mock_complete(task, schema, prompt, context)
     if name == "gemini":
-        return _gemini_complete(schema, prompt, cfg)
+        return _gemini_complete(schema, prompt, cfg, media)
     if name == "groq":
+        if media:
+            raise LLMError("groq does not support media input")
         return _groq_complete(schema, prompt, cfg)
     if name == "ollama":
+        if media:
+            raise LLMError("ollama does not support media input")
         return _ollama_complete(schema, prompt, cfg)
+    if name == "openrouter":
+        return _openrouter_complete(schema, prompt, cfg, media)
     raise LLMError(f"unknown provider {name}")
 
 
 # ---------------------------------------------------------------- providers
 
-def _gemini_complete(schema, prompt, cfg):
+def _gemini_client():
     try:
         from google import genai  # lazy: SDK optional
     except ImportError as e:
@@ -114,14 +130,63 @@ def _gemini_complete(schema, prompt, cfg):
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise LLMError("gemini selected but GEMINI_API_KEY is not set")
-    client = genai.Client(api_key=key)
+    return genai.Client(api_key=key)
+
+
+def _gemini_complete(schema, prompt, cfg, media=None):
+    client = _gemini_client()
+    config = {"response_mime_type": "application/json",
+              "response_schema": _strip_unsupported(schema)}
+    contents = prompt
+    if media:
+        from google.genai import types  # lazy, same SDK as above
+        parts = []
+        for m in media:
+            if m["kind"] == "gemini_file":
+                parts.append(m["handle"])
+            elif m["kind"] == "image":
+                parts.append(types.Part.from_bytes(data=m["data"],
+                                                   mime_type=m["mime"]))
+            else:
+                raise LLMError(f"unknown media kind '{m.get('kind')}'")
+        contents = parts + [prompt]
+        # Video tokens dominate cost; low resolution is plenty for event spotting.
+        config["media_resolution"] = "MEDIA_RESOLUTION_LOW"
     resp = client.models.generate_content(
-        model=cfg["llm"]["gemini_model"],
-        contents=prompt,
-        config={"response_mime_type": "application/json",
-                "response_schema": _strip_unsupported(schema)},
-    )
+        model=cfg["llm"]["gemini_model"], contents=contents, config=config)
+    usage = getattr(resp, "usage_metadata", None)
+    if usage is not None:
+        log.info("gemini tokens: prompt=%s candidates=%s total=%s",
+                 getattr(usage, "prompt_token_count", "?"),
+                 getattr(usage, "candidates_token_count", "?"),
+                 getattr(usage, "total_token_count", "?"))
     return resp.text
+
+
+def upload_media(path, cfg=None, timeout_s: float = 120.0):
+    """Upload a local media file via the Gemini Files API and wait until it is
+    ACTIVE (required before it can be referenced in a prompt). Returns the file
+    handle for use as a {"kind": "gemini_file", "handle": ...} media part."""
+    client = _gemini_client()
+    try:
+        f = client.files.upload(file=str(path))
+    except Exception as e:  # SDK raises assorted google.* error types
+        raise LLMError(f"gemini file upload failed for {path}", detail=str(e))
+    t0 = time.perf_counter()
+    delay = 1.0
+    while getattr(f.state, "name", str(f.state)) == "PROCESSING":
+        if time.perf_counter() - t0 > timeout_s:
+            raise LLMError(f"gemini file {f.name} not ACTIVE after {timeout_s:.0f}s")
+        time.sleep(delay)
+        delay = min(delay * 1.5, 10.0)
+        try:
+            f = client.files.get(name=f.name)
+        except Exception as e:
+            raise LLMError(f"gemini file poll failed for {f.name}", detail=str(e))
+    state = getattr(f.state, "name", str(f.state))
+    if state != "ACTIVE":
+        raise LLMError(f"gemini file {f.name} ended in state {state}")
+    return f
 
 
 def _groq_complete(schema, prompt, cfg):
@@ -141,6 +206,46 @@ def _groq_complete(schema, prompt, cfg):
     if r.status_code != 200:
         raise LLMError(f"groq HTTP {r.status_code}", detail=r.text[:500])
     return r.json()["choices"][0]["message"]["content"]
+
+
+def _openrouter_complete(schema, prompt, cfg, media=None):
+    import requests
+    import base64
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise LLMError("openrouter selected but OPENROUTER_API_KEY is not set")
+    model = cfg["llm"].get("openrouter_model", "")
+    if not model:
+        raise LLMError("llm.openrouter_model is not set in config.yaml")
+    content: str | list = prompt
+    if media:
+        content = [{"type": "text", "text": prompt}]
+        for m in media:
+            if m["kind"] != "image":
+                raise LLMError(f"openrouter supports only image media, "
+                               f"got '{m.get('kind')}'")
+            b64 = base64.b64encode(m["data"]).decode("ascii")
+            content.append({"type": "image_url", "image_url": {
+                "url": f"data:{m['mime']};base64,{b64}"}})
+    r = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": model,
+              "messages": [{"role": "user", "content": content}],
+              "response_format": {"type": "json_object"},
+              "temperature": 0.4},
+        timeout=120,
+    )
+    if r.status_code != 200:
+        raise LLMError(f"openrouter HTTP {r.status_code}", detail=r.text[:500])
+    body = r.json()
+    usage = body.get("usage") or {}
+    if usage:
+        log.info("openrouter tokens: prompt=%s completion=%s total=%s",
+                 usage.get("prompt_tokens", "?"),
+                 usage.get("completion_tokens", "?"),
+                 usage.get("total_tokens", "?"))
+    return body["choices"][0]["message"]["content"]
 
 
 def _ollama_complete(schema, prompt, cfg):
@@ -201,6 +306,31 @@ def _mock_complete(task, schema, prompt, context):
         # imported lazily to avoid a circular import at module load.
         from metadata import template_metadata
         return template_metadata(context.get("hook", ""), context["text"])
+    if task == "viral_events":
+        # Deterministic canned events per chunk so keyless gates exercise the
+        # full events -> fusion -> metadata path.
+        dur = float(context.get("chunk_seconds", 60.0))
+        seed = f"{task}|{context.get('chunk_start', 0)}|{dur}"
+
+        def _mmss(t: float) -> str:
+            t = max(0.0, min(t, dur))
+            return f"{int(t // 60)}:{int(t % 60):02d}"
+
+        events = []
+        for frac, etype, desc in ((0.25, "laughter",
+                                   "mock: group laughter burst"),
+                                  (0.70, "energy_spike",
+                                   "mock: sudden energy spike")):
+            t0 = dur * frac
+            events.append({
+                "type": etype,
+                "t_start": _mmss(t0),
+                "t_end": _mmss(t0 + 4.0),
+                "description": desc,
+                "intensity_1_10": _seed_float(f"{seed}|{etype}", 5.0, 9.0),
+                "actors_hint": "person speaking",
+            })
+        return {"events": events}
     if task == "virality" and context.get("duration") is not None:
         from virality import rule_based_virality
         return rule_based_virality(context["text"], context.get("hook", ""),

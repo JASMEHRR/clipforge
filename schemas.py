@@ -370,6 +370,72 @@ ENDING_CLASSIFY = {
     "additionalProperties": False,
 }
 
+# --- Viral detection v2 (feature/viral-v2) --------------------------------
+
+VIRAL_EVENT_TYPES = ["laughter", "strong_reaction", "physical_event", "reveal",
+                     "expression_shift", "energy_spike", "profound_statement",
+                     "conflict", "celebration", "other"]
+
+# LLM output: notable moments within ONE chunk, timestamps as chunk-relative
+# MM:SS strings (what video models reliably produce; converted to absolute
+# seconds by video_events).
+VIRAL_EVENTS = {
+    "type": "object",
+    "properties": {
+        "events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": VIRAL_EVENT_TYPES},
+                    "t_start": {"type": "string", "pattern": r"^\d{1,3}:\d{2}$"},
+                    "t_end": {"type": "string", "pattern": r"^\d{1,3}:\d{2}$"},
+                    "description": {"type": "string", "minLength": 1,
+                                    "maxLength": 300},
+                    "intensity_1_10": {"type": "number", "minimum": 1,
+                                       "maximum": 10},
+                    "actors_hint": {"type": "string", "maxLength": 120},
+                },
+                "required": ["type", "t_start", "t_end", "description",
+                             "intensity_1_10"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["events"],
+    "additionalProperties": False,
+}
+
+# Merged per-job event timeline in ABSOLUTE source seconds; the contract
+# consumed by highlights fusion, reframe, and metadata.json.
+EVENT_TIMELINE = {
+    "type": "object",
+    "properties": {
+        "events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": VIRAL_EVENT_TYPES},
+                    "t_start_s": {"type": "number", "minimum": 0},
+                    "t_end_s": {"type": "number", "minimum": 0},
+                    "description": {"type": "string"},
+                    "intensity_1_10": {"type": "number", "minimum": 1,
+                                       "maximum": 10},
+                    "actors_hint": {"type": "string"},
+                    "source": {"type": "string",
+                               "enum": ["gemini", "openrouter", "audio", "mock"]},
+                },
+                "required": ["type", "t_start_s", "t_end_s", "description",
+                             "intensity_1_10", "source"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["events"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -384,6 +450,8 @@ SCHEMAS: dict[str, dict] = {
     "edit_plan": EDIT_PLAN,
     "hook_classify": HOOK_CLASSIFY,
     "ending_classify": ENDING_CLASSIFY,
+    "viral_events": VIRAL_EVENTS,
+    "event_timeline": EVENT_TIMELINE,
 }
 
 

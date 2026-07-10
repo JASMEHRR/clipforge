@@ -11,7 +11,7 @@ ffmpeg:
   timeout_per_input_second: 3.0     # scales with input duration: max(base, dur*this)
 
 llm:
-  provider: auto            # auto | mock | gemini | groq | ollama
+  provider: auto            # auto | mock | gemini | groq | ollama | openrouter
                             # auto -> gemini when GEMINI_API_KEY set, else mock (logged at startup)
   max_retries: 2
   backoff_base_seconds: 1.5
@@ -19,6 +19,39 @@ llm:
   groq_model: llama-3.3-70b-versatile
   ollama_model: llama3.1
   ollama_base_url: http://localhost:11434
+  # OpenRouter vision model for viral_v2's frame-batch fallback. Free-model ids
+  # rotate — update here, never hardcoded in code. Needs OPENROUTER_API_KEY in .env.
+  openrouter_model: qwen/qwen2.5-vl-72b-instruct:free
+
+viral_v2:
+  # Multimodal viral-moment detection (video via Gemini/OpenRouter free tiers,
+  # audio via local DSP). enabled: false -> events stage skipped entirely;
+  # transcript-only pipeline is byte-identical to pre-feature behavior.
+  enabled: true
+  # PRIVACY: local video files are NEVER uploaded to an AI provider unless this
+  # is explicitly true. YouTube-URL sources are exempt (already public).
+  allow_upload: false
+  providers: [gemini, openrouter]   # cloud order; keyless -> audio-DSP only
+  chunk_minutes: 10          # ffmpeg stream-copy chunk size for Gemini upload
+  frame_interval_s: 2.0      # OpenRouter fallback: 1 frame per this many seconds
+  reaction_window_s: 6.0     # extend clip end into a reaction starting within this
+  min_shot_s: 1.5            # reframe hard-cut hysteresis: min hold per shot
+  max_daily_minutes: 120     # cap on source minutes sent to cloud APIs per day
+  sparse_wpm: 40             # below this words/min, candidates come from event clusters
+  merge_gap_s: 2.0           # events within this gap merge (max intensity wins)
+  density_weight: 0.4        # score += this * weighted events/min (capped at 2.0)
+  peak_weight: 0.15          # score += this * max event intensity in span
+  weights:                   # per-type multipliers for the density component
+    laughter: 1.0
+    strong_reaction: 1.0
+    physical_event: 0.8
+    reveal: 0.9
+    expression_shift: 0.5
+    energy_spike: 0.6
+    profound_statement: 0.9
+    conflict: 0.8
+    celebration: 0.7
+    other: 0.3
 
 whisper:
   # Model matrix — performance targets assume these defaults.

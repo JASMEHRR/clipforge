@@ -40,7 +40,7 @@ def test_resolve_unknown_raises(cfg):
 def test_retry_then_success(cfg, monkeypatch):
     calls = {"n": 0}
 
-    def flaky(name, task, schema, prompt, context, c):
+    def flaky(name, task, schema, prompt, context, c, media=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return "not json at all"
@@ -106,3 +106,44 @@ def test_repair_json_variants():
 def test_synthesize_hashtag_pattern():
     out = llm.synthesize_from_schema(SCHEMAS["clip_metadata"], seed="t")
     validate(out, "clip_metadata")
+
+
+# --- viral_v2: openrouter provider + multimodal ----------------------------
+
+def test_openrouter_registered():
+    assert "openrouter" in llm.PROVIDERS
+
+
+def test_openrouter_without_key_raises_clean_error(cfg, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(LLMError):
+        llm._openrouter_complete(SCHEMAS["viral_events"], "p", cfg)
+
+
+def test_media_rejected_by_text_only_providers(cfg, monkeypatch):
+    media = [{"kind": "image", "mime": "image/jpeg", "data": b"x"}]
+    for name in ("groq", "ollama"):
+        with pytest.raises(LLMError):
+            llm._dispatch(name, "t", SCHEMAS["viral_events"], "p", None, cfg,
+                          media)
+
+
+def test_mock_viral_events_deterministic_and_valid(cfg):
+    ctx = {"chunk_start": 600.0, "chunk_seconds": 300.0}
+    a = llm.complete_json("viral_events", "viral_events", "p", provider="mock",
+                          context=ctx, cfg=cfg)
+    b = llm.complete_json("viral_events", "viral_events", "p", provider="mock",
+                          context=ctx, cfg=cfg)
+    assert a == b
+    validate(a, "viral_events")
+    assert len(a["events"]) == 2
+    types = {e["type"] for e in a["events"]}
+    assert "laughter" in types and "energy_spike" in types
+
+
+def test_mock_ignores_media(cfg):
+    out = llm.complete_json(
+        "viral_events", "viral_events", "p", provider="mock",
+        context={"chunk_start": 0.0, "chunk_seconds": 60.0}, cfg=cfg,
+        media=[{"kind": "image", "mime": "image/jpeg", "data": b"x"}])
+    validate(out, "viral_events")
