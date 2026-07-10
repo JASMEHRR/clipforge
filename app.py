@@ -46,16 +46,46 @@ def _persist_branding(upload_path: str | None) -> str:
 
 # --------------------------------------------------------------- create tab
 
-def _music_choices():
-    """(label, value) pairs for the music dropdown: None, Auto-match, tracks."""
-    choices = [("None", ""), ("Auto-match (from transcript)", "auto")]
-    try:
+def _resolve_music_choice(choice: str) -> str:
+    """Map a UI music choice onto what music.resolve accepts. 'random' picks a
+    concrete track id here (at enqueue/run start) so each batch job can get a
+    different track."""
+    if choice == "random":
+        import random as _random
+
         import music
-        choices += [(f"{t['title']} ({t['license']})", t["id"])
-                    for t in music.list_tracks()]
-    except Exception as e:  # noqa: BLE001 — manifest optional; UI still loads
-        log.warning("music manifest unavailable: %s", e)
-    return choices
+        try:
+            ids = [t["id"] for t in music.list_tracks()]
+        except Exception as e:  # noqa: BLE001 — manifest optional
+            log.warning("music manifest unavailable: %s", e)
+            ids = []
+        return _random.choice(ids) if ids else ""
+    return choice or ""
+
+
+def _music_card_html(t: dict) -> str:
+    """Track card: title, license, moods, attribution note when required."""
+    moods = ", ".join(t.get("moods", []))
+    bits = [f"license: {t.get('license', '?')}"]
+    if moods:
+        bits.append(f"mood: {moods}")
+    if t.get("attribution_required"):
+        bits.append("credit added to the video description automatically")
+    return (f"<div><b>{_esc_html(t.get('title', t.get('id', '?')))}</b><br>"
+            f"<span style='opacity:.7'>{_esc_html(' · '.join(bits))}</span></div>")
+
+
+def _music_preview(track_id: str):
+    """Return the local path for the shared preview player, downloading the
+    track on first use (manifest tracks are fetched lazily)."""
+    import music
+    gr.Info("Loading track — first play may take a few seconds…")
+    try:
+        return str(music.ensure_track(music.get_track(track_id)))
+    except Exception as e:  # noqa: BLE001 — preview failure must not crash UI
+        log.warning("music preview failed for %s: %s", track_id, e)
+        raise gr.Error("Couldn't load that track right now. Check your "
+                       "internet connection and try again.")
 
 
 def _profile_choices():
@@ -63,6 +93,107 @@ def _profile_choices():
     from config import ROOT
     pdir = ROOT / "profiles"
     return sorted(p.stem for p in pdir.glob("*.json")) if pdir.exists() else ["default"]
+
+
+# ------------------------------------------------- popup picker card HTML
+# Pure builders (module-level so tests can assert their content). Each card
+# is plain-language: a small visual mock + one-line description, no jargon.
+
+_ASPECT_CARDS = {
+    "9:16": ("Vertical", "Tall portrait — Shorts, Reels, TikTok"),
+    "1:1": ("Square", "Square — feed posts"),
+    "16:9": ("Widescreen", "Landscape — regular YouTube"),
+}
+
+_SUBS_CARDS = {
+    "auto": ("Decide for me", "ClipForge checks each clip and picks the best "
+             "handling automatically"),
+    "replace": ("Replace them", "Hide the video's own subtitles and burn fresh "
+                "ClipForge captions"),
+    "keep": ("Keep them", "Keep the video's own subtitles and don't add new "
+             "captions on top"),
+    "ignore": ("Ignore them", "Leave the video as-is and burn ClipForge "
+               "captions anyway"),
+}
+
+_WMPOS_CARDS = {
+    "top-left": "Top left", "top-right": "Top right",
+    "bottom-left": "Bottom left", "bottom-right": "Bottom right",
+    "center": "Center",
+}
+
+
+def _aspect_card_html(value: str) -> str:
+    title, desc = _ASPECT_CARDS[value]
+    w, h = {"9:16": (40, 71), "1:1": (56, 56), "16:9": (96, 54)}[value]
+    return (f"<div style='display:flex;gap:14px;align-items:center'>"
+            f"<div style='width:{w}px;height:{h}px;border:2px solid currentColor;"
+            f"border-radius:6px;opacity:.7'></div>"
+            f"<div><b>{title} ({value})</b><br><span style='opacity:.7'>"
+            f"{desc}</span></div></div>")
+
+
+def _subs_card_html(value: str) -> str:
+    title, desc = _SUBS_CARDS[value]
+    return (f"<div><b>{title}</b><br>"
+            f"<span style='opacity:.7'>{desc}</span></div>")
+
+
+def _wmpos_card_html(value: str) -> str:
+    title = _WMPOS_CARDS[value]
+    v, hz = value.split("-") if "-" in value else ("center", "center")
+    top = {"top": "6px", "bottom": "auto", "center": "28px"}[v]
+    bottom = "6px" if v == "bottom" else "auto"
+    left = {"left": "6px", "right": "auto", "center": "26px"}[hz]
+    right = "6px" if hz == "right" else "auto"
+    return (f"<div style='display:flex;gap:14px;align-items:center'>"
+            f"<div style='position:relative;width:40px;height:66px;"
+            f"border:2px solid currentColor;border-radius:6px;opacity:.7'>"
+            f"<div style='position:absolute;top:{top};bottom:{bottom};"
+            f"left:{left};right:{right};width:9px;height:9px;border-radius:50%;"
+            f"background:currentColor'></div></div>"
+            f"<div><b>{title}</b><br><span style='opacity:.7'>Your watermark "
+            f"or logo sits here</span></div></div>")
+
+
+def _profile_card_html(name: str, data: dict) -> str:
+    """Text-summary card for a style profile: name + the key style fields the
+    profile JSON actually carries (skips absent ones)."""
+    bits = []
+    caps = data.get("captions") or {}
+    if caps.get("preset"):
+        bits.append(f"caption style: {caps['preset']}")
+    if caps.get("font"):
+        bits.append(f"font: {caps['font']}")
+    if data.get("pacing", {}).get("target_wpm"):
+        bits.append(f"pacing: ~{data['pacing']['target_wpm']} wpm")
+    hook = data.get("hook", {}).get("style") or data.get("hook_style")
+    if hook:
+        bits.append(f"hooks: {hook}")
+    desc = " · ".join(_esc_html(b) for b in bits) or \
+        "Custom style learned from your reference videos"
+    return (f"<div><b>{_esc_html(name)}</b><br>"
+            f"<span style='opacity:.7'>{desc}</span></div>")
+
+
+def _static_picker_modal(title, intro, cards, state, label, label_prefix):
+    """Build a cf-modal overlay of static cards. Must be called inside Blocks.
+
+    cards: (value, display, html) triples. Picking one writes value→state,
+    updates the label Markdown, and hides the modal."""
+    with gr.Column(visible=False, elem_classes=["cf-modal"]) as modal:
+        gr.Markdown(f"### {title}\n{intro}")
+        close = gr.Button("Close")
+        for value, display, html in cards:
+            with gr.Column(elem_classes=["cf-font-row"]):
+                gr.HTML(html)
+                b = gr.Button(f"Use: {display}", size="sm")
+                b.click(
+                    (lambda v=value, d=display:
+                     (v, f"**{label_prefix}:** {d}", gr.update(visible=False))),
+                    None, [state, label, modal])
+    close.click(lambda: gr.update(visible=False), None, [modal])
+    return modal
 
 
 def _virality_badge(vir: dict | None) -> str:
@@ -266,6 +397,7 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
     if not source:
         yield "Provide a video file or a URL.", {}, [], ""
         return
+    music = _resolve_music_choice(music)
     target_count = int(n_clips) or None  # 0 = auto (keep-ratio rule)
 
     # Per-run options applied onto a private deep copy (never the singleton).
@@ -408,9 +540,18 @@ def _zip_batch_all():
 
 # ---------------------------------------------------------------- batch tab
 
-def _batch_add(text):
+def _batch_add(text, music_choice=""):
     from batch import get_queue
-    n = get_queue().add_many(text)
+    q = get_queue()
+    n = 0
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # 'random' resolves per job here so every queued video can differ
+        resolved = _resolve_music_choice(music_choice)
+        q.add(line, **({"music": resolved} if resolved else {}))
+        n += 1
     return f"Queued {n} source(s).", _batch_rows()
 
 
@@ -592,6 +733,75 @@ def _upload_status():
     return "YouTube is authorized. Select a job and upload kept clips."
 
 
+def _yt_authorized() -> bool:
+    import youtube_upload as yt
+    try:
+        return bool(yt.credentials_available() and yt.has_cached_token())
+    except Exception:  # noqa: BLE001 — treat any probe failure as not-authorized
+        return False
+
+
+def _auto_panel_md() -> str:
+    """Markdown snapshot of the auto-upload panel (state via panel_state)."""
+    from upload_scheduler import load_log, panel_state
+    try:
+        st = panel_state(load_config(), load_log(), _yt_authorized())
+    except Exception as e:  # noqa: BLE001 — panel must render even if log breaks
+        log.warning("auto-upload panel state failed: %s", e)
+        return "_Auto-upload status is unavailable right now._"
+    lines = []
+    if not st["authorized"]:
+        lines.append("_Not connected to YouTube yet — click **Authorize "
+                     "YouTube** above to connect (one-time)._")
+    lines.append(f"Auto-upload is **{'ON' if st['auto_enabled'] else 'OFF'}** "
+                 f"· uploaded today: **{st['uploads_today']} of "
+                 f"{st['max_per_day']}**")
+    if st["next_slot_ist"]:
+        when = st["next_slot_ist"][:16].replace("T", " ")
+        lines.append(f"Next publish slot: **{when} IST**")
+    if st["recent"]:
+        lines.append("**Recent scheduled uploads:**")
+        for r in st["recent"]:
+            when = (r["publish_at"] or "")[:16].replace("T", " ")
+            name = r["title"] or r["video_id"]
+            lines.append(f"- [{name}]({r['url']}) — goes live {when} IST")
+    else:
+        lines.append("_No uploads yet. Once enabled and authorized, clips "
+                     "that score well are scheduled automatically as they "
+                     "finish rendering._")
+    return "\n\n".join(lines)
+
+
+def _set_auto_upload(enabled):
+    from config import save_config
+    try:
+        save_config({"upload": {"auto_enabled": bool(enabled)}})
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not save auto-upload setting: %s", e)
+    return _auto_panel_md()
+
+
+def _clip_excluded(clip_path: str) -> bool:
+    try:
+        meta = json.loads((Path(clip_path).parent / "metadata.json")
+                          .read_text(encoding="utf-8"))
+        return bool(meta.get("upload", {}).get("exclude"))
+    except Exception:  # noqa: BLE001 — missing/old metadata → not excluded
+        return False
+
+
+def _set_clip_exclude(clip_path: str, exclude: bool) -> None:
+    """Persist the per-clip auto-upload opt-out where find_candidates reads it."""
+    try:
+        meta_path = Path(clip_path).parent / "metadata.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta.setdefault("upload", {})["exclude"] = bool(exclude)
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 — a failed toggle must not crash UI
+        log.warning("could not update auto-upload opt-out: %s", e)
+
+
 def _authorize():
     import youtube_upload as yt
     try:
@@ -744,16 +954,21 @@ def build_app() -> gr.Blocks:
                         file_in = gr.File(label="Video file", type="filepath",
                                           file_types=["video"])
                         url_in = gr.Textbox(label="…or video URL (yt-dlp)")
-                        preset_in = gr.Dropdown(presets, label="Caption preset",
-                                                value=cfg["captions"]["preset"])
-                        aspect_in = gr.Radio(["9:16", "1:1", "16:9"], value="9:16",
-                                             label="Output aspect")
+                        preset_state = gr.State(cfg["captions"]["preset"])
+                        preset_label = gr.Markdown(
+                            f"**Caption style:** {cfg['captions']['preset']}")
+                        preset_btn = gr.Button("Choose caption style", size="sm")
+                        aspect_state = gr.State("9:16")
+                        aspect_label = gr.Markdown(
+                            "**Output shape:** Vertical (9:16)")
+                        aspect_btn = gr.Button("Choose output shape", size="sm")
                         clips_in = gr.Slider(
                             0, 20, value=int(cfg["clips"].get("target_count", 0)),
                             step=1, label="Clips to keep (0 = auto)")
-                        music_in = gr.Dropdown(
-                            _music_choices(), value="",
-                            label="Background music (CC-licensed)")
+                        music_state = gr.State("")
+                        music_label = gr.Markdown("**Background music:** None")
+                        music_btn = gr.Button("Choose background music",
+                                              size="sm")
                         music_vol = gr.Slider(-40, 0, value=-22, step=1,
                                               label="Music volume (dB)")
                         provider_in = gr.Dropdown(
@@ -773,14 +988,18 @@ def build_app() -> gr.Blocks:
                                   "content to the AI provider for analysis "
                                   "(YouTube URLs are always analyzed; audio "
                                   "analysis stays local either way)")
-                        profile_in = gr.Dropdown(
-                            _profile_choices(),
-                            value=(cfg.get("style", {}).get("profile", "profiles/default.json")
-                                   .split("/")[-1].removesuffix(".json")),
-                            label="Style profile")
-                        subs_in = gr.Dropdown(
-                            ["auto", "replace", "keep", "ignore"], value="auto",
-                            label="Burned-in subtitles")
+                        _default_profile = (
+                            cfg.get("style", {}).get("profile", "profiles/default.json")
+                            .split("/")[-1].removesuffix(".json"))
+                        profile_state = gr.State(_default_profile)
+                        profile_label = gr.Markdown(
+                            f"**Style profile:** {_default_profile}")
+                        profile_btn = gr.Button("Choose style profile", size="sm")
+                        subs_state = gr.State("auto")
+                        subs_label = gr.Markdown(
+                            "**Existing subtitles:** Decide for me")
+                        subs_btn = gr.Button(
+                            "Existing subtitles in the video…", size="sm")
                         with gr.Accordion("Style & Branding", open=False):
                             gr.HTML("<div class='cf-section-title'>Captions</div>"
                                     "<div class='cf-section-sub'>call-to-action "
@@ -815,10 +1034,11 @@ def build_app() -> gr.Blocks:
                             watermark_in = gr.Textbox(
                                 label="Watermark / brand text (blank = off)",
                                 placeholder="@yourhandle")
-                            watermark_pos_in = gr.Dropdown(
-                                ["top-left", "top-right", "bottom-left",
-                                 "bottom-right", "center"], value="bottom-right",
-                                label="Watermark position")
+                            wmpos_state = gr.State("bottom-right")
+                            wmpos_label = gr.Markdown(
+                                "**Watermark position:** Bottom right")
+                            wmpos_btn = gr.Button("Choose watermark position",
+                                                  size="sm")
                             logo_in = gr.Image(
                                 type="filepath", height=90,
                                 label="Logo PNG (used when mode = image)")
@@ -846,6 +1066,13 @@ def build_app() -> gr.Blocks:
                             for i, c in enumerate(ranked, 1):
                                 with gr.Column():
                                     gr.HTML(_clip_card(i, c))
+                                    excl = gr.Checkbox(
+                                        value=_clip_excluded(c.get("path", "")),
+                                        label="Don't auto-upload this clip")
+                                    excl.change(
+                                        (lambda v, p=c.get("path", ""):
+                                         _set_clip_exclude(p, v)),
+                                        [excl], None)
                                     eb = gr.Button("Edit this clip", size="sm")
                                     eb.click(
                                         (lambda jd=job_dir, ix=c.get("index"):
@@ -859,13 +1086,14 @@ def build_app() -> gr.Blocks:
                             zip_btn = gr.Button("Download all (zip)")
                         zip_out = gr.File(label="Bundle (.zip)")
                 run_btn.click(_run_generator,
-                              [file_in, url_in, preset_in, aspect_in, provider_in,
-                               clips_in, music_in, music_vol,
+                              [file_in, url_in, preset_state, aspect_state,
+                               provider_in,
+                               clips_in, music_state, music_vol,
                                style_in, viral_in, viral_upload_in,
-                               profile_in, subs_in,
+                               profile_state, subs_state,
                                cta_in, highlight_in, pacing_in,
                                clip_min_in, clip_max_in,
-                               watermark_in, watermark_pos_in,
+                               watermark_in, wmpos_state,
                                watermark_mode_in, logo_in, font_override_state],
                               [progress_out, results_state, files_out, job_dir_state])
                 zip_btn.click(_zip_current, [job_dir_state], [zip_out])
@@ -882,7 +1110,7 @@ def build_app() -> gr.Blocks:
                     font_status = gr.Markdown()
                     close_fonts_btn = gr.Button("Close")
 
-                    @gr.render(inputs=[preset_in, font_refresh_state])
+                    @gr.render(inputs=[preset_state, font_refresh_state])
                     def _font_gallery(preset_name, _refresh):
                         import fontreg
                         import style_preview
@@ -920,9 +1148,160 @@ def build_app() -> gr.Blocks:
                                    [font_upload, font_refresh_state],
                                    [font_status, font_refresh_state])
 
+                # ---- popup card-pickers (same overlay pattern as fonts) ----
+                with gr.Column(visible=False,
+                               elem_classes=["cf-modal"]) as preset_modal:
+                    gr.Markdown("### Choose a caption style\nEach sample is "
+                                "rendered through the real caption burn.")
+                    close_preset_btn = gr.Button("Close")
+
+                    @gr.render(inputs=[font_override_state, font_refresh_state])
+                    def _preset_gallery(font_fam, _refresh):
+                        import style_preview
+                        cfg2 = load_config()
+                        for pname in cfg2["captions"]["presets"]:
+                            try:
+                                png = style_preview.preview_png(
+                                    pname, font_fam or None, cfg=cfg2)
+                            except Exception as e:  # noqa: BLE001 — skip bad preset
+                                log.warning("preview failed for preset %s: %s",
+                                            pname, e)
+                                continue
+                            with gr.Column(elem_classes=["cf-font-row"]):
+                                src = f"/gradio_api/file={png.resolve().as_posix()}"
+                                gr.HTML(f"<div class='cf-font-name'>"
+                                        f"{_esc_html(pname)}</div>"
+                                        f"<img src='{src}' alt='{_esc_html(pname)}'>")
+                                pick = gr.Button(f"Use: {pname}", size="sm")
+                                pick.click(
+                                    (lambda p=pname:
+                                     (p, f"**Caption style:** {p}",
+                                      gr.update(visible=False))),
+                                    None,
+                                    [preset_state, preset_label, preset_modal])
+
+                close_preset_btn.click(lambda: gr.update(visible=False), None,
+                                       [preset_modal])
+                preset_btn.click(lambda: gr.update(visible=True), None,
+                                 [preset_modal])
+
+                aspect_modal = _static_picker_modal(
+                    "Choose the output shape",
+                    "Pick where you'll post these clips.",
+                    [(v, f"{_ASPECT_CARDS[v][0]} ({v})", _aspect_card_html(v))
+                     for v in _ASPECT_CARDS],
+                    aspect_state, aspect_label, "Output shape")
+                aspect_btn.click(lambda: gr.update(visible=True), None,
+                                 [aspect_modal])
+
+                subs_modal = _static_picker_modal(
+                    "Existing subtitles in the video",
+                    "What should happen when the source video already has "
+                    "subtitles burned into the picture?",
+                    [(v, _SUBS_CARDS[v][0], _subs_card_html(v))
+                     for v in _SUBS_CARDS],
+                    subs_state, subs_label, "Existing subtitles")
+                subs_btn.click(lambda: gr.update(visible=True), None,
+                               [subs_modal])
+
+                wmpos_modal = _static_picker_modal(
+                    "Choose the watermark position",
+                    "Where your watermark text or logo sits on the clip.",
+                    [(v, _WMPOS_CARDS[v], _wmpos_card_html(v))
+                     for v in _WMPOS_CARDS],
+                    wmpos_state, wmpos_label, "Watermark position")
+                wmpos_btn.click(lambda: gr.update(visible=True), None,
+                                [wmpos_modal])
+
+                _profile_cards = []
+                for _pn in _profile_choices():
+                    try:
+                        _pdata = json.loads(
+                            (ROOT / "profiles" / f"{_pn}.json")
+                            .read_text(encoding="utf-8"))
+                    except Exception:  # noqa: BLE001 — card still renders
+                        _pdata = {}
+                    _profile_cards.append((_pn, _pn,
+                                           _profile_card_html(_pn, _pdata)))
+                profile_modal = _static_picker_modal(
+                    "Choose a style profile",
+                    "A style profile is a look learned from reference videos "
+                    "(colors, pacing, hooks). 'default' is ClipForge's "
+                    "built-in style.",
+                    _profile_cards, profile_state, profile_label,
+                    "Style profile")
+                profile_btn.click(lambda: gr.update(visible=True), None,
+                                  [profile_modal])
+
+                # ---- music picker: preview-first gallery ----
+                with gr.Column(visible=False,
+                               elem_classes=["cf-modal"]) as music_modal:
+                    gr.Markdown(
+                        "### Choose background music\nTracks are copyright-"
+                        "free; a credit line is added to the video "
+                        "description automatically when the license asks for "
+                        "one. Music is gently lowered whenever someone "
+                        "speaks.")
+                    close_music_btn = gr.Button("Close")
+                    music_preview_audio = gr.Audio(
+                        label="Preview player", interactive=False)
+                    _music_specials = [
+                        ("", "No music", "Keep the clip's own audio only"),
+                        ("auto", "Match the video",
+                         "Picks the track whose mood best fits what's said "
+                         "in the video"),
+                        ("random", "Surprise me",
+                         "A random track per clip batch — nice for variety "
+                         "across many uploads"),
+                    ]
+                    for _mv, _md, _mdesc in _music_specials:
+                        with gr.Column(elem_classes=["cf-font-row"]):
+                            gr.HTML(f"<div><b>{_md}</b><br><span "
+                                    f"style='opacity:.7'>{_mdesc}</span></div>")
+                            _mb = gr.Button(f"Use: {_md}", size="sm")
+                            _mb.click(
+                                (lambda v=_mv, d=_md:
+                                 (v, f"**Background music:** {d}",
+                                  gr.update(visible=False))),
+                                None,
+                                [music_state, music_label, music_modal])
+                    try:
+                        import music as _music_mod
+                        _tracks = _music_mod.list_tracks()
+                    except Exception as e:  # noqa: BLE001 — manifest optional
+                        log.warning("music manifest unavailable: %s", e)
+                        _tracks = []
+                    for _t in _tracks:
+                        with gr.Column(elem_classes=["cf-font-row"]):
+                            gr.HTML(_music_card_html(_t))
+                            with gr.Row():
+                                _pv = gr.Button("Preview", size="sm")
+                                _use = gr.Button(
+                                    f"Use: {_t.get('title', _t['id'])}",
+                                    size="sm")
+                            _pv.click((lambda tid=_t["id"]:
+                                       _music_preview(tid)),
+                                      None, [music_preview_audio])
+                            _use.click(
+                                (lambda tid=_t["id"],
+                                        d=_t.get("title", _t["id"]):
+                                 (tid, f"**Background music:** {d}",
+                                  gr.update(visible=False))),
+                                None,
+                                [music_state, music_label, music_modal])
+                close_music_btn.click(lambda: gr.update(visible=False), None,
+                                      [music_modal])
+                music_btn.click(lambda: gr.update(visible=True), None,
+                                [music_modal])
+
             with gr.Tab("Batch", id="batch"):
                 batch_in = gr.Textbox(label="One file path or URL per line",
                                       lines=5)
+                batch_music_in = gr.Dropdown(
+                    [("No music", ""), ("Match each video", "auto"),
+                     ("Random track per video", "random")] +
+                    [(t.get("title", t["id"]), t["id"]) for t in _tracks],
+                    value="", label="Background music for these videos")
                 with gr.Row():
                     batch_btn = gr.Button("Add to queue", variant="primary")
                     refresh_btn = gr.Button("Refresh status")
@@ -935,7 +1314,8 @@ def build_app() -> gr.Blocks:
                 with gr.Row():
                     batch_zip_btn = gr.Button("Download everything (zip)")
                 batch_zip_out = gr.File(label="All jobs bundle (.zip)")
-                batch_btn.click(_batch_add, [batch_in], [batch_msg, batch_table])
+                batch_btn.click(_batch_add, [batch_in, batch_music_in],
+                                [batch_msg, batch_table])
                 refresh_btn.click(_batch_rows, [], [batch_table])
                 inbox_cb.change(_inbox_toggle, [inbox_cb], [batch_msg])
                 batch_zip_btn.click(_zip_batch_all, [], [batch_zip_out])
@@ -975,7 +1355,20 @@ def build_app() -> gr.Blocks:
                                              value="private", label="Privacy")
                     upload_btn = gr.Button("Upload kept clips", variant="primary")
                 upload_result = gr.Markdown()
-                auth_btn.click(_authorize, [], [upload_md])
+                gr.HTML("<div class='cf-section-title'>Automatic uploads</div>"
+                        "<div class='cf-section-sub'>schedule your best clips "
+                        "to YouTube as soon as they finish rendering</div>")
+                auto_enabled_cb = gr.Checkbox(
+                    value=bool(cfg.get("upload", {}).get("auto_enabled",
+                                                         False)),
+                    label="Upload my best clips automatically")
+                auto_panel_md = gr.Markdown(_auto_panel_md())
+                auto_refresh_btn = gr.Button("Refresh status", size="sm")
+                auto_enabled_cb.change(_set_auto_upload, [auto_enabled_cb],
+                                       [auto_panel_md])
+                auto_refresh_btn.click(_auto_panel_md, [], [auto_panel_md])
+                auth_btn.click(_authorize, [], [upload_md]).then(
+                    _auto_panel_md, [], [auto_panel_md])
                 upload_btn.click(_upload_job, [upload_job_dd, privacy_dd],
                                  [upload_result])
 

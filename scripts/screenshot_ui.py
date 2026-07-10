@@ -71,6 +71,29 @@ def main() -> int:
         except Exception as e:
             print("font gallery shot failed:", e)
 
+        # 2b. popup card-pickers (Phase B): open each, shoot, close
+        def _picker_shot(button_name: str, shot_name: str,
+                         wait_selector: str | None = None) -> None:
+            try:
+                page.get_by_role("button", name=button_name).click()
+                if wait_selector:
+                    page.wait_for_selector(wait_selector, timeout=30000)
+                page.wait_for_timeout(900)
+                _shot(page, shot_name)
+                ok.append(shot_name)
+                page.locator(".cf-modal:visible").get_by_role(
+                    "button", name="Close").first.click()
+                page.wait_for_timeout(400)
+            except Exception as e:
+                print(shot_name, "failed:", e)
+
+        _picker_shot("Choose caption style", "07_preset_picker.png",
+                     ".cf-modal:visible .cf-font-row img")
+        _picker_shot("Choose output shape", "08_aspect_picker.png")
+        _picker_shot("Existing subtitles in the video…", "09_subs_picker.png")
+        _picker_shot("Choose style profile", "10_profile_picker.png")
+        _picker_shot("Choose watermark position", "11_wmpos_picker.png")
+
         try:                                    # 3. History tab + reopen a job
             _click_tab(page, "History")
             _shot(page, "03_history.png")
