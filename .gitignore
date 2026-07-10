@@ -29,3 +29,8 @@ tools/                          # local binaries (e.g. driver-compatible ffmpeg)
 refs/
 
 .claude/settings.local.json
+
+.claude/
+CLAUDE.md
+
+.env
