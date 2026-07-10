@@ -107,6 +107,14 @@ Current: **feature/ui-rework** merged to main — UI rework + branding/fonts/pro
 - [ ] Feature 5 — emoji captions CUT (bundled Montserrat has no emoji glyphs; needs an emoji-capable font asset — see REPORT.md)
 - [x] Verification: 144 passed / 1 skipped; `--sample --provider mock` OK (metadata carries breakdown, render_s recorded); app + rerender smoke pass
 
+## Viral detection v2 (feature/viral-v2, 2026-07-10)
+- [x] Module 1 — video_events.py: Gemini chunk upload path (Files API, wait-ACTIVE), OpenRouter free-Qwen-VL frame-batch fallback, local audio DSP (robust median/MAD energy spikes + laughter-like bursts), 2s merge/dedupe, per-chunk hash cache (resumable), daily-minutes quota guard, privacy gate (allow_upload default false, URLs exempt)
+- [x] Module 2 — fusion: additive event scoring + end-on-the-reaction / never-start-mid-event boundary rules (post-snap, pre-dedupe), event-cluster candidates for sparse/silent sources; pipeline `events` stage with config-hash-keyed marker; events in metadata.json
+- [x] Module 3 — reaction-aware reframe: event hard cuts with min_shot_s hysteresis (event_cut_bounds, pure), pin to tracked face only when tracking saw a face; EditPlan-segment time remap
+- [x] Module 4 — UI (viral toggle + allow-upload privacy checkbox, event line on clip cards), docs (README, CLAUDE.md, PLAN.md Decisions, DECISIONS.md)
+- [x] Keyless verification: 215 passed / 1 skipped; `--sample --provider mock` end-to-end OK (.done_events.json written, mock+audio events merged, event visible in clip metadata)
+- [ ] LIVE verification: pending live test (no GEMINI_API_KEY in build env) — run a public YouTube URL through the events stage, confirm timestamps/quota logging, reaction-rule end-extension in metadata, event_cuts in reframe metrics
+
 ## Known Issues
 - Docker daemon absent on build host → Dockerfile/compose statically validated only; container run "pending manual verification" (rule 6).
 - mediapipe pinned to 0.10.14: 0.10.35 removed the legacy `solutions` API (rule 6 substitution, documented in PLAN.md Decisions).

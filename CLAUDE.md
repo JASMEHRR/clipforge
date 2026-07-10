@@ -46,6 +46,16 @@ Local Opus Clip alternative: long video → ranked 30–60s vertical clips with 
 - **UI**: card gallery (`app._cards_html`) with band badge + expandable engagement breakdown, replaces the markdown table; History reopen renders the same gallery. `gr.themes.Soft()` passed at `launch()` (Gradio 6 moved theme/css off the Blocks constructor); card CSS injected as a `<style>` block.
 - Branch note: built on feature/style-refiner because origin/main had diverged (12-hunk pipeline.py conflict). **main reconciliation deferred to a human** (see REPORT.md).
 
+## Viral detection v2 (feature/viral-v2)
+- video_events.py owns the per-job event timeline (schema `event_timeline`, absolute seconds): Gemini chunk uploads (Files API via `llm.upload_media`) → OpenRouter frame batches (free Qwen VL, model id in `llm.openrouter_model`) → local audio DSP (always, keyless too). Merge: overlapping/within `viral_v2.merge_gap_s` → union span, max intensity.
+- PRIVACY GATE: local files are never uploaded unless `viral_v2.allow_upload: true` (default false); `source_type == "url"` is exempt. Audio DSP always runs (fully local).
+- Free-tier guards: per-chunk cache `cache/viral_events/<chunk_sha16>_<prompt_sha8>_<provider>.json` (resumable); daily quota `cache/viral_v2_usage.json` vs `viral_v2.max_daily_minutes`; quota/429 → next provider → audio-only. The events stage never fails the job.
+- Multimodal LLM: `llm.complete_json(..., media=[...])` — parts `{"kind":"gemini_file","handle":...}` / `{"kind":"image","mime":...,"data":bytes}`; groq/ollama reject media; mock ignores it (canned `viral_events` branch).
+- Fusion (highlights.py): `fuse_event_scores` (additive only) → `apply_reaction_boundaries` (end-on-the-reaction; never start mid-event) run AFTER sentence snapping, before dedupe; `event_cluster_candidates` when transcript < `viral_v2.sparse_wpm`. `select_highlights(events=None)` is byte-identical to pre-feature (tested).
+- Reframe: `reframe_clip(..., event_cuts_rel=[{"t","actors_hint"}])` hard-cuts to the tracked face with `viral_v2.min_shot_s` hysteresis (`event_cut_bounds`, pure); no detected face at that moment → no cut. Pipeline remaps event times through EditPlan segments (`_remap_to_output`).
+- Pipeline stage `events` (after transcribe): bespoke marker `.done_events.json` keyed `config_hash(cfg,"viral_v2","llm")+provider`; `viral_v2.enabled: false` skips everything. Clip metadata.json gains `events`.
+- Commands: keyless gate `pipeline.py --sample --provider mock` (canned events flow to metadata); transcript-only run: set `viral_v2.enabled: false` (config.local.yaml or UI checkbox); live needs GEMINI_API_KEY (+ optional OPENROUTER_API_KEY).
+
 ## Conventions
 - Flat top-level modules; schemas in schemas.py only; all JSON validated at module boundaries.
 - Structured errors from errors.py; a failing clip/stage never kills the pipeline or queue.

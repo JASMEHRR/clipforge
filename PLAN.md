@@ -190,6 +190,16 @@ Live calls never happen in gates (gates force `--provider mock`).
 | Playwright added dev-only (not in requirements.txt) | add to requirements | screenshots are a dev/verification tool, not a runtime dep; installed separately and documented |
 | **GPU fix = swap ffmpeg, not patch code** (feature/gpu-fix) | fix `nvenc_available()`; update NVIDIA driver | evidence disproved the "detection bug" premise: `nvenc_available()` was already correct (real smoke encode). The true cause is system ffmpeg 8.1.2 linking NVENC SDK 13.1 (needs driver ≥610) vs installed driver 581.08 (API 13.0). Driver ≥610 isn't released and needs admin+reboot; a driver-compatible gyan.dev **ffmpeg 7.1** build in `tools/` (gitignored), selected via `config.local.yaml`→`ffmpeg.binary`, makes NVENC init succeed (proven: encoder util 100%, render 66s vs 231s CPU). Transcription already ran on GPU. |
 | GPU fallbacks must name the reason | keep the single `libx264 (CPU)` line | "silent fallback" was the actual complaint; `nvenc_available()` + `transcribe.gpu_available()` now log the specific cause, and `check_gpu.py` reports it standalone |
+| **viral-v2: multimodal via `media=` param on `complete_json`** | separate `complete_json_media`; provider calls inside video_events | shares the retry→repair→validate ladder for free; API keys/clients never leave llm.py |
+| viral-v2: audio DSP lives inside video_events.py | separate audio_events.py module | one module owns the ViralEvent timeline; DSP is ~60 lines |
+| viral-v2: DSP baseline = median/MAD with a 5%-of-median floor | mean/std z-score | loud events inflate mean/std and mask each other (a real laugh next to a real bang scored z≈2); robust stats keep the baseline at the quiet bed |
+| viral-v2: reaction boundary extension runs AFTER sentence snapping | before snapping | snap_to_sentences would undo the extension; reactions legitimately break sentence bounds ("end on the reaction" is the point) |
+| viral-v2: event merge ignores type families (any overlap within 2s merges; strongest event wins type/description) | merge only same-type | spec says "overlapping events within 2s merge, intensities take the max"; the strongest event is the reason the moment matters |
+| viral-v2: events into reframe via `event_cuts_rel` param | extend the EditPlan schema | events are render-time signal, not a timeline edit; avoids schema churn and refiner coupling |
+| viral-v2: `actors_hint` = presence signal only (pin to the face tracking already found) | face re-identification from the hint text | no new local ML models allowed; "nearest detected face, else keep current target" is the honest capability |
+| viral-v2: quota + per-chunk cache as flat JSON under cache/ | sqlite jobs.db tables | matches existing cache-dir conventions; trivially inspectable/deletable |
+| viral-v2: mock cloud path uses virtual chunks (no ffmpeg, no upload) | stream-copy chunk even under mock | keyless gate stays fast and network/ffmpeg-free while still exercising chunk-relative→absolute time math |
+| viral-v2: privacy gate also blocks OpenRouter frame extraction for local files | treat frames as "not the video" | frames ARE the video content; same privacy surface, same gate |
 
 ## 9. Phase gates (summary)
 

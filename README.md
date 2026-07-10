@@ -119,6 +119,16 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `captions.watermark.image_path` / `scale` | image mode: logo PNG (alpha respected) and its width as a fraction of the frame | "" / 0.12 |
 | `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling (opacity applies to text and image) | 36 / 0.6 / 40 |
 | `music.default_track` / `default_volume_db` | background-music defaults when the UI leaves them unset | "" / -22 |
+| `llm.openrouter_model` | OpenRouter vision model for viral_v2's frame fallback (free ids rotate — update here) | `qwen/qwen2.5-vl-72b-instruct:free` |
+| `viral_v2.enabled` | multimodal event detection (`false` = transcript-only, pre-feature output) | `true` |
+| `viral_v2.allow_upload` | **privacy gate**: upload LOCAL files for video analysis (URLs exempt) | `false` |
+| `viral_v2.providers` | cloud order; keyless → audio-DSP only | `[gemini, openrouter]` |
+| `viral_v2.chunk_minutes` / `frame_interval_s` | Gemini chunk size / OpenRouter frame sampling | 10 / 2.0 |
+| `viral_v2.reaction_window_s` | extend clip end into a reaction starting within this | 6.0 |
+| `viral_v2.min_shot_s` | reframe hard-cut hysteresis (min hold per shot) | 1.5 |
+| `viral_v2.max_daily_minutes` | daily cap on source minutes sent to cloud APIs | 120 |
+| `viral_v2.sparse_wpm` | below this words/min, candidates come from event clusters | 40 |
+| `viral_v2.weights` / `density_weight` / `peak_weight` | event-type multipliers and score-bonus scales | see config |
 | `ui.auto_open` | open the UI automatically when `app.py` starts | true |
 | `ui.window_mode` | `app` = chromeless Edge/Chrome window (`--app`); `tab` = normal browser tab | app |
 
@@ -161,6 +171,54 @@ re-render via the shared render path:
   tab pre-loaded with that clip's bounds.
 
 Design screenshots of the reworked UI live in `design/screenshots/`.
+
+## Viral detection v2 (multimodal events)
+
+Transcript-only selection is blind to what actually makes moments viral:
+laughter, reactions, falls, food reveals, expression shifts. Viral detection v2
+adds **eyes and ears** and fuses them into highlight selection:
+
+- **Video (Gemini, free tier)** — the source is split into 10-minute
+  stream-copy chunks, uploaded via the Gemini Files API and analyzed for
+  timestamped events (laughter, strong_reaction, physical_event, reveal,
+  expression_shift, energy_spike, profound_statement, conflict, celebration).
+- **Video fallback (OpenRouter, free Qwen VL)** — when Gemini is exhausted or
+  unavailable: 1 frame every 2 s per chunk, batched through a free vision model
+  (`OPENROUTER_API_KEY` in `.env`, model id in `llm.openrouter_model` — free
+  model ids rotate, so it lives in config).
+- **Audio (local DSP, always on)** — RMS energy spikes and laughter-like noise
+  bursts straight from the 16 kHz wav. No model, no network, works keyless —
+  this alone catches most crowd-laughter beats.
+
+What the events do:
+- **Scoring** — candidates gain event density + peak-intensity bonuses
+  (per-type weights in `viral_v2.weights`); the transcript score is never gated,
+  only added to.
+- **"End on the reaction"** — a laughter/reaction starting within
+  `reaction_window_s` after a clip's end pulls the end out to include it
+  (bounded by `clips.max_seconds`); clips also never start mid-event.
+- **Silent sources** — when speech is sparse (< `viral_v2.sparse_wpm` words/min)
+  candidates are generated straight from event clusters, so a 6-hour silent
+  recording with one fall still produces a clip of the fall.
+- **Reaction-aware reframe** — a reaction event with an actor hint hard-cuts the
+  crop to the tracked face at the event start (min hold `viral_v2.min_shot_s`;
+  no detected face → no jump).
+- **Audit trail** — every clip's `metadata.json` lists the events inside it, and
+  the clip cards show them ("😂 laughter 3x · ⚡ physical_event at 0:14").
+
+**Privacy**: a **local** video file is never uploaded to an AI provider unless
+`viral_v2.allow_upload: true` (default **false**; the UI toggle says exactly
+what it does: *sends video content to the AI provider for analysis*).
+YouTube-URL sources are exempt — they are already public. Audio DSP always runs
+locally either way.
+
+**Free-tier limits**: per-chunk results are cached in `cache/viral_events/`
+(hash-keyed — re-runs and resumed jobs are free), and
+`viral_v2.max_daily_minutes` (default 120) caps how many source minutes go to
+cloud APIs per day (`cache/viral_v2_usage.json`). When Gemini rate-limits or the
+cap is hit, ClipForge falls through to OpenRouter, then to audio-only events —
+the run never fails because of quota. `viral_v2.enabled: false` skips the stage
+entirely and reproduces transcript-only behavior.
 
 ## Engagement signals (virality v2)
 

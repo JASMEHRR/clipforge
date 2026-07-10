@@ -119,6 +119,33 @@ def _signals_html(vir: dict) -> str:
     return "".join(rows)
 
 
+_EVENT_EMOJI = {"laughter": "😂", "strong_reaction": "🤯",
+                "physical_event": "⚡", "reveal": "🎁",
+                "expression_shift": "😮", "energy_spike": "🔥",
+                "profound_statement": "💬", "conflict": "⚔️",
+                "celebration": "🎉", "other": "✨"}
+
+
+def _events_html(c: dict) -> str:
+    """viral_v2 audit line: '😂 laughter 3x · ⚡ physical_event at 0:14'."""
+    events = c.get("events") or []
+    if not events:
+        return ""
+    clip_start = c.get("start", 0.0)
+    by_type: dict[str, list] = {}
+    for e in events:
+        by_type.setdefault(e["type"], []).append(e)
+    parts = []
+    for etype, evs in by_type.items():
+        emoji = _EVENT_EMOJI.get(etype, "✨")
+        if len(evs) > 1:
+            parts.append(f"{emoji} {_esc_html(etype)} {len(evs)}x")
+        else:
+            t = max(0.0, evs[0]["t_start_s"] - clip_start)
+            parts.append(f"{emoji} {_esc_html(etype)} at {_fmt_ts(t)}")
+    return f"<div class='cf-source'>{' · '.join(parts)}</div>"
+
+
 def _clip_card(rank: int, c: dict) -> str:
     vir = c.get("virality") or {}
     band = vir.get("band") or ("Strong" if vir.get("score", 0) >= 70
@@ -149,6 +176,7 @@ def _clip_card(rank: int, c: dict) -> str:
         f"</div>"
         f"<div class='cf-meta'>{' · '.join(meta)}</div>"
         f"{_source_html(c)}"
+        f"{_events_html(c)}"
         f"{('<div class=cf-flags>' + flag_html + '</div>') if flag_html else ''}"
         f"{details}"
         f"</div>")
@@ -225,7 +253,8 @@ APP_CSS = """
 
 
 def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
-                   music_vol, style_on=True, style_profile="default",
+                   music_vol, style_on=True, viral_on=True,
+                   viral_upload=False, style_profile="default",
                    subs_mode="auto", cta_text="", highlight_hex="",
                    pacing="", clip_min="", clip_max="", watermark_text="",
                    watermark_pos="bottom-right", watermark_mode="text",
@@ -255,6 +284,10 @@ def _run_generator(file_path, url, preset, aspect, provider, n_clips, music,
         return
     if style_profile:  # point the refiner at the chosen profile
         cfg["style"]["profile"] = f"profiles/{style_profile}.json"
+    # viral_v2 per-run toggles (allow_upload only ever set from an explicit
+    # user click — config default stays false)
+    cfg.setdefault("viral_v2", {})["enabled"] = bool(viral_on)
+    cfg["viral_v2"]["allow_upload"] = bool(viral_upload)
     # Pacing only has a consumer inside the style refiner; say so honestly rather
     # than let the slider silently do nothing.
     if not style_on and str(pacing) not in ("", "0.5"):
@@ -724,11 +757,22 @@ def build_app() -> gr.Blocks:
                         music_vol = gr.Slider(-40, 0, value=-22, step=1,
                                               label="Music volume (dB)")
                         provider_in = gr.Dropdown(
-                            ["", "mock", "gemini", "groq", "ollama"], value="",
+                            ["", "mock", "gemini", "groq", "ollama",
+                             "openrouter"], value="",
                             label="LLM provider override")
                         style_in = gr.Checkbox(
                             value=bool(cfg.get("style", {}).get("enabled", True)),
                             label="Style refinement (hooks, pacing, endings, captions)")
+                        viral_in = gr.Checkbox(
+                            value=bool(cfg.get("viral_v2", {}).get("enabled", True)),
+                            label="Viral detection v2 (laughter, reactions, falls "
+                                  "— video AI + audio analysis)")
+                        viral_upload_in = gr.Checkbox(
+                            value=bool(cfg.get("viral_v2", {}).get("allow_upload", False)),
+                            label="Analyze LOCAL video files too — sends video "
+                                  "content to the AI provider for analysis "
+                                  "(YouTube URLs are always analyzed; audio "
+                                  "analysis stays local either way)")
                         profile_in = gr.Dropdown(
                             _profile_choices(),
                             value=(cfg.get("style", {}).get("profile", "profiles/default.json")
@@ -817,7 +861,8 @@ def build_app() -> gr.Blocks:
                 run_btn.click(_run_generator,
                               [file_in, url_in, preset_in, aspect_in, provider_in,
                                clips_in, music_in, music_vol,
-                               style_in, profile_in, subs_in,
+                               style_in, viral_in, viral_upload_in,
+                               profile_in, subs_in,
                                cta_in, highlight_in, pacing_in,
                                clip_min_in, clip_max_in,
                                watermark_in, watermark_pos_in,
