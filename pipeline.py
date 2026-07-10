@@ -458,6 +458,21 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         tmp.replace(final)
     _sub(0.85)
 
+    dup_caption_warning = None
+    if edit_plan and edit_plan["existing_subs"]["decision"] in ("replace", "keep"):
+        import subtitle_detect as subs_mod
+        anchor = edit_plan["caption_anchor"]
+        exclude_top = max(0.0, anchor - 0.16)
+        exclude_bottom = min(1.0, anchor + 0.14)
+        leftover = subs_mod.verify_no_leftover_subs(final, exclude_top, exclude_bottom, cfg)
+        if leftover:
+            dup_caption_warning = (
+                f"double-caption risk: leftover text band band=[{leftover['band_top_pct']:.2f},"
+                f"{leftover['band_bottom_pct']:.2f}] conf={leftover['confidence']:.2f} "
+                f"outside own caption zone [{exclude_top:.2f},{exclude_bottom:.2f}] "
+                f"(existing_subs={edit_plan['existing_subs']['decision']})")
+            log.warning("clip %02d: %s", i, dup_caption_warning)
+
     duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
@@ -467,6 +482,10 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     import style_refiner as style_mod
     import virality as virality_mod
     refine_summary = style_mod.summarize(edit_plan) if edit_plan else None
+    if refine_summary and dup_caption_warning:
+        # informational only — not part of EDIT_PLAN's validated schema/enum,
+        # so it rides in the metadata.json summary rather than plan["flags"]
+        refine_summary = {**refine_summary, "double_caption_warning": dup_caption_warning}
     # cuts within this clip (real pacing signal for the engagement score)
     n_cuts = len(scenes_mod.scene_cuts_in_range(scene_data, out_start, out_end))
     cuts_per_min = (n_cuts / (duration / 60.0)) if duration > 0 else None

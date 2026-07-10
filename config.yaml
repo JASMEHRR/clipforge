@@ -196,6 +196,8 @@ style:
     sample_fps: 1.0                # frames sampled per second across the clip range
     search_band_ratio: 0.45        # only inspect the lower 45% of the frame
     persistence_ratio: 0.30        # band must persist in >= this fraction of frames
+    window_seconds: 6.0            # ...within any sliding window this long, not the whole clip
+                                    # (catches per-line/intermittent burned subs a global average dilutes away)
     max_band_ratio: 0.18           # REPLACE-eligibility mirror (detector reports; refiner decides)
 
 sample:
