@@ -30,6 +30,32 @@ export function fmtClock(sec) {
 // one truthiness rule for the keep flag everywhere: absent = kept
 export const isKept = (clip) => clip.kept !== false;
 
+/* The one clip <video> used everywhere a clip is shown (Results, editor,
+ * upload queue) so there's a single implementation, not three. Defaults to a
+ * controllable, seekable player; pass opts to override (e.g. class, muted,
+ * or controls:null for a click-to-preview thumbnail). src is applied last so
+ * it can't be clobbered by opts. */
+export function clipVideo(src, opts = {}) {
+  return el("video", { controls: "", playsinline: "", preload: "metadata",
+                       ...opts, src });
+}
+
+/* Click-to-play preview modal with a large player. Used by the compact
+ * upload-queue rows, where a 64px inline video can't actually be watched. */
+export function openClipPreview(src, title = "Preview") {
+  const dlg = el("dialog", { class: "dialog dialog-preview" },
+    el("div", { class: "dialog-head" },
+      el("h2", { class: "t-title" }, title || "Preview"),
+      el("button", { class: "btn btn-ghost btn-sm", type: "button",
+                     "aria-label": "Close", onclick: () => dlg.close() }, "✕")),
+    el("div", { class: "dialog-body" },
+      clipVideo(src, { class: "clip-preview-video", autoplay: "" })));
+  document.body.append(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.showModal();
+  return dlg;
+}
+
 /* A labeled switch. Returns { node, input }. */
 export function toggle(checked, label) {
   const input = el("input", { type: "checkbox" });

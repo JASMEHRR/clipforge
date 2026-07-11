@@ -5,7 +5,7 @@
 
 import { api, uploadFile, watchRun } from "./api.js";
 import { createDotMatrix, miniScore } from "./dots.js";
-import { el, field, fmtClock, isKept, toast, toggle } from "./ui.js";
+import { clipVideo, el, field, fmtClock, isKept, toast, toggle } from "./ui.js";
 import {
   pickFont, pickMusic, pickPosition, pickPreset, pickProfile, pickShape,
   pickSubsMode,
@@ -592,8 +592,7 @@ function clipCard(jobName, clip, dots) {
   });
 
   card.append(
-    el("video", { controls: "", src: fileUrl("final.mp4"),
-                  preload: isKept(clip) ? "metadata" : "none" }),
+    clipVideo(fileUrl("final.mp4"), { preload: isKept(clip) ? "metadata" : "none" }),
     el("div", { class: "clip-body" },
       el("h2", { class: "clip-title" }, clip.metadata?.title || `Clip ${clip.index + 1}`),
       el("div", { class: "clip-facts" },
@@ -640,7 +639,7 @@ async function renderEditor(jobName, indexStr) {
   const nn = String(index).padStart(2, "0");
   const videoUrl = () =>
     `/api/files/${encodeURIComponent(jobName)}/clip_${nn}/final.mp4?t=${Date.now()}`;
-  const video = el("video", { controls: "", preload: "metadata", src: videoUrl() });
+  const video = clipVideo(videoUrl());
 
   const state = { preset: "", styleRefine: true, subsMode: "" };
 
