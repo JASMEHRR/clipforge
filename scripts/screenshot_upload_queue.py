@@ -13,6 +13,7 @@ Run:  .venv\\Scripts\\python scripts\\screenshot_upload_queue.py
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -45,8 +46,27 @@ def main() -> int:
     import upload_scheduler as sched
 
     scratch_log = ROOT / "cache" / "upload_log.screenshot_scratch.json"
-    scratch_log.write_text('{"uploads": {}}', encoding="utf-8")
+    # seed a couple of already-uploaded entries so the UPLOADED section shows;
+    # keys are fake so they don't exclude any real candidate from the queue
+    scratch_log.write_text(json.dumps({"uploads": {
+        "_demo/uploaded_a": {"video_id": "dEmoVid001", "title": "Best moment so far",
+                             "uploaded_at": "2026-07-11T18:30:00+05:30",
+                             "publish_at": "2026-07-11T18:30:00+05:30",
+                             "virality_score": 88},
+        "_demo/uploaded_b": {"video_id": "dEmoVid002", "title": "The plot twist",
+                             "uploaded_at": "2026-07-10T12:05:00+05:30",
+                             "publish_at": "2026-07-10T12:05:00+05:30",
+                             "virality_score": 74},
+    }}), encoding="utf-8")
     sched.LOG_FILE = scratch_log   # real candidates, but a throwaway log
+
+    # enable the upload-time end watermark so the confirm step shows the
+    # end-card preview (config is cached; force it before the app starts)
+    import config as config_mod
+    cfg = config_mod.load_config()
+    cfg["upload"]["end_watermark"] = {"enabled": True, "text": "ClipForge",
+                                      "duration_s": 1.2}
+    config_mod._cached = cfg
 
     def fake_build_service(service=None):
         return object()

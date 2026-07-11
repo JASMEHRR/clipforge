@@ -123,6 +123,7 @@ def _candidate_summary(c: dict) -> dict:
         "band": vir.get("band"), "source_name": meta.get("source_name", ""),
         "duration": (end - start) if start is not None and end is not None else None,
         "video_url": f"/api/youtube/queue/video/{c['key']}",
+        "duplicates": len(c.get("duplicates", [])),
     }
 
 
@@ -132,10 +133,22 @@ def youtube_queue():
     cfg = load_config()
     log_data = sched.load_log()
     candidates = sched.find_candidates(cfg, log_data)
+    wm = cfg.get("upload", {}).get("end_watermark", {})
+    uploaded = sorted(log_data.get("uploads", {}).values(),
+                      key=lambda e: e.get("uploaded_at", ""), reverse=True)
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
         "uploads_today": sched.uploads_today(log_data),
         "max_per_day": cfg.get("upload", {}).get("max_per_day", 3),
+        "end_watermark": {"enabled": bool(wm.get("enabled")),
+                          "text": wm.get("text", "ClipForge"),
+                          "duration_s": wm.get("duration_s", 1.2)},
+        "uploaded": [{"title": e.get("title", "Untitled"),
+                      "video_id": e.get("video_id", ""),
+                      "url": f"https://youtu.be/{e.get('video_id', '')}",
+                      "uploaded_at": e.get("uploaded_at", ""),
+                      "publish_at": e.get("publish_at", ""),
+                      "score": e.get("virality_score")} for e in uploaded],
     }
 
 

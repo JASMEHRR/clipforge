@@ -242,6 +242,10 @@ upload:
   ntfy_topic: ""                 # ntfy.sh topic for phone notifications; "" = disabled
   category_id: "22"              # matches youtube_upload.py's default (People & Blogs)
   watch_interval_s: 60           # poll interval for `python upload.py watch`
+  end_watermark:                 # branded outro appended ONLY to the uploaded
+    enabled: false               # copy (the archived render stays clean)
+    text: "ClipForge"            # wordmark on the end card (Doto brand font)
+    duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
 ui:
   auto_open: true               # open the UI automatically when ClipForge starts

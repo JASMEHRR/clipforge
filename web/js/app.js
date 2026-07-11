@@ -1048,16 +1048,9 @@ async function renderYouTube() {
 
   const recent = st.panel?.recent || [];
   right.append(el("h2", { class: "t-title", style: "margin:0" }, "Recent uploads"));
-  if (!recent.length) {
-    right.append(el("p", { class: "t-dim", style: "margin:0" },
-      "Nothing uploaded yet — finished clips appear here with their links."));
-  } else {
-    right.append(...recent.map((r) => el("div", { class: "yt-recent-row" },
-      el("a", { href: r.url, target: "_blank", rel: "noopener" },
-        r.title || r.video_id),
-      el("span", { class: "t-mono t-dim" },
-        r.publish_at ? new Date(r.publish_at).toLocaleDateString() : ""))));
-  }
+  right.append(el("p", { class: "t-dim", style: "margin:0" }, recent.length
+    ? "Your uploaded videos are listed in the Uploaded section below, with links."
+    : "Nothing uploaded yet — finished clips appear in the Uploaded section below."));
 
   if (st.authorized) {
     const queueCard = el("div", { class: "card uq-span", style: "display:grid;gap:16px" },

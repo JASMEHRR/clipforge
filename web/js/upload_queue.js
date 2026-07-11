@@ -25,7 +25,7 @@ const STATUS_BADGE = {
 };
 
 export function mountUploadQueue(container) {
-  const state = { candidates: [], selected: new Set() };
+  const state = { candidates: [], selected: new Set(), endWatermark: null };
   let openDialog = null;   // tracked so navigating away can force-close it
 
   const countIn = el("input", { class: "input t-mono", type: "number",
@@ -36,14 +36,19 @@ export function mountUploadQueue(container) {
   const rowsWrap = el("div", { class: "uq-rows" });
   const emptyMsg = el("p", { class: "t-dim", style: "margin:0" },
     "No clips are waiting to publish right now.");
+  const uploadedWrap = el("div", { class: "uq-rows" });
 
   container.append(
+    el("div", { class: "uq-section-label t-label" }, "Queue — waiting to publish"),
     el("div", { class: "uq-controls" },
       el("div", { class: "field-inline" },
         el("span", { class: "t-label" }, "Upload"), countIn,
         el("span", { class: "t-dim" }, "of the best clips now"), countBtn),
       selBtn),
-    rowsWrap);
+    rowsWrap,
+    el("div", { class: "uq-section-label t-label", style: "margin-top:8px" },
+      "Uploaded — already sent to YouTube"),
+    uploadedWrap);
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
   selBtn.addEventListener("click", () => openConfirm("manual", 0, [...state.selected]));
@@ -58,6 +63,8 @@ export function mountUploadQueue(container) {
       return;
     }
     state.candidates = data.candidates;
+    state.uploaded = data.uploaded || [];
+    state.endWatermark = data.end_watermark || null;
     state.selected = new Set([...state.selected].filter(
       (k) => data.candidates.some((c) => c.key === k)));
     const remaining = Math.max(0, (data.max_per_day ?? 3) - (data.uploads_today ?? 0));
@@ -69,11 +76,31 @@ export function mountUploadQueue(container) {
   function render() {
     selBtn.disabled = state.selected.size === 0;
     countBtn.disabled = state.candidates.length === 0;
-    if (!state.candidates.length) {
-      rowsWrap.replaceChildren(emptyMsg);
+    rowsWrap.replaceChildren(
+      ...(state.candidates.length ? state.candidates.map(candidateRow)
+        : [emptyMsg]));
+    renderUploaded();
+  }
+
+  function renderUploaded() {
+    const rows = state.uploaded || [];
+    if (!rows.length) {
+      uploadedWrap.replaceChildren(el("p", { class: "t-dim", style: "margin:0" },
+        "Nothing uploaded yet."));
       return;
     }
-    rowsWrap.replaceChildren(...state.candidates.map(candidateRow));
+    uploadedWrap.replaceChildren(...rows.map((u) =>
+      el("div", { class: "uq-uploaded-row" },
+        el("div", { class: "uq-meta" },
+          el("div", { class: "uq-title" }, u.title),
+          el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+            u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
+            u.score != null ? ` · score ${u.score}` : "")),
+        u.video_id
+          ? el("a", { class: "t-mono", style: "font-size:var(--text-xs)",
+                      href: u.url, target: "_blank", rel: "noopener" },
+              "youtu.be ↗")
+          : el("span", { class: "t-dim" }, "scheduled"))));
   }
 
   function candidateRow(c) {
@@ -96,7 +123,9 @@ export function mountUploadQueue(container) {
       el("div", { class: "uq-meta", onclick: () => setSel(!check.checked) },
         el("div", { class: "uq-title" }, c.title),
         el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
-          c.source_name, c.duration != null ? ` · ${fmtClock(c.duration)}` : "")),
+          c.source_name, c.duration != null ? ` · ${fmtClock(c.duration)}` : "",
+          c.duplicates ? ` · +${c.duplicates} duplicate`
+            + `${c.duplicates > 1 ? "s" : ""} collapsed` : "")),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
         c.band ? el("span", {
@@ -136,6 +165,18 @@ export function mountUploadQueue(container) {
     const warning = picked.warning
       ? el("p", { class: "field-error", style: "margin:0" }, picked.warning)
       : null;
+    // preview-first: show the branded end card that gets appended at upload
+    const wm = state.endWatermark;
+    const endCard = wm && wm.enabled
+      ? el("div", { class: "uq-endcard" },
+          el("img", { class: "uq-endcard-img", src: "/endcard.png",
+                      alt: "End card preview" }),
+          el("div", {},
+            el("div", { class: "t-label" }, "End card added on upload"),
+            el("p", { class: "t-dim", style: "margin:4px 0 0" },
+              `A "${wm.text}" end card (${wm.duration_s}s) is appended to each `
+              + "uploaded video. Your saved clips stay unchanged.")))
+      : null;
     const summary = el("p", { class: "t-dim", style: "margin:0" },
       `${picked.items.length} clip(s) will go live right now.`);
 
@@ -156,7 +197,7 @@ export function mountUploadQueue(container) {
           onclick: () => dlg.close(),
         }, "✕")),
       el("div", { class: "dialog-body", style: "display:grid;gap:16px" },
-        summary, warning, list, actions));
+        summary, warning, endCard, list, actions));
     document.body.append(dlg);
     dlg.showModal();
     openDialog = dlg;

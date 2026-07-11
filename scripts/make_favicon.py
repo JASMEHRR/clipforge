@@ -49,6 +49,20 @@ def _render(size: int) -> Image.Image:
     return img
 
 
+def _render_endcard(w: int = 270, h: int = 480,
+                    text: str = "ClipForge") -> Image.Image:
+    """A 9:16 end-card preview matching the upload-time outro (dark tile,
+    Doto wordmark in the accent) so the confirm dialog can show what gets
+    appended before a video is published."""
+    img = Image.new("RGBA", (w, h), (11, 11, 12, 255))   # 0x0b0b0c, the outro bg
+    d = ImageDraw.Draw(img)
+    font = _load_font(round(h * 0.09))
+    l, t, r, b = d.textbbox((0, 0), text, font=font)
+    d.text(((w - (r - l)) / 2 - l, (h - (b - t)) / 2 - t), text,
+           font=font, fill=ACCENT)
+    return img
+
+
 def main() -> int:
     if not FONT.exists():
         raise SystemExit(f"Doto font not found: {FONT}")
@@ -56,10 +70,10 @@ def main() -> int:
     master.save(WEB / "favicon.png")
     # .ico carries several sizes so the OS/browser picks a crisp one per context
     sizes = [16, 24, 32, 48, 64, 128, 256]
-    master.save(WEB / "favicon.ico",
-                sizes=[(s, s) for s in sizes])
+    master.save(WEB / "favicon.ico", sizes=[(s, s) for s in sizes])
+    _render_endcard().save(WEB / "endcard.png")
     print("wrote", WEB / "favicon.png", "and", WEB / "favicon.ico",
-          "sizes", sizes)
+          "sizes", sizes, "and", WEB / "endcard.png")
     return 0
 
 

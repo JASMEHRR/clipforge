@@ -293,13 +293,19 @@ def test_batch_zip_empty_queue_404(client):
     assert client.get("/api/batch/zip").status_code == 404
 
 
-def _write_candidate_clip(output_dir, job, clip, score, title="A clip"):
+def _write_candidate_clip(output_dir, job, clip, score, title=None):
     clip_dir = output_dir / job / clip
     clip_dir.mkdir(parents=True)
     (clip_dir / "final.mp4").write_bytes(b"\x00" * 10)
-    meta = {"title": title, "description": "Desc.", "hashtags": ["#a", "#shorts"],
+    # distinct title + non-overlapping source window per clip so the queue
+    # dedupe treats them as separate clips (its job, tested in
+    # test_upload_scheduler); clip_00 stays at 10-40 for the duration check
+    idx = int("".join(c for c in clip if c.isdigit()) or 0)
+    meta = {"title": title or f"Clip {job} {clip}", "description": "Desc.",
+            "hashtags": ["#a", "#shorts"],
             "virality": {"score": score, "band": "Strong"},
-            "original_source_start_s": 10.0, "original_source_end_s": 40.0,
+            "original_source_start_s": 10.0 + idx * 60,
+            "original_source_end_s": 40.0 + idx * 60,
             "source_name": "video.mp4"}
     (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
     return clip_dir

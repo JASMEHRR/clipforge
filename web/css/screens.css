@@ -446,6 +446,24 @@ body.dragging .drop-hint {
   background: #000;
   border: 1px solid var(--line);
 }
+.uq-endcard {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3); border: 1px solid var(--line);
+  border-radius: var(--r-sm); background: var(--bg-1);
+}
+.uq-endcard-img {
+  width: 54px; aspect-ratio: 9 / 16; flex: none;
+  object-fit: cover; border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+}
+.uq-section-label { display: block; }
+.uq-uploaded-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-4); padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.uq-uploaded-row:last-child { border-bottom: 0; }
+.uq-uploaded-row a { color: var(--ink); }
 .setup-pre {
   margin: 0; padding: var(--sp-4);
   background: var(--bg-0);

@@ -53,6 +53,46 @@ def test_find_candidates_filters_low_virality_and_dedupes(_isolate):
     assert candidates2 == []
 
 
+def _write_meta(output_dir, job, clip, score, title, src=None, start=None, end=None):
+    clip_dir = output_dir / job / clip
+    clip_dir.mkdir(parents=True)
+    (clip_dir / "final.mp4").write_bytes(b"\x00" * 10)
+    meta = {"title": title, "description": "Desc.", "hashtags": ["#a", "#b"],
+            "virality": {"score": score}}
+    if src is not None:
+        meta.update({"source_name": src, "original_source_start_s": start,
+                     "original_source_end_s": end})
+    (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_dedupe_same_title_across_jobs(_isolate):
+    output_dir = _isolate
+    _write_meta(output_dir, "job_a", "clip_00", 88, "Best moment ever")
+    _write_meta(output_dir, "job_b", "clip_03", 88, "Best moment ever!")  # same title
+    _write_meta(output_dir, "job_c", "clip_01", 70, "A different clip")
+    cands = sched.find_candidates(CFG, {"uploads": {}})
+    # the two identical-title clips collapse to one uploadable entry
+    assert len(cands) == 2
+    winner = next(c for c in cands if "moment" in c["meta"]["title"].lower())
+    assert winner["duplicates"] and len(winner["duplicates"]) == 1
+    # the collapsed duplicate is not itself an uploadable candidate
+    keys = {c["key"] for c in cands}
+    assert winner["duplicates"][0] not in keys
+
+
+def test_dedupe_same_source_window(_isolate):
+    output_dir = _isolate
+    _write_meta(output_dir, "job_a", "clip_00", 90, "Title one",
+                src="talk.mp4", start=10.0, end=40.0)
+    _write_meta(output_dir, "job_b", "clip_00", 80, "Title two",
+                src="talk.mp4", start=12.0, end=42.0)  # ~87% overlap, same source
+    _write_meta(output_dir, "job_c", "clip_00", 75, "Title three",
+                src="talk.mp4", start=200.0, end=230.0)  # different window
+    cands = sched.find_candidates(CFG, {"uploads": {}})
+    assert len(cands) == 2                         # the overlapping pair collapses
+    assert cands[0]["score"] == 90 and cands[0]["duplicates"]  # highest kept
+
+
 def test_find_candidates_respects_per_clip_exclude(_isolate):
     output_dir = _isolate
     _write_clip(output_dir, "job1", "clip_01", score=80, exclude=True)

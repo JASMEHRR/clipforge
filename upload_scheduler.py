@@ -7,11 +7,14 @@ auth/upload primitives were swapped for youtube_upload.py's shared ones."""
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import ffutil
 from config import ROOT
 from errors import UploadError, UploadQuotaError
 from logutil import get_logger
@@ -122,7 +125,50 @@ def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
                            "meta": meta, "score": score})
 
     candidates.sort(key=lambda c: c["score"], reverse=True)
-    return candidates
+    return _dedupe_candidates(candidates)
+
+
+def _norm_title(t: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()
+
+
+def _same_source_window(a: dict, b: dict) -> bool:
+    """True if two clips cover essentially the same source window (same source
+    file and >=50% overlap of their [start, end] ranges) — a re-run of the
+    same moment from a different job folder."""
+    ma, mb = a["meta"], b["meta"]
+    src = ma.get("source_name")
+    if not src or src != mb.get("source_name"):
+        return False
+    a0, a1 = ma.get("original_source_start_s"), ma.get("original_source_end_s")
+    b0, b1 = mb.get("original_source_start_s"), mb.get("original_source_end_s")
+    if None in (a0, a1, b0, b1):
+        return False
+    inter = max(0.0, min(a1, b1) - max(a0, b0))
+    union = max(a1, b1) - min(a0, b0)
+    return union > 0 and (inter / union) >= 0.5
+
+
+def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
+    """Collapse near-identical clips across job folders. Two clips are the same
+    if their titles match OR they cover the same source window. The
+    highest-score one (candidates are pre-sorted) stays uploadable; the rest
+    are recorded on its `duplicates` list and dropped from the queue, so a
+    duplicate can never be uploaded even from a stale UI (select_candidates
+    re-runs this). Winners keep the best-first order."""
+    winners: list[dict] = []
+    for c in candidates:
+        nt = _norm_title(c["meta"].get("title"))
+        dup_of = next(
+            (w for w in winners
+             if (nt and nt == _norm_title(w["meta"].get("title")))
+             or _same_source_window(c, w)), None)
+        if dup_of is not None:
+            dup_of["duplicates"].append(c["key"])
+            continue
+        c["duplicates"] = []
+        winners.append(c)
+    return winners
 
 
 def select_candidates(candidates: list[dict], mode: str, count: int = 0,
@@ -296,17 +342,96 @@ def panel_state(cfg: dict, log_data: dict, authorized: bool) -> dict:
 
 
 # ============================================================
+# End watermark (branded outro applied ONLY to the uploaded copy)
+# ============================================================
+BRAND_FONT = ROOT / "web" / "fonts" / "Doto-Variable.ttf"
+_END_TMP = ROOT / "cache" / "upload_end"
+
+
+def _safe_drawtext(s: str) -> str:
+    """Injection-proof drawtext text: letters/digits/space only."""
+    s = "".join(c for c in (s or "") if c.isalnum() or c == " ").strip()
+    return s[:40] or "ClipForge"
+
+
+def apply_end_watermark(video_path, cfg: dict) -> tuple[str, bool]:
+    """When `upload.end_watermark.enabled`, return (temp_mp4, True): a copy of
+    the clip with a short branded end card appended, so the UPLOADED file is
+    branded while the archived render stays clean. Otherwise (video_path,
+    False). Never raises into an upload — any probe/ffmpeg failure logs and
+    falls back to the original clean file. Caller deletes the temp when True."""
+    wm = cfg.get("upload", {}).get("end_watermark", {})
+    if not wm.get("enabled"):
+        return str(video_path), False
+    try:
+        return str(_render_end_card(Path(video_path), wm, cfg)), True
+    except Exception as e:  # noqa: BLE001 — branding must never block an upload
+        log.warning("end watermark skipped for %s (%s) — uploading clean file",
+                    video_path, e)
+        return str(video_path), False
+
+
+def _render_end_card(src: Path, wm: dict, cfg: dict) -> Path:
+    """Append a Doto-wordmark end card (matched to the clip's resolution/fps)
+    and return the temp mp4. One ffmpeg pass: the outro is a `color` filter
+    source with drawtext, concatenated after the (re-encoded) clip. Composes
+    over any existing render-time watermark without doubling it — the brand
+    card is on its own frames after the content, not overlaid on it."""
+    if not BRAND_FONT.exists():
+        raise UploadError(f"brand font missing: {BRAND_FONT}")
+    info = ffutil.probe(src)
+    w, h, fps = info["width"], info["height"], max(1.0, info["fps"])
+    dur = min(3.0, max(0.5, float(wm.get("duration_s", 1.2))))
+    text = _safe_drawtext(wm.get("text", "ClipForge"))
+    font = ffutil.filter_path(BRAND_FONT)
+    fade = max(0.2, dur * 0.4)
+
+    _END_TMP.mkdir(parents=True, exist_ok=True)
+    out = _END_TMP / f"{uuid.uuid4().hex[:12]}.mp4"
+
+    drawtext = (f"drawtext=fontfile='{font}':text='{text}':fontcolor=0xd71921:"
+                f"fontsize={max(12, int(h * 0.09))}:x=(w-text_w)/2:"
+                f"y=(h-text_h)/2:alpha='min(1,t/{fade:.2f})'")
+    graph = (
+        f"color=c=0x0b0b0c:s={w}x{h}:d={dur:.3f}:r={fps:.3f},{drawtext},"
+        "setsar=1,format=yuv420p[outv];"
+        f"[0:v]scale={w}:{h},setsar=1,fps={fps:.3f},format=yuv420p[clipv];")
+    args = ["-i", str(src), "-filter_complex", ""]
+    if info["has_audio"]:
+        graph += (
+            "[0:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[clipa];"
+            f"anullsrc=r=44100:cl=stereo,atrim=0:{dur:.3f},"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo[outa];"
+            "[clipv][clipa][outv][outa]concat=n=2:v=1:a=1[v][a]")
+        maps = ["-map", "[v]", "-map", "[a]", "-c:a", "aac",
+                "-b:a", cfg["render"]["audio_bitrate"]]
+    else:
+        graph += "[clipv][outv]concat=n=2:v=1:a=0[v]"
+        maps = ["-map", "[v]"]
+    args[-1] = graph
+    args += maps + ffutil.video_encode_args(cfg, final=True) \
+        + ["-movflags", "+faststart", str(out)]
+    ffutil.run_ffmpeg(args, progress_label="end watermark")
+    return out
+
+
+# ============================================================
 # Upload
 # ============================================================
 def upload_one(youtube, clip: dict, publish_at: datetime, category_id: str,
-               service=None) -> dict:
+               service=None, cfg: dict | None = None) -> dict:
     snippet = build_snippet(clip["meta"])
     publish_at_iso = publish_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     log.info("uploading %s -> '%s' (publishes %s)", clip["key"], snippet["title"],
              publish_at.strftime("%d %b %H:%M IST"))
-    return youtube_upload.upload_clip(
-        clip["video"], snippet, privacy="private", service=service or youtube,
-        publish_at=publish_at_iso, category_id=category_id)
+    video, is_temp = apply_end_watermark(clip["video"], cfg or {})
+    try:
+        return youtube_upload.upload_clip(
+            video, snippet, privacy="private", service=service or youtube,
+            publish_at=publish_at_iso, category_id=category_id)
+    finally:
+        if is_temp:
+            Path(video).unlink(missing_ok=True)
 
 
 def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> int:
@@ -329,7 +454,7 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> i
     done = 0
     for clip, publish_at in zip(batch, times):
         try:
-            result = upload_one(youtube, clip, publish_at, category_id)
+            result = upload_one(youtube, clip, publish_at, category_id, cfg=cfg)
         except UploadError as e:
             log.error("upload failed for %s: %s", clip["key"], e)
             notify("ClipForge upload FAILED", f"{clip['key']}: {e}\nWill retry next cycle.",
@@ -369,9 +494,10 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
     results = []
     for clip in clips:
         snippet = build_snippet(clip["meta"])
+        video, is_temp = apply_end_watermark(clip["video"], cfg)
         try:
             result = youtube_upload.upload_clip(
-                clip["video"], snippet, privacy="public", service=youtube,
+                video, snippet, privacy="public", service=youtube,
                 publish_at=None, category_id=category_id)
         except UploadError as e:
             log.error("upload now failed for %s: %s", clip["key"], e)
@@ -382,6 +508,9 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
             if on_progress:
                 on_progress(item)
             continue
+        finally:
+            if is_temp:
+                Path(video).unlink(missing_ok=True)
 
         now_iso = datetime.now(IST).isoformat()
         log_data["uploads"][clip["key"]] = {
