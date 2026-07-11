@@ -24,10 +24,22 @@ picks the moments and writes the metadata instead.
   **custom font upload** with a gallery that previews each font through the real
   caption-burn pipeline (not a CSS mock)
 - Post-render re-scoring: weak clips dropped (bottom 30%), at least 3 kept
-- Gradio UI: create, batch queue (+ watched `inbox/` folder), clip editing
-  with sentence-snapped re-render, YouTube upload, job history
+- Custom local UI (no internet needed to run it): paste a link or drop a
+  file, watch a dot-matrix pipeline board fill with a real ETA, then play,
+  edit, and download the finished clips. Batch queue (+ watched `inbox/`
+  folder), sentence-snapped re-render, YouTube upload center, job history —
+  every choice made through preview-first pickers (real rendered caption
+  frames, listenable music tracks), never a bare dropdown
 - Idempotent pipeline: cached transcripts/scenes, per-stage completion
   markers, `--force` to redo
+
+## What it looks like
+
+| | |
+|---|---|
+| ![New clips](design/screenshots/p3_01_home_1280.png) | ![Progress](design/screenshots/p3_03_progress_1280.png) |
+| ![Results](design/screenshots/p3_04_results_1280.png) | ![Caption styles](design/screenshots/p4_02_picker_caption_1280.png) |
+| ![Music](design/screenshots/p4_04_picker_music_1280.png) | ![Clip editor](design/screenshots/p4_09_editor_1280.png) |
 
 ## Quick start (Windows)
 
@@ -165,12 +177,12 @@ python upload.py report     # 28-day performance report + recommendations
 | `viral_v2.max_daily_minutes` | daily cap on source minutes sent to cloud APIs | 120 |
 | `viral_v2.sparse_wpm` | below this words/min, candidates come from event clusters | 40 |
 | `viral_v2.weights` / `density_weight` / `peak_weight` | event-type multipliers and score-bonus scales | see config |
-| `ui.auto_open` | open the UI automatically when `app.py` starts | true |
+| `ui.auto_open` | open the UI window automatically when ClipForge starts | true |
 | `ui.window_mode` | `app` = chromeless Edge/Chrome window (`--app`); `tab` = normal browser tab | app |
 
 Secrets live **only** in `.env` (see `.env.example`). Never commit `.env`.
 
-### Per-run options (Create → "More options")
+### Per-run options (New clips → Options / Style & branding)
 
 These override the config **for one run** (applied to a private copy — the saved
 config is never mutated) and thread through both the pipeline and single-clip
@@ -195,27 +207,27 @@ galleries: each option is a card you can see (caption styles and fonts are
 rendered through the real caption burn; music tracks have a play-preview
 button) instead of a bare dropdown name.
 
-### Background music (Create → "Choose background music")
+### Background music
 
-- Pick a specific track (press **Preview** to listen first — tracks download
+- Pick a specific track (press **Listen** to hear it first — tracks download
   on first use), **Match the video** (mood-matched to the transcript),
   **Surprise me** (random per batch job), or **No music**.
 - Music automatically ducks under speech and fades in/out; set the level with
-  the volume slider (default −22 dB).
+  the loudness slider (default −22 dB).
 - When a track's license asks for credit, the attribution line is appended to
   the clip description automatically.
 - **You are responsible for having rights to any track you add** to
   `assets/music/manifest.json`. Stick to sources like the YouTube Audio
   Library or Pixabay and keep the license field accurate.
 
-### Branding & fonts (Create → "Style & Branding")
+### Branding & fonts (New clips → Style & branding)
 
 - **Logo watermark**: choose watermark mode `image`, upload a transparent PNG.
   It is overlaid in the same encode as the captions (single pass, alpha
   respected) and scales to `captions.watermark.scale` of the frame width. Logos
   persist to `assets/user_branding/` (gitignored — your logo is never committed).
-- **Custom fonts + real-preview gallery**: click **Browse fonts** for a popup
-  listing every bundled and uploaded font, each shown as a large sample rendered
+- **Custom fonts + real-preview gallery**: the **Caption font** picker lists
+  every bundled and uploaded font, each shown as a large sample rendered
   through the *actual* caption-burn pipeline (`style_preview.py` reuses
   `captions.write_ass` + the FFmpeg subtitles filter), not a browser
   approximation. Upload `.ttf`/`.otf` files (validated, real family name read via
@@ -224,10 +236,11 @@ button) instead of a bare dropdown name.
 - **Clip provenance**: each result card shows `Source: mm:ss–mm:ss` — the
   original window the clip came from in the source video, before refinement
   shifted the bounds (`original_source_start_s`/`end_s` in `metadata.json`).
-- **Direct edit**: each card has an **Edit this clip** button that opens the Edit
-  tab pre-loaded with that clip's bounds.
+- **Direct edit**: each card has an **Edit** button that opens the clip editor
+  pre-loaded with that clip's bounds.
 
-Design screenshots of the reworked UI live in `design/screenshots/`.
+Design screenshots of the UI live in `design/screenshots/`; the design system
+itself is documented in `design/styleguide.html`.
 
 ## Viral detection v2 (multimodal events)
 
@@ -365,8 +378,8 @@ git pull
 pip install --no-input -r requirements.txt
 ```
 
-There is also a built-in one-click self-updater (launch banner → **Install
-update**): it checks GitHub, downloads only changed files (full-zipball
+There is also a built-in one-click self-updater (a launch notice points to
+**Settings → Install**): it checks GitHub, downloads only changed files (full-zipball
 fallback), verifies every `.py` compiles, backs up and applies, and rolls back
 automatically on any failure. Your `config.yaml` is preserved (the incoming one
 lands as `config.yaml.new`). Observed behaviour and its one gap (no dry-run;
@@ -393,7 +406,8 @@ Optional UI screenshots (dev-only, not in `requirements.txt`):
 
 ```bash
 pip install playwright && python -m playwright install chromium
-.venv/Scripts/python.exe scripts/screenshot_ui.py   # → design/screenshots/
+.venv/Scripts/python.exe scripts/screenshot_phase3.py   # core loop → design/screenshots/
+.venv/Scripts/python.exe scripts/screenshot_phase4.py   # all screens + pickers
 ```
 
 Architecture and design decisions: `PLAN.md`. Requirement checklist and known

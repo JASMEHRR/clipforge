@@ -1182,3 +1182,10 @@ async function renderHistory() {
 // ---------------------------------------------------------------- boot ----
 
 navigate();
+
+// quiet once-per-launch nudge when a newer version is available
+api.get("/api/update").then((u) => {
+  if (u.state?.update_available) {
+    toast(`A new version (${u.state.latest}) is ready — install it in Settings.`);
+  }
+}).catch(() => { /* offline or updater unavailable — stay quiet */ });

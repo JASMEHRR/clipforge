@@ -241,7 +241,7 @@ upload:
   watch_interval_s: 60           # poll interval for `python upload.py watch`
 
 ui:
-  auto_open: true               # open the UI automatically when app.py starts
+  auto_open: true               # open the UI automatically when ClipForge starts
   window_mode: app              # app = chromeless --app window (Edge/Chrome); tab = normal browser tab
 
 debug: false                    # true: persist transcripts, prompts, raw LLM responses,

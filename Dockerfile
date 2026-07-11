@@ -22,11 +22,11 @@ RUN pip install --no-cache-dir --no-input -r requirements.txt
 # bundled OFL fonts ship with the image — captions never depend on system fonts
 COPY . .
 
-ENV GRADIO_SERVER_NAME=0.0.0.0 \
-    GRADIO_SERVER_PORT=7860
+ENV CLIPFORGE_HOST=0.0.0.0 \
+    CLIPFORGE_PORT=7860
 
 EXPOSE 7860
 
 VOLUME ["/app/output", "/app/cache", "/app/samples", "/app/inbox"]
 
-CMD ["python", "app.py"]
+CMD ["python", "-m", "server.main"]

@@ -1,8 +1,7 @@
 """Entry point: `python -m server.main`. Serves the API + frontend and opens
-the chromeless app window (same launcher path the Gradio UI used).
+the chromeless app window.
 
-Port: CLIPFORGE_PORT env, default 7861 while the Gradio UI still owns 7860
-(flips to 7860 when Gradio is retired).
+Port: CLIPFORGE_PORT env, default 7860.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ log = get_logger("server")
 
 
 def main() -> None:
-    port = int(os.environ.get("CLIPFORGE_PORT", "7861"))
+    port = int(os.environ.get("CLIPFORGE_PORT", "7860"))
     host = os.environ.get("CLIPFORGE_HOST", "127.0.0.1")
     cfg = load_config()
     if host == "127.0.0.1":
