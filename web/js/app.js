@@ -978,7 +978,7 @@ async function renderYouTube() {
           el("div", { class: "t-title" }, slot),
           el("div", { class: "t-label" }, "Next upload slot"))),
       el("p", { class: "t-dim", style: "margin:0;font-size:var(--text-sm)" },
-        "Uploads go up unlisted first and go public at the scheduled time. ",
+        "Uploads start private and go public at the scheduled time. ",
         "Use a clip's Auto-upload switch to leave it out."));
   }
 

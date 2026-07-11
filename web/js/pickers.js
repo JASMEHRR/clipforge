@@ -93,12 +93,16 @@ export async function pickFont(current, preset) {
   }
 
   return new Promise((resolve) => {
+    // after an upload the dialog closes and re-opens with the new font; the
+    // re-opened picker's choice must win, not the close-with-null underneath
+    let reopened = false;
     fileIn.addEventListener("change", async () => {
       const file = fileIn.files[0];
       if (!file) return;
       try {
         const { family } = await uploadFile("/api/uploads/font", file);
         toast(`Added ${family}.`, "is-ok");
+        reopened = true;
         document.querySelector("dialog.dialog")?.close();
         resolve(await pickFont(family, style));   // re-open with it selected
       } catch (e) {
@@ -108,7 +112,7 @@ export async function pickFont(current, preset) {
     pick({
       title: "Caption font", options, current: current || "",
       footer: el("div", {}, addBtn, fileIn),
-    }).then(resolve);
+    }).then((v) => { if (!reopened) resolve(v); });
   });
 }
 
