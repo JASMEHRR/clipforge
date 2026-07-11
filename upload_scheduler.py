@@ -7,7 +7,6 @@ auth/upload primitives were swapped for youtube_upload.py's shared ones."""
 from __future__ import annotations
 
 import json
-import re
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -27,12 +26,6 @@ LOG_FILE = ROOT / "cache" / "upload_log.json"
 IST = timezone(timedelta(hours=5, minutes=30))
 MIN_VIEWS_FOR_ANALYTICS = 500
 
-JUNK_TAGS = {
-    "know", "next", "thing", "things", "after", "before", "important",
-    "really", "actually", "very", "just", "like", "want", "need", "make",
-    "made", "good", "best", "this", "that", "what", "when", "where", "how",
-    "why", "who", "will", "would", "could", "should", "reels", "tiktok",
-}
 
 
 # ============================================================
@@ -164,19 +157,19 @@ def cap_warning(cfg: dict, log_data: dict, requested_count: int) -> str | None:
 # Title / description / hashtags
 # ============================================================
 def clean_hashtags(raw: list, max_hashtags: int = 5) -> list[str]:
-    tags = []
+    """Upload-time cap: the best `max_hashtags` topic tags plus #shorts, using
+    the same junk filter as metadata (metadata.clean_tag) so there's one
+    policy. Input is already topic-first from metadata.topic_hashtags, so the
+    leading `max_hashtags` are the strongest tags."""
+    from metadata import clean_tag
+    tags: list[str] = []
     for t in raw or []:
-        word = t.lstrip("#").strip().lower()
-        if not word or word in JUNK_TAGS or len(word) < 3:
-            continue
-        if not re.fullmatch(r"[a-z0-9]+", word):
-            continue
-        if word not in tags:
+        word = clean_tag(t)
+        if word and word != "shorts" and word not in tags:
             tags.append(word)
         if len(tags) >= max_hashtags:
             break
-    if "shorts" not in tags:
-        tags.append("shorts")
+    tags.append("shorts")  # always present, always last
     return ["#" + t for t in tags]
 
 
