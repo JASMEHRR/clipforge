@@ -252,6 +252,10 @@ def test_presets_and_music_endpoints(client):
     assert isinstance(tracks, list)
 
 
+def test_batch_zip_empty_queue_404(client):
+    assert client.get("/api/batch/zip").status_code == 404
+
+
 def test_upload_size_cap(client, monkeypatch):
     import server.routes_run as rr
     monkeypatch.setattr(rr, "load_config",

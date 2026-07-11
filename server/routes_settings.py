@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from config import load_config, save_config
@@ -130,6 +131,22 @@ def batch_add(req: BatchAddRequest):
         q.add(line, **({"music": resolved} if resolved else {}))
         n += 1
     return {"queued": n, "rows": q.status_rows()}
+
+
+@router.get("/api/batch/zip")
+def batch_zip():
+    """One zip of every finished queue job (mirrors the old UI's
+    'Download everything')."""
+    from batch import get_queue
+    from bundle import zip_jobs
+    dirs = [i["job_dir"] for i in get_queue().items
+            if i["status"] == "done" and i.get("job_dir")]
+    if not dirs:
+        raise HTTPException(404, "Nothing finished in the queue yet.")
+    try:
+        return FileResponse(str(zip_jobs(dirs)), filename="clipforge-all.zip")
+    except Exception as e:  # noqa: BLE001 — zip failure must be a sentence
+        raise HTTPException(500, friendly(e, "Packaging the clips"))
 
 
 class InboxRequest(BaseModel):
