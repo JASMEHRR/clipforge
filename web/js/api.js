@@ -37,7 +37,7 @@ export function uploadFile(url, file, onProgress) {
     xhr.onload = () => {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* keep null */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      if (xhr.status >= 200 && xhr.status < 300 && data) resolve(data);
       else reject(new Error((data && data.detail)
         || "Uploading that file didn't work — try again."));
     };

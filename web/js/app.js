@@ -292,13 +292,14 @@ function renderRun(runId) {
       dm.update({ state: "error" });
       stageTitle.textContent = "That didn't work";
       detail.textContent = message;
+      cancelBtn.removeEventListener("click", onCancel);
       cancelBtn.textContent = "Back";
       cancelBtn.disabled = false;
       cancelBtn.onclick = () => { location.hash = "#/"; };
     },
   });
 
-  cancelBtn.addEventListener("click", async () => {
+  async function onCancel() {
     cancelBtn.disabled = true;
     cancelBtn.textContent = "Stopping…";
     try {
@@ -308,15 +309,23 @@ function renderRun(runId) {
       cancelBtn.disabled = false;
       cancelBtn.textContent = "Stop";
     }
-  });
+  }
+  cancelBtn.addEventListener("click", onCancel);
 
   // page refresh mid-run: the registry may already hold a snapshot
   api.get(`/api/runs/${runId}`).then((st) => {
     if (st.snapshot) apply(st.snapshot);
     if (st.state === "done") location.hash = `#/results/${encodeURIComponent(runId)}`;
-  }).catch(() => {
-    toast("That run isn't active anymore — check your finished clips.");
-    location.hash = "#/";
+  }).catch(async () => {
+    // registry entry gone (finished run + app restart) — the clips may
+    // still be on disk; land on results instead of stranding the user
+    try {
+      await api.get(`/api/jobs/${encodeURIComponent(runId)}`);
+      location.hash = `#/results/${encodeURIComponent(runId)}`;
+    } catch {
+      toast("That run isn't active anymore — check your finished clips.");
+      location.hash = "#/";
+    }
   });
 
   cleanup = () => { stop(); dm.destroy(); };
@@ -355,10 +364,10 @@ async function renderResults(jobName) {
   }
 
   const clips = [...(job.clips || [])]
-    .sort((a, b) => (b.kept === true) - (a.kept === true) || a.index - b.index);
+    .sort((a, b) => isKept(b) - isKept(a) || a.index - b.index);
   const src = clips[0]?.source_name || job.source || "";
   sub.textContent = clips.length
-    ? `${clips.filter((c) => c.kept).length} clips from ${src}`
+    ? `${clips.filter(isKept).length} clips from ${src}`
     : "";
 
   if (!clips.length) {
@@ -370,6 +379,9 @@ async function renderResults(jobName) {
 
   grid.replaceChildren(...clips.map((clip) => clipCard(jobName, clip, dots)));
 }
+
+// one truthiness rule for the keep flag everywhere: absent = kept
+const isKept = (clip) => clip.kept !== false;
 
 function clipCard(jobName, clip, dots) {
   const nn = String(clip.index).padStart(2, "0");
@@ -394,14 +406,12 @@ function clipCard(jobName, clip, dots) {
   const srcEnd = clip.original_source_end_s ?? clip.end;
 
   const keptBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button" });
-  const card = el("article", {
-    class: `card card-hover clip-card ${clip.kept ? "" : "is-discarded"}`,
-  });
+  const card = el("article", { class: "card card-hover clip-card" });
   const setKeptUi = (kept) => {
     keptBtn.textContent = kept ? "Discard" : "Keep";
     card.classList.toggle("is-discarded", !kept);
   };
-  setKeptUi(clip.kept !== false);
+  setKeptUi(isKept(clip));
   keptBtn.addEventListener("click", async () => {
     const next = card.classList.contains("is-discarded");
     keptBtn.disabled = true;
@@ -430,7 +440,8 @@ function clipCard(jobName, clip, dots) {
   });
 
   card.append(
-    el("video", { controls: "", preload: "metadata", src: fileUrl("final.mp4") }),
+    el("video", { controls: "", src: fileUrl("final.mp4"),
+                  preload: isKept(clip) ? "metadata" : "none" }),
     el("div", { class: "clip-body" },
       el("h2", { class: "clip-title" }, clip.metadata?.title || `Clip ${clip.index + 1}`),
       el("div", { class: "clip-facts" },
