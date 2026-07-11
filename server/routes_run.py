@@ -101,7 +101,7 @@ class RunRequest(BaseModel):
     target_count: int | None = None   # None/0 = automatic
     provider: str | None = None
     music: str | None = None          # "", track id, "auto", "random"
-    music_volume_db: float = -22.0
+    music_volume_db: float = -18.0
     style_refine: bool = True
     viral: bool = True
     viral_upload: bool = False        # privacy gate: explicit opt-in only

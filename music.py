@@ -25,7 +25,7 @@ log = get_logger("music")
 
 MUSIC_DIR = ROOT / "assets" / "music"
 MANIFEST_PATH = MUSIC_DIR / "manifest.json"
-DEFAULT_VOLUME_DB = -22.0
+DEFAULT_VOLUME_DB = -18.0
 _USER_AGENT = "ClipForge/2.0 (+https://github.com/; background-music fetch)"
 _download_lock = threading.Lock()
 
@@ -127,9 +127,13 @@ def add_music(clip_path: str | Path, music_path: str | Path,
         "[0:a]asplit=2[sc][spk];"
         f"[1:a]atrim=0:{dur:.3f},asetpts=N/SR/TB,volume={volume_db:.1f}dB,"
         f"afade=t=in:st=0:d=1,afade=t=out:st={fout:.3f}:d=1[m];"
-        # duck the music using the speech as the side-chain key
-        "[m][sc]sidechaincompress=threshold=0.02:ratio=8:attack=15:"
-        "release=300[mduck];"
+        # Duck the music under speech, gently: threshold ~-26 dB (0.05) so
+        # only real speech triggers it, ratio 3 and a quick 200 ms release so
+        # the bed dips a few dB and recovers between words instead of being
+        # pinned inaudible. (Was threshold=0.02:ratio=8:release=300, which
+        # stacked with the base attenuation to leave the bed ~-40 dB.)
+        "[m][sc]sidechaincompress=threshold=0.05:ratio=3:attack=15:"
+        "release=200[mduck];"
         "[spk][mduck]amix=inputs=2:duration=first:normalize=0[aout]"
     )
     run_ffmpeg(["-i", clip_path, "-stream_loop", "-1", "-i", music_path,

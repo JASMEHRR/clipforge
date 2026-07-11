@@ -228,14 +228,17 @@ music:
   # Background music is chosen per run in the UI (dropdown + volume). These are
   # the defaults used when the UI leaves them unset.
   default_track: ""             # "" = no music unless picked in the UI
-  default_volume_db: -22        # ducked under speech
+  default_volume_db: -18        # gently ducked under speech (audible bed)
 
 upload:
-  auto_enabled: false            # off by default; turn on once YouTube is authorized
-  max_per_day: 3
-  max_per_run: 2
+  auto_enabled: true            # off by default; turn on once YouTube is authorized
+  max_per_day: 5
+  max_per_run: 5
   min_virality: 40
-  publish_slots_ist: [12, 19]    # fallback publish hours while the channel is young
+  publish_slots_ist: [17]    # fallback publish hours while the channel is young
+  slot_spacing_minutes: 60      # min gap between uploads; extra slots pack after the
+                                # last configured hour so max_per_day is reachable
+                                # even with fewer configured hours than uploads/day
   ntfy_topic: ""                 # ntfy.sh topic for phone notifications; "" = disabled
   category_id: "22"              # matches youtube_upload.py's default (People & Blogs)
   watch_interval_s: 60           # poll interval for `python upload.py watch`

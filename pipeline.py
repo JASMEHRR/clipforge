@@ -63,7 +63,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             preset: str | None = None, aspect: str = "9:16",
             debug: bool | None = None, target_count: int | None = None,
             full_transcribe: bool = False, music: str | None = None,
-            music_volume_db: float = -22.0, progress_cb=None,
+            music_volume_db: float = -18.0, progress_cb=None,
             tracker=None, style_refine: bool | None = None,
             subs_mode: str | None = None, cancel=None) -> dict:
     import captions as captions_mod
@@ -387,7 +387,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
                 metadata_mod, scenes_mod, music_path=None, music_attr="",
-                music_volume_db=-22.0, tracker=None, edit_plan=None,
+                music_volume_db=-18.0, tracker=None, edit_plan=None,
                 events=None) -> dict:
     def _sub(frac: float) -> None:
         if tracker:
@@ -610,8 +610,8 @@ def main(argv=None):
     ap.add_argument("--music", default=None,
                     help="background music: 'auto' (mood match) or a track id "
                          "(see music.py --list)")
-    ap.add_argument("--music-volume", type=float, default=-22.0,
-                    help="background music volume in dB (default -22)")
+    ap.add_argument("--music-volume", type=float, default=-18.0,
+                    help="background music volume in dB (default -18)")
     ap.add_argument("--zip", action="store_true",
                     help="also write a clips_bundle.zip of kept clips")
     ap.add_argument("--no-style", action="store_true",

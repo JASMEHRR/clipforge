@@ -10,6 +10,7 @@ import {
   pickFont, pickMusic, pickPosition, pickPreset, pickProfile, pickShape,
   pickSubsMode,
 } from "./pickers.js";
+import { mountUploadQueue } from "./upload_queue.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -55,7 +56,7 @@ function renderHome() {
   // per-run options (empty string = leave the app's defaults untouched)
   const o = {
     count: 0, aspect: "9:16", preset: "", font: "", music: "",
-    musicVol: -22, cta: "", highlight: "", pacing: "", clipMin: "",
+    musicVol: -18, cta: "", highlight: "", pacing: "", clipMin: "",
     clipMax: "", subsMode: "", profile: "", wmMode: "text", wmText: "",
     wmImage: "", wmImageName: "", wmPos: "bottom-right",
   };
@@ -111,7 +112,7 @@ function renderHome() {
     }
   });
   const musicVol = el("input", {
-    class: "range", type: "range", min: "-40", max: "-10", value: "-22",
+    class: "range", type: "range", min: "-40", max: "-10", value: "-18",
     "aria-label": "Music loudness",
   });
   musicVol.addEventListener("input", () => { o.musicVol = Number(musicVol.value); });
@@ -993,6 +994,17 @@ async function renderYouTube() {
         r.title || r.video_id),
       el("span", { class: "t-mono t-dim" },
         r.publish_at ? new Date(r.publish_at).toLocaleDateString() : ""))));
+  }
+
+  if (st.authorized) {
+    const queueCard = el("div", { class: "card uq-span", style: "display:grid;gap:16px" },
+      el("div", {},
+        el("h2", { class: "t-title", style: "margin:0" }, "Upload queue"),
+        el("p", { class: "t-dim", style: "margin:4px 0 0" },
+          "Send clips right now instead of waiting for the next slot.")));
+    body.append(queueCard);
+    const uq = mountUploadQueue(queueCard);
+    cleanup = uq.dispose;
   }
 }
 
