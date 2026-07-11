@@ -94,6 +94,43 @@ def test_run_lifecycle_ws_and_status(client, tmp_path, monkeypatch):
     assert st["result"]["job_dir"].endswith("_test")
 
 
+def test_list_runs_shows_in_flight_run(client, tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run_job(source, cfg=None, tracker=None, job_dir=None,
+                     cancel=None, **kw):
+        tracker.start("ingest", "downloading")
+        tracker.update("ingest", 0.5, "halfway")
+        started.set()
+        release.wait(timeout=5)
+        tracker.finish("ingest")
+        tracker.finish("done", "completed")
+        return _fake_job(job_dir)
+
+    monkeypatch.setattr(pipeline, "run_job", fake_run_job)
+    d = tmp_path / "20260711-000001_activity"
+    d.mkdir()
+    monkeypatch.setattr(pipeline, "new_job_dir", lambda cfg, src: d)
+
+    run_id = client.post("/api/runs",
+                         json={"source": "https://example.com/v"}).json()["run_id"]
+    assert started.wait(timeout=5)
+
+    runs = client.get("/api/runs").json()["runs"]
+    mine = next(r for r in runs if r["run_id"] == run_id)
+    assert mine["state"] == "running"
+    assert mine["stage"] == "Preparing your video"   # plain-language label
+    assert 0.0 <= mine["overall"] <= 1.0
+
+    release.set()
+    _wait_state(client, run_id, "done")
+    # still listed after finishing (registry keeps it for the session)
+    done = next(r for r in client.get("/api/runs").json()["runs"]
+                if r["run_id"] == run_id)
+    assert done["state"] == "done"
+
+
 def test_run_cancel(client, tmp_path, monkeypatch):
     started = threading.Event()
 

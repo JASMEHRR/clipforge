@@ -50,7 +50,11 @@ export function uploadFile(url, file, onProgress) {
 }
 
 /* Live run progress: WebSocket first, 2s polling fallback if the socket
- * drops while the run is still going. Returns a stop() function. */
+ * drops while the run is still going. The pipeline runs entirely server-side,
+ * so this only mirrors state — dropping the connection never stops the job.
+ * Background tabs throttle timers and can drop the socket, so on returning to
+ * the tab we immediately re-sync from the poll endpoint and reconnect the
+ * socket, instead of waiting on a throttled interval. Returns a stop(). */
 export function watchRun(runId, handlers) {
   let finished = false;
   let poll = 0;
@@ -65,6 +69,8 @@ export function watchRun(runId, handlers) {
     else handlers.onError(payload.error || "This run didn't finish — try again.");
   };
 
+  const clearPoll = () => { if (poll) { clearInterval(poll); poll = 0; } };
+
   const startPolling = () => {
     if (finished || poll) return;
     poll = setInterval(async () => {
@@ -78,22 +84,45 @@ export function watchRun(runId, handlers) {
     }, 2000);
   };
 
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  try {
-    ws = new WebSocket(`${proto}://${location.host}/ws/runs/${runId}`);
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "snapshot") handlers.onSnapshot(msg.data);
-      else terminal(msg.type, msg);
-    };
-    ws.onerror = startPolling;
-    ws.onclose = () => { if (!finished) startPolling(); };
-  } catch {
-    startPolling();
-  }
+  // One immediate catch-up, independent of any throttled timer.
+  const syncNow = async () => {
+    if (finished) return;
+    try {
+      const st = await api.get(`/api/runs/${runId}`);
+      if (st.snapshot) handlers.onSnapshot(st.snapshot);
+      if (st.state !== "running") terminal(st.state, st);
+    } catch { /* transient — WS/poll will recover; don't kill the view */ }
+  };
+
+  const connect = () => {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    try {
+      ws = new WebSocket(`${proto}://${location.host}/ws/runs/${runId}`);
+      ws.onopen = clearPoll;   // socket back: stop the fallback poll
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "snapshot") handlers.onSnapshot(msg.data);
+        else terminal(msg.type, msg);
+      };
+      ws.onerror = startPolling;
+      ws.onclose = () => { if (!finished) startPolling(); };
+    } catch {
+      startPolling();
+    }
+  };
+
+  const onVisible = () => {
+    if (document.visibilityState !== "visible" || finished) return;
+    syncNow();  // catch up on anything missed while backgrounded
+    if (!ws || ws.readyState > WebSocket.OPEN) connect();  // reconnect if dropped
+  };
+  document.addEventListener("visibilitychange", onVisible);
+
+  connect();
 
   function stop() {
-    if (poll) { clearInterval(poll); poll = 0; }
+    clearPoll();
+    document.removeEventListener("visibilitychange", onVisible);
     if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
   }
   return stop;

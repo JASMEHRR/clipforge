@@ -20,6 +20,7 @@ let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
 const routes = {
   "": renderHome,
   run: renderRun,
+  activity: renderActivity,
   results: renderResults,
   edit: renderEditor,
   queue: renderQueue,
@@ -469,6 +470,69 @@ function renderRun(runId) {
   });
 
   cleanup = () => { stop(); dm.destroy(); };
+}
+
+// ------------------------------------------------------------ activity ----
+
+function renderActivity() {
+  const list = el("div", { class: "activity-list" });
+  const empty = el("p", { class: "t-dim", style: "margin:0" },
+    "No runs yet this session. Start one from New clips — it keeps going even "
+    + "if you switch tabs or close this page.");
+
+  const row = (r) => {
+    const pct = Math.round((r.overall || 0) * 100);
+    const label = r.state === "running" ? "Working"
+      : r.state === "done" ? "Done"
+      : r.state === "error" ? "Didn't work"
+      : r.state === "cancelled" ? "Stopped" : r.state;
+    const badge = el("span", {
+      class: `badge ${r.state === "done" ? "badge-ok"
+        : r.state === "error" ? "badge-warn"
+        : r.state === "running" ? "badge-live" : ""}`,
+    }, label);
+    // running -> live progress view; anything finished -> its clips
+    const href = r.state === "running"
+      ? `#/run/${encodeURIComponent(r.run_id)}`
+      : `#/results/${encodeURIComponent(r.run_id)}`;
+    const sub = r.state === "running" ? (r.stage || "Working…")
+      : r.state === "error" ? (r.error || "Didn't finish")
+      : (r.stage || "");
+    return el("a", { class: "activity-row", href },
+      el("div", { class: "activity-meta" },
+        el("div", { class: "activity-title t-mono" }, r.run_id),
+        el("div", { class: "t-dim", style: "font-size:var(--text-xs)" }, sub)),
+      el("div", { class: "activity-bar" },
+        el("div", {
+          class: `activity-fill ${r.state === "error" ? "is-error" : ""}`,
+          style: `width:${r.state === "running" ? pct : 100}%`,
+        })),
+      el("div", { class: "activity-side" }, badge,
+        el("span", { class: "t-mono t-dim" },
+          r.state === "running" ? `${pct}%` : "")));
+  };
+
+  const refresh = async () => {
+    let data;
+    try { data = await api.get("/api/runs"); }
+    catch { return; }  // server briefly unreachable — next tick retries
+    list.replaceChildren(...(data.runs.length ? data.runs.map(row) : [empty]));
+  };
+
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Activity"),
+        el("h1", { class: "t-display" }, "Runs in progress"),
+        el("p", { class: "t-dim", style: "margin:4px 0 0" },
+          "Clip-making runs on the app, not this page — a run keeps going if "
+          + "you switch tabs, minimize, or close the window. Reopen here to "
+          + "check on it."))),
+    el("div", { class: "card card-flat" }, list)));
+
+  refresh();
+  const timer = setInterval(refresh, 2000);
+  cleanup = () => clearInterval(timer);
 }
 
 // ------------------------------------------------------------- results ----

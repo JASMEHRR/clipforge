@@ -202,6 +202,31 @@ def _run_status(handle: jobs.RunHandle) -> dict:
             "result": handle.result if handle.state == "done" else None}
 
 
+def _run_list_item(handle: jobs.RunHandle) -> dict:
+    """Compact summary for the Activity list: id, state, progress and the
+    current stage label, derived from the handle's latest snapshot."""
+    snap = handle.snapshot() or {}
+    stages = snap.get("stages", [])
+    running = [s for s in stages if s.get("state") == "running"]
+    stage = (running[-1]["label"] if running
+             else stages[-1]["label"] if stages else None)
+    return {"run_id": handle.id, "state": handle.state,
+            "overall": snap.get("overall", 0.0), "stage": stage,
+            "elapsed": snap.get("elapsed"), "error": handle.error}
+
+
+@router.get("/api/runs")
+def list_runs():
+    """All runs the in-memory registry still knows about (running + recently
+    finished this session). Running first, then newest by id — job dir names
+    are timestamp-prefixed, so a reverse id sort is chronological."""
+    items = [_run_list_item(h) for h in jobs.REGISTRY.values()]
+    running = [r for r in items if r["state"] == "running"]
+    rest = sorted((r for r in items if r["state"] != "running"),
+                  key=lambda r: r["run_id"], reverse=True)
+    return {"runs": running + rest}
+
+
 @router.get("/api/runs/{run_id}")
 def run_status(run_id: str):
     handle = jobs.get(run_id)
