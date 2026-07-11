@@ -72,6 +72,33 @@ def snap(job_name: str, start: float, end: float):
         raise HTTPException(500, friendly(e, "Snapping to sentences"))
 
 
+class KeptRequest(BaseModel):
+    kept: bool
+
+
+@router.put("/api/jobs/{job_name}/clips/{index}/kept")
+def set_kept(job_name: str, index: int, req: KeptRequest):
+    """Persist the keep/discard choice on the clip record in job.json (the
+    same flag rescore sets; display-only, nothing re-renders)."""
+    job_path = safe_job_path(job_name, "job.json")
+    if not job_path.exists():
+        raise HTTPException(404, "That run's files can't be found.")
+    try:
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        clip = next((c for c in job.get("clips", [])
+                     if c.get("index") == index), None)
+        if clip is None:
+            raise HTTPException(404, "That clip can't be found.")
+        clip["kept"] = bool(req.kept)
+        job_path.write_text(json.dumps(job, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+    except HTTPException:
+        raise
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(500, friendly(e, "Saving that choice"))
+    return {"kept": bool(req.kept)}
+
+
 class ExcludeRequest(BaseModel):
     exclude: bool
 

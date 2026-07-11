@@ -204,6 +204,27 @@ def test_exclude_round_trip(client, tmp_path, monkeypatch):
     assert json.loads(meta.read_text())["upload"]["exclude"] is False
 
 
+def test_kept_round_trip(client, tmp_path, monkeypatch):
+    import server.routes_library as lib
+    monkeypatch.setattr(lib, "output_root", lambda: tmp_path.resolve())
+    jd = tmp_path / "20260711-000005_demo"
+    jd.mkdir(parents=True)
+    jp = jd / "job.json"
+    jp.write_text(json.dumps({"clips": [{"index": 2, "kept": True}]}),
+                  encoding="utf-8")
+
+    r = client.put(f"/api/jobs/{jd.name}/clips/2/kept", json={"kept": False})
+    assert r.status_code == 200
+    assert json.loads(jp.read_text())["clips"][0]["kept"] is False
+    client.put(f"/api/jobs/{jd.name}/clips/2/kept", json={"kept": True})
+    assert json.loads(jp.read_text())["clips"][0]["kept"] is True
+    # unknown clip index and missing job both 404
+    assert client.put(f"/api/jobs/{jd.name}/clips/9/kept",
+                      json={"kept": True}).status_code == 404
+    assert client.put("/api/jobs/nope/clips/0/kept",
+                      json={"kept": True}).status_code == 404
+
+
 def test_settings_round_trip_touches_only_local(client, monkeypatch, tmp_path):
     import config as config_mod
     local = tmp_path / "config.local.yaml"
