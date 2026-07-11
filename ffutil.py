@@ -85,7 +85,9 @@ def run_ffmpeg(args: list[str], timeout: int = 1800,
 def _run_with_progress(cmd: list[str], timeout: int, label: str) -> None:
     import time
     # -progress pipe:1 emits key=value blocks; -stats_period throttles them.
-    cmd = cmd[:3] + ["-stats_period", "30", "-progress", "pipe:1"] + cmd[3:]
+    # cmd is [bin, -y, -v, error, ...args] — split after index 4 so "-v error"
+    # stays an intact pair (splitting at 3 previously fed "-stats_period" to -v).
+    cmd = cmd[:4] + ["-stats_period", "30", "-progress", "pipe:1"] + cmd[4:]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + timeout

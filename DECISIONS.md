@@ -89,3 +89,43 @@ each choice logged here.
   the known-green feature/style-refiner via new branch feature/overnight-upgrades;
   **defer main reconciliation with origin/main to a human** (see REPORT.md).
 - Deleted stray root file `tatus` (accidental `git status >` redirect artifact).
+
+
+## Viral detection v2 (feature/viral-v2, 2026-07-10)
+- **Multimodal behind the existing LLM ladder**: `complete_json` gained an
+  optional `media=` list of provider-neutral parts instead of a parallel entry
+  point, so retry -> JSON repair -> schema validation apply to video/image
+  calls unchanged. Gemini file handles and base64 images are the two part
+  kinds; groq/ollama reject media with a clean LLMError.
+- **Privacy is a hard gate, not a preference**: `viral_v2.allow_upload`
+  defaults to false and blocks BOTH the Gemini chunk upload and the OpenRouter
+  frame extraction for local files (frames are the video content). URL sources
+  are exempt (already public). Audio DSP is fully local and always runs, so a
+  blocked run still yields events.
+- **Free-tier survival**: per-chunk results cached by chunk-hash + prompt-hash
+  + provider (a resumed 6-hour job re-pays nothing); `max_daily_minutes`
+  enforced from cache/viral_v2_usage.json; quota errors demote gemini ->
+  openrouter -> audio-only instead of failing the job.
+- **DSP baseline uses median/MAD (with a 5%-of-median floor), not mean/std** —
+  during testing a loud tone inflated the mean/std enough to mask a real
+  laughter burst (z fell to ~2). Robust stats keep the threshold anchored to
+  the quiet bed.
+- **Reaction boundary rule runs after sentence snapping** because snapping
+  would revert the extension; ending on the reaction deliberately breaks
+  sentence bounds.
+- **Gemini SDK errors classified retryable vs not, reusing the one retry
+  loop**: `_gemini_complete`/`upload_media` previously let raw google-genai
+  exceptions escape uncaught by `complete_json`'s `(LLMError,
+  SchemaValidationError, ValueError)` filter — a live 503 killed the job
+  after one attempt. `llm._classify_gemini_error` wraps SDK errors into
+  `LLMError(retryable=...)` (503/500/429/504/timeout -> retryable;
+  400/401/403/404 -> not); `LLMError` gained a `retryable` flag and
+  `complete_json`'s loop stops backing off early on non-retryable errors
+  instead of burning all attempts. No second retry mechanism — `upload_media`
+  calls (which happen before `complete_json` starts) get their own small
+  loop in `gemini_chunk_events` reusing the same `max_retries`/
+  `backoff_base_seconds` config.
+- **actors_hint is treated as a presence signal only**: the reframe pins to
+  the face the existing MediaPipe tracking already found at that moment; if
+  tracking saw no face there, no cut happens. Re-identifying "the man on the
+  left" would need a new model, which the constraints forbid.

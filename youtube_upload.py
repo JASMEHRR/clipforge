@@ -17,7 +17,11 @@ from logutil import get_logger
 log = get_logger("upload")
 
 TOKEN_PATH = ROOT / "cache" / "youtube_token.json"
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
 
 SETUP_INSTRUCTIONS = """### YouTube upload — one-time setup (manual)
 1. Go to https://console.cloud.google.com/ → create/select a project.
@@ -75,35 +79,53 @@ def build_service(service=None):
                  cache_discovery=False)
 
 
-def build_request_body(metadata: dict, privacy: str = "private") -> dict:
+def build_analytics_service(service=None):
+    """Build the YouTube Analytics API client. Tests inject a mocked `service`."""
+    if service is not None:
+        return service
+    from googleapiclient.discovery import build
+    return build("youtubeAnalytics", "v2", credentials=_load_credentials(),
+                 cache_discovery=False)
+
+
+def build_request_body(metadata: dict, privacy: str = "private",
+                       publish_at: str | None = None,
+                       category_id: str | None = None) -> dict:
     """Shorts-ready body from ClipMetadata. Hashtags go into the description
-    (YouTube derives Shorts hashtags from there); title stays <=100 chars."""
+    (YouTube derives Shorts hashtags from there); title stays <=100 chars.
+    `publish_at` (ISO 8601 UTC, e.g. '2026-07-11T06:30:00Z') schedules the
+    video; YouTube requires privacyStatus='private' for scheduled videos."""
     tags = [t.lstrip("#") for t in metadata.get("hashtags", [])][:15]
     description = metadata["description"].strip() + "\n\n" + " ".join(
         metadata.get("hashtags", []))
+    status = {
+        "privacyStatus": privacy,
+        "selfDeclaredMadeForKids": False,
+    }
+    if publish_at:
+        status["publishAt"] = publish_at
     return {
         "snippet": {
             "title": metadata["title"][:100],
             "description": description[:4900],
             "tags": tags,
-            "categoryId": "22",
+            "categoryId": category_id or "22",
         },
-        "status": {
-            "privacyStatus": privacy,
-            "selfDeclaredMadeForKids": False,
-        },
+        "status": status,
     }
 
 
 def upload_clip(video_path: str | Path, metadata: dict,
-                privacy: str = "private", service=None) -> dict:
+                privacy: str = "private", service=None,
+                publish_at: str | None = None,
+                category_id: str | None = None) -> dict:
     """Upload one clip. Returns {'video_id', 'url'}. Raises UploadQuotaError
     with a clear message on quota exhaustion — never crashes the app."""
     video_path = Path(video_path)
     if not video_path.exists():
         raise UploadError(f"clip not found: {video_path}")
     yt = build_service(service)
-    body = build_request_body(metadata, privacy)
+    body = build_request_body(metadata, privacy, publish_at, category_id)
     media = _media_upload(video_path)
     try:
         request = yt.videos().insert(part="snippet,status", body=body,

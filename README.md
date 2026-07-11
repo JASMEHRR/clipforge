@@ -24,10 +24,22 @@ picks the moments and writes the metadata instead.
   **custom font upload** with a gallery that previews each font through the real
   caption-burn pipeline (not a CSS mock)
 - Post-render re-scoring: weak clips dropped (bottom 30%), at least 3 kept
-- Gradio UI: create, batch queue (+ watched `inbox/` folder), clip editing
-  with sentence-snapped re-render, YouTube upload, job history
+- Custom local UI (no internet needed to run it): paste a link or drop a
+  file, watch a dot-matrix pipeline board fill with a real ETA, then play,
+  edit, and download the finished clips. Batch queue (+ watched `inbox/`
+  folder), sentence-snapped re-render, YouTube upload center, job history —
+  every choice made through preview-first pickers (real rendered caption
+  frames, listenable music tracks), never a bare dropdown
 - Idempotent pipeline: cached transcripts/scenes, per-stage completion
   markers, `--force` to redo
+
+## What it looks like
+
+| | |
+|---|---|
+| ![New clips](design/screenshots/p3_01_home_1280.png) | ![Progress](design/screenshots/p3_03_progress_1280.png) |
+| ![Results](design/screenshots/p3_04_results_1280.png) | ![Caption styles](design/screenshots/p4_02_picker_caption_1280.png) |
+| ![Music](design/screenshots/p4_04_picker_music_1280.png) | ![Clip editor](design/screenshots/p4_09_editor_1280.png) |
 
 ## Quick start (Windows)
 
@@ -91,6 +103,37 @@ Uploads are **private** by default — review them in YouTube Studio and flip
 to public yourself. Quota errors surface as a clear message (default quota
 allows ~6 uploads/day; it resets at midnight Pacific).
 
+### Automatic scheduled uploads (optional)
+
+Once you've completed the one-time OAuth setup above, you can turn on
+**automatic uploading**: as soon as a clip finishes rendering, ClipForge
+scores it, and if it's good enough, schedules it to publish at a set time of
+day — no manual clicking.
+
+1. Set `upload.auto_enabled: true` in `config.yaml` (or Settings tab, which
+   saves to `config.local.yaml`). It's `false` by default, so nothing changes
+   until you flip this on.
+2. Tune the rest of the `upload:` block to taste:
+   - `min_virality` (0-100) — clips scoring below this are skipped.
+   - `max_per_day` / `max_per_run` — caps so you don't flood your channel or
+     hit YouTube's daily quota.
+   - `publish_slots_ist` — hours of the day (IST) videos go live.
+   - `ntfy_topic` — set this to get a free phone notification every time a
+     clip is scheduled or an upload fails (install the [ntfy](https://ntfy.sh)
+     app, pick a unique topic name, subscribe to it, put the same name here).
+3. Clips beyond the daily cap simply wait — nothing is lost, they upload the
+   next day.
+
+Command-line alternative (same logic, useful for checking status or catching
+up on clips from before auto-upload was enabled):
+
+```
+python upload.py dry        # see what would upload, no auth needed
+python upload.py            # upload the next eligible batch once
+python upload.py watch      # poll continuously (fallback to the automatic hook)
+python upload.py report     # 28-day performance report + recommendations
+```
+
 ## Configuration (config.yaml)
 
 | Key | Meaning | Default |
@@ -119,12 +162,27 @@ allows ~6 uploads/day; it resets at midnight Pacific).
 | `captions.watermark.image_path` / `scale` | image mode: logo PNG (alpha respected) and its width as a fraction of the frame | "" / 0.12 |
 | `captions.watermark.font_size` / `opacity` / `margin_px` | watermark styling (opacity applies to text and image) | 36 / 0.6 / 40 |
 | `music.default_track` / `default_volume_db` | background-music defaults when the UI leaves them unset | "" / -22 |
-| `ui.auto_open` | open the UI automatically when `app.py` starts | true |
+| `upload.auto_enabled` | schedule qualifying clips to YouTube automatically as they render | `false` |
+| `upload.min_virality` | skip auto-upload for clips scoring below this (0-100) | 40 |
+| `upload.max_per_day` / `max_per_run` | daily cap (persists across restarts) / per-batch cap | 3 / 2 |
+| `upload.publish_slots_ist` | hours of day (IST) videos are scheduled to go live | `[12, 19]` |
+| `upload.ntfy_topic` | ntfy.sh topic for phone push notifications; `""` disables | "" |
+| `llm.openrouter_model` | OpenRouter vision model for viral_v2's frame fallback (free ids rotate — update here) | `qwen/qwen2.5-vl-72b-instruct:free` |
+| `viral_v2.enabled` | multimodal event detection (`false` = transcript-only, pre-feature output) | `true` |
+| `viral_v2.allow_upload` | **privacy gate**: upload LOCAL files for video analysis (URLs exempt) | `false` |
+| `viral_v2.providers` | cloud order; keyless → audio-DSP only | `[gemini, openrouter]` |
+| `viral_v2.chunk_minutes` / `frame_interval_s` | Gemini chunk size / OpenRouter frame sampling | 10 / 2.0 |
+| `viral_v2.reaction_window_s` | extend clip end into a reaction starting within this | 6.0 |
+| `viral_v2.min_shot_s` | reframe hard-cut hysteresis (min hold per shot) | 1.5 |
+| `viral_v2.max_daily_minutes` | daily cap on source minutes sent to cloud APIs | 120 |
+| `viral_v2.sparse_wpm` | below this words/min, candidates come from event clusters | 40 |
+| `viral_v2.weights` / `density_weight` / `peak_weight` | event-type multipliers and score-bonus scales | see config |
+| `ui.auto_open` | open the UI window automatically when ClipForge starts | true |
 | `ui.window_mode` | `app` = chromeless Edge/Chrome window (`--app`); `tab` = normal browser tab | app |
 
 Secrets live **only** in `.env` (see `.env.example`). Never commit `.env`.
 
-### Per-run options (Create → "More options")
+### Per-run options (New clips → Options / Style & branding)
 
 These override the config **for one run** (applied to a private copy — the saved
 config is never mutated) and thread through both the pipeline and single-clip
@@ -141,14 +199,35 @@ re-render via the shared render path:
 | Background music + volume | per-run music track + dB | none |
 | Clips to keep | `clips.target_count` | 0 (auto) |
 
-### Branding & fonts (Create → "Style & Branding")
+### Picking options (popup galleries)
+
+Caption style, output shape, style profile, existing-subtitles handling,
+watermark position, background music and fonts are all chosen through popup
+galleries: each option is a card you can see (caption styles and fonts are
+rendered through the real caption burn; music tracks have a play-preview
+button) instead of a bare dropdown name.
+
+### Background music
+
+- Pick a specific track (press **Listen** to hear it first — tracks download
+  on first use), **Match the video** (mood-matched to the transcript),
+  **Surprise me** (random per batch job), or **No music**.
+- Music automatically ducks under speech and fades in/out; set the level with
+  the loudness slider (default −22 dB).
+- When a track's license asks for credit, the attribution line is appended to
+  the clip description automatically.
+- **You are responsible for having rights to any track you add** to
+  `assets/music/manifest.json`. Stick to sources like the YouTube Audio
+  Library or Pixabay and keep the license field accurate.
+
+### Branding & fonts (New clips → Style & branding)
 
 - **Logo watermark**: choose watermark mode `image`, upload a transparent PNG.
   It is overlaid in the same encode as the captions (single pass, alpha
   respected) and scales to `captions.watermark.scale` of the frame width. Logos
   persist to `assets/user_branding/` (gitignored — your logo is never committed).
-- **Custom fonts + real-preview gallery**: click **Browse fonts** for a popup
-  listing every bundled and uploaded font, each shown as a large sample rendered
+- **Custom fonts + real-preview gallery**: the **Caption font** picker lists
+  every bundled and uploaded font, each shown as a large sample rendered
   through the *actual* caption-burn pipeline (`style_preview.py` reuses
   `captions.write_ass` + the FFmpeg subtitles filter), not a browser
   approximation. Upload `.ttf`/`.otf` files (validated, real family name read via
@@ -157,10 +236,59 @@ re-render via the shared render path:
 - **Clip provenance**: each result card shows `Source: mm:ss–mm:ss` — the
   original window the clip came from in the source video, before refinement
   shifted the bounds (`original_source_start_s`/`end_s` in `metadata.json`).
-- **Direct edit**: each card has an **Edit this clip** button that opens the Edit
-  tab pre-loaded with that clip's bounds.
+- **Direct edit**: each card has an **Edit** button that opens the clip editor
+  pre-loaded with that clip's bounds.
 
-Design screenshots of the reworked UI live in `design/screenshots/`.
+Design screenshots of the UI live in `design/screenshots/`; the design system
+itself is documented in `design/styleguide.html`.
+
+## Viral detection v2 (multimodal events)
+
+Transcript-only selection is blind to what actually makes moments viral:
+laughter, reactions, falls, food reveals, expression shifts. Viral detection v2
+adds **eyes and ears** and fuses them into highlight selection:
+
+- **Video (Gemini, free tier)** — the source is split into 10-minute
+  stream-copy chunks, uploaded via the Gemini Files API and analyzed for
+  timestamped events (laughter, strong_reaction, physical_event, reveal,
+  expression_shift, energy_spike, profound_statement, conflict, celebration).
+- **Video fallback (OpenRouter, free Qwen VL)** — when Gemini is exhausted or
+  unavailable: 1 frame every 2 s per chunk, batched through a free vision model
+  (`OPENROUTER_API_KEY` in `.env`, model id in `llm.openrouter_model` — free
+  model ids rotate, so it lives in config).
+- **Audio (local DSP, always on)** — RMS energy spikes and laughter-like noise
+  bursts straight from the 16 kHz wav. No model, no network, works keyless —
+  this alone catches most crowd-laughter beats.
+
+What the events do:
+- **Scoring** — candidates gain event density + peak-intensity bonuses
+  (per-type weights in `viral_v2.weights`); the transcript score is never gated,
+  only added to.
+- **"End on the reaction"** — a laughter/reaction starting within
+  `reaction_window_s` after a clip's end pulls the end out to include it
+  (bounded by `clips.max_seconds`); clips also never start mid-event.
+- **Silent sources** — when speech is sparse (< `viral_v2.sparse_wpm` words/min)
+  candidates are generated straight from event clusters, so a 6-hour silent
+  recording with one fall still produces a clip of the fall.
+- **Reaction-aware reframe** — a reaction event with an actor hint hard-cuts the
+  crop to the tracked face at the event start (min hold `viral_v2.min_shot_s`;
+  no detected face → no jump).
+- **Audit trail** — every clip's `metadata.json` lists the events inside it, and
+  the clip cards show them ("😂 laughter 3x · ⚡ physical_event at 0:14").
+
+**Privacy**: a **local** video file is never uploaded to an AI provider unless
+`viral_v2.allow_upload: true` (default **false**; the UI toggle says exactly
+what it does: *sends video content to the AI provider for analysis*).
+YouTube-URL sources are exempt — they are already public. Audio DSP always runs
+locally either way.
+
+**Free-tier limits**: per-chunk results are cached in `cache/viral_events/`
+(hash-keyed — re-runs and resumed jobs are free), and
+`viral_v2.max_daily_minutes` (default 120) caps how many source minutes go to
+cloud APIs per day (`cache/viral_v2_usage.json`). When Gemini rate-limits or the
+cap is hit, ClipForge falls through to OpenRouter, then to audio-only events —
+the run never fails because of quota. `viral_v2.enabled: false` skips the stage
+entirely and reproduces transcript-only behavior.
 
 ## Engagement signals (virality v2)
 
@@ -250,8 +378,8 @@ git pull
 pip install --no-input -r requirements.txt
 ```
 
-There is also a built-in one-click self-updater (launch banner → **Install
-update**): it checks GitHub, downloads only changed files (full-zipball
+There is also a built-in one-click self-updater (a launch notice points to
+**Settings → Install**): it checks GitHub, downloads only changed files (full-zipball
 fallback), verifies every `.py` compiles, backs up and applies, and rolls back
 automatically on any failure. Your `config.yaml` is preserved (the incoming one
 lands as `config.yaml.new`). Observed behaviour and its one gap (no dry-run;
@@ -278,7 +406,8 @@ Optional UI screenshots (dev-only, not in `requirements.txt`):
 
 ```bash
 pip install playwright && python -m playwright install chromium
-.venv/Scripts/python.exe scripts/screenshot_ui.py   # → design/screenshots/
+.venv/Scripts/python.exe scripts/screenshot_phase3.py   # core loop → design/screenshots/
+.venv/Scripts/python.exe scripts/screenshot_phase4.py   # all screens + pickers
 ```
 
 Architecture and design decisions: `PLAN.md`. Requirement checklist and known

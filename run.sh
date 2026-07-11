@@ -13,4 +13,4 @@ if [ ! -d .venv ]; then
   ./.venv/bin/pip install --no-input -r requirements.txt
 fi
 
-exec ./.venv/bin/python app.py
+exec ./.venv/bin/python -m server.main

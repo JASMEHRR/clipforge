@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClipForge — Design System</title>
+<link rel="stylesheet" href="../web/css/tokens.css">
+<link rel="stylesheet" href="../web/css/app.css">
+<style>
+  /* styleguide scaffolding only — not part of the app */
+  .sg { max-width: 1080px; margin: 0 auto; padding: var(--sp-7) var(--sp-5); }
+  .sg-section { margin-bottom: var(--sp-8); }
+  .sg-h { margin: 0 0 var(--sp-5); padding-bottom: var(--sp-3);
+          border-bottom: 1px solid var(--line); }
+  .sg-row { display: flex; flex-wrap: wrap; gap: var(--sp-4); align-items: center; }
+  .sg-col { display: grid; gap: var(--sp-4); }
+  .sg-note { font-size: var(--text-sm); color: var(--ink-dim); max-width: 640px; }
+  .sg-swatch { width: 132px; }
+  .sg-swatch .chip { height: 64px; border-radius: var(--r-md);
+                     border: 1px solid var(--line); margin-bottom: var(--sp-2); }
+  .sg-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+              gap: var(--sp-4); }
+  .sg-spec { display: grid; grid-template-columns: 120px 1fr; gap: var(--sp-2) var(--sp-4);
+             align-items: baseline; }
+</style>
+</head>
+<body>
+<div class="sg">
+
+  <header class="sg-section">
+    <div class="t-label" style="margin-bottom: var(--sp-3)">ClipForge · Design System · v1</div>
+    <h1 class="t-display" style="font-size: var(--text-3xl)">CLIPFORGE</h1>
+    <p class="sg-note" style="margin-top: var(--sp-4)">
+      Monochrome foundation, one red accent reserved for the primary action.
+      iOS depth and motion physics; Nothing restraint and dot-matrix signature.
+      Every screen derives from this page.
+    </p>
+  </header>
+
+  <!-- ============================================================ palette -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">01 · Palette</h2>
+    <div class="sg-row">
+      <div class="sg-swatch"><div class="chip" style="background:var(--bg-0)"></div><div class="t-mono">bg-0 #0A0A0B</div><div class="t-dim" style="font-size:var(--text-xs)">page</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--bg-1)"></div><div class="t-mono">bg-1 #101012</div><div class="t-dim" style="font-size:var(--text-xs)">panel</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--bg-2)"></div><div class="t-mono">bg-2 #17171A</div><div class="t-dim" style="font-size:var(--text-xs)">card</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--bg-3)"></div><div class="t-mono">bg-3 #1F1F23</div><div class="t-dim" style="font-size:var(--text-xs)">elevated</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--ink)"></div><div class="t-mono">ink #EDEDEA</div><div class="t-dim" style="font-size:var(--text-xs)">text</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--accent)"></div><div class="t-mono">accent #D71921</div><div class="t-dim" style="font-size:var(--text-xs)">the ONE red</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--ok)"></div><div class="t-mono">ok #43B96F</div><div class="t-dim" style="font-size:var(--text-xs)">success only</div></div>
+      <div class="sg-swatch"><div class="chip" style="background:var(--warn)"></div><div class="t-mono">warn #E2A33D</div><div class="t-dim" style="font-size:var(--text-xs)">warning only</div></div>
+    </div>
+    <p class="sg-note" style="margin-top: var(--sp-4)">
+      Accent rules: record / live / the primary action of a screen. Never links,
+      never decoration, never hover tints. Semantic green and amber appear only
+      as state, never as identity. No gradients as decoration.
+    </p>
+  </section>
+
+  <!-- =============================================================== type -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">02 · Type</h2>
+    <div class="sg-col">
+      <div>
+        <div class="t-label">Doto — display · screen titles &amp; big numbers only</div>
+        <div class="t-hero-num" style="margin-top: var(--sp-2)">04:32</div>
+        <div class="t-display">MAKING YOUR CLIPS</div>
+      </div>
+      <div>
+        <div class="t-label">Inter — everything the user reads</div>
+        <p class="t-body" style="max-width: 560px; margin: var(--sp-2) 0 0">
+          Paste a link or drop a video. ClipForge finds the best moments and
+          turns them into ready-to-post clips with captions.
+        </p>
+        <p class="t-dim" style="max-width: 560px; margin: var(--sp-1) 0 0; font-size: var(--text-sm)">
+          Secondary text sits one step dimmer, never smaller than 13px.
+        </p>
+      </div>
+      <div>
+        <div class="t-label">JetBrains Mono — timecodes &amp; technical readouts</div>
+        <div class="t-mono" style="margin-top: var(--sp-2)">00:02:41.320 → 00:03:17.895 · 36.5s · 9:16</div>
+      </div>
+      <div class="sg-spec t-mono" style="color: var(--ink-dim)">
+        <span>text-xs 12</span><span>labels, captions</span>
+        <span>text-sm 13</span><span>secondary UI</span>
+        <span>text-md 15</span><span>body, controls</span>
+        <span>text-lg 17</span><span>emphasized body</span>
+        <span>text-xl 22</span><span>section titles (Inter 600)</span>
+        <span>text-2xl 34</span><span>screen titles (Doto 700)</span>
+        <span>text-3xl 56</span><span>hero numbers (Doto 800)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================= dot matrix -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">03 · Dot matrix — the signature</h2>
+    <div class="card" style="display: grid; gap: var(--sp-4); justify-items: start">
+      <div style="display: flex; gap: var(--sp-4); align-items: baseline">
+        <span class="t-display" id="dm-stage" style="font-size: var(--text-xl)">FINDING THE BEST MOMENTS</span>
+        <span class="badge badge-live">LIVE</span>
+      </div>
+      <canvas id="dm-full"></canvas>
+      <div style="display: flex; gap: var(--sp-5); align-items: baseline">
+        <span class="t-mono" id="dm-pct" style="font-size: var(--text-lg)">0%</span>
+        <span class="t-dim" style="font-size: var(--text-sm)">About <span class="t-mono" id="dm-eta">2:40</span> left</span>
+        <button class="btn btn-sm" id="dm-replay">Replay</button>
+        <button class="btn btn-sm" id="dm-error">Show error state</button>
+      </div>
+    </div>
+    <div class="sg-grid2" style="margin-top: var(--sp-4)">
+      <div class="card">
+        <div class="t-label" style="margin-bottom: var(--sp-3)">Mini variant — virality on clip cards</div>
+        <div class="sg-row">
+          <div style="display:flex; gap: var(--sp-3); align-items: center">
+            <canvas class="dm-mini" data-score="82"></canvas>
+            <span class="t-display" style="font-size: var(--text-xl)">82</span>
+          </div>
+          <div style="display:flex; gap: var(--sp-3); align-items: center">
+            <canvas class="dm-mini" data-score="51"></canvas>
+            <span class="t-display" style="font-size: var(--text-xl)">51</span>
+          </div>
+          <div style="display:flex; gap: var(--sp-3); align-items: center">
+            <canvas class="dm-mini" data-score="23"></canvas>
+            <span class="t-display" style="font-size: var(--text-xl)">23</span>
+          </div>
+        </div>
+      </div>
+      <div class="card card-flat">
+        <p class="sg-note" style="margin:0">
+          Rules: the head columns pulse red while running; done plays one settle
+          wave then rests lit; error flashes the filled region red then holds.
+          Stage names above in Doto, plain sentence in Inter, ETA in mono.
+          The canvas carries <span class="t-mono">role="img"</span> and a live
+          percent label; a visually-hidden <span class="t-mono">&lt;progress&gt;</span>
+          mirrors it for screen readers.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ buttons -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">04 · Buttons</h2>
+    <div class="sg-col">
+      <div class="sg-row">
+        <button class="btn btn-primary btn-lg">Make clips</button>
+        <button class="btn btn-primary">Schedule to YouTube</button>
+        <button class="btn btn-primary" disabled>Make clips</button>
+      </div>
+      <div class="sg-row">
+        <button class="btn">Download all</button>
+        <button class="btn">Edit this clip</button>
+        <button class="btn" disabled>Download all</button>
+        <button class="btn btn-ghost">Cancel</button>
+        <button class="btn btn-sm">Preview</button>
+      </div>
+      <p class="sg-note">One red button per screen, maximum. Buttons say what
+        happens: “Make clips”, never “Submit”. Press = 97% scale, 150ms.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= inputs -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">05 · Form controls</h2>
+    <div class="sg-grid2">
+      <div class="sg-col">
+        <div class="field">
+          <label for="sg-hero">Hero input (Home screen)</label>
+          <input id="sg-hero" class="input input-hero" placeholder="Paste a YouTube link or drop a video here">
+        </div>
+        <div class="field">
+          <label for="sg-in1">Standard input</label>
+          <input id="sg-in1" class="input" value="Follow for part 2!">
+        </div>
+        <div class="field">
+          <label for="sg-in2">Invalid</label>
+          <input id="sg-in2" class="input is-invalid" value="not-a-link">
+          <span class="field-error">That doesn’t look like a video link — paste the full address.</span>
+        </div>
+        <div class="field">
+          <label for="sg-in3">Disabled</label>
+          <input id="sg-in3" class="input" disabled value="Connect YouTube first">
+        </div>
+      </div>
+      <div class="sg-col">
+        <div class="field">
+          <label>Toggles</label>
+          <div class="sg-row">
+            <label class="switch"><input type="checkbox" checked><span class="knob"></span></label>
+            <label class="switch"><input type="checkbox"><span class="knob"></span></label>
+            <label class="switch"><input type="checkbox" disabled><span class="knob"></span></label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="sg-range">Slider — clips to make: <span class="t-mono">6</span></label>
+          <input id="sg-range" class="range" type="range" min="0" max="20" value="6">
+        </div>
+        <div class="field">
+          <label>Badges</label>
+          <div class="sg-row">
+            <span class="badge">DRAFT</span>
+            <span class="badge badge-live">RENDERING</span>
+            <span class="badge badge-ok">SCHEDULED</span>
+            <span class="badge badge-warn">NEEDS ATTENTION</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Loading</label>
+          <div class="skeleton" style="height: 72px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== cards -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">06 · Cards</h2>
+    <div class="sg-grid2">
+      <div class="card card-hover">
+        <div style="display:flex; justify-content: space-between; align-items: start; gap: var(--sp-3)">
+          <div>
+            <div class="t-label" style="margin-bottom: var(--sp-2)">Clip 01</div>
+            <h3 class="t-title" style="font-size: var(--text-lg)">They sometimes cause bad accidents</h3>
+          </div>
+          <div style="display:flex; gap: var(--sp-2); align-items: center">
+            <canvas class="dm-mini" data-score="68"></canvas>
+            <span class="t-display" style="font-size: var(--text-lg)">68</span>
+          </div>
+        </div>
+        <div class="t-mono t-dim" style="margin: var(--sp-3) 0">00:01:56 → 00:02:30 · 34s</div>
+        <div class="sg-row">
+          <button class="btn btn-sm">Play</button>
+          <button class="btn btn-sm">Edit</button>
+          <label style="display:flex; gap: var(--sp-2); align-items:center; font-size: var(--text-sm); color: var(--ink-dim)">
+            <label class="switch" style="scale:.8"><input type="checkbox" checked><span class="knob"></span></label>
+            Include in auto-upload
+          </label>
+        </div>
+      </div>
+      <div class="card card-flat">
+        <div class="t-label" style="margin-bottom: var(--sp-2)">Empty state</div>
+        <p class="t-dim" style="margin: 0 0 var(--sp-4)">No clips yet — paste a link to start.</p>
+        <button class="btn btn-primary">Make clips</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= dialog -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">07 · Modal dialog (native &lt;dialog&gt;)</h2>
+    <button class="btn" id="sg-open-dialog">Open picker</button>
+    <dialog class="dialog" id="sg-dialog">
+      <div class="dialog-head">
+        <h3 class="t-title" style="font-size: var(--text-lg)">Caption style</h3>
+        <button class="btn btn-ghost btn-sm" id="sg-close-dialog">Close</button>
+      </div>
+      <div class="dialog-body dialog-grid">
+        <button class="pick is-selected">
+          <div class="skeleton" style="height: 90px"></div>
+          <span class="pick-name">Karaoke Pop</span>
+          <span class="pick-desc">Word-by-word highlight, bold and bouncy</span>
+        </button>
+        <button class="pick">
+          <div class="skeleton" style="height: 90px"></div>
+          <span class="pick-name">Clean Serif</span>
+          <span class="pick-desc">Quiet lines, no highlight</span>
+        </button>
+        <button class="pick">
+          <div class="skeleton" style="height: 90px"></div>
+          <span class="pick-name">Impact Caps</span>
+          <span class="pick-desc">Big caps, hard emphasis</span>
+        </button>
+      </div>
+    </dialog>
+    <p class="sg-note" style="margin-top: var(--sp-3)">
+      Scale + fade in with spring easing (350ms), blurred backdrop, sticky header.
+      In the app every picker card carries a real rendered preview, not a skeleton.
+    </p>
+  </section>
+
+  <!-- ============================================================== toast -->
+  <section class="sg-section">
+    <h2 class="t-title sg-h">08 · Toast &amp; copy rules</h2>
+    <div class="sg-row">
+      <button class="btn" id="sg-toast-ok">Show success toast</button>
+      <button class="btn" id="sg-toast-err">Show error toast</button>
+    </div>
+    <div class="card card-flat" style="margin-top: var(--sp-4)">
+      <div class="sg-spec" style="grid-template-columns: 220px 1fr; font-size: var(--text-sm)">
+        <span class="t-dim">never say</span><span class="t-dim">say instead</span>
+        <span class="t-mono">job</span><span>run</span>
+        <span class="t-mono">provider / mock</span><span>“Offline — no API key needed”</span>
+        <span class="t-mono">NVENC</span><span>graphics card</span>
+        <span class="t-mono">yt-dlp failed: …</span><span>Couldn’t fetch that link — check it opens in your browser.</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script type="module">
+  import { createDotMatrix, miniScore } from "../web/js/dots.js";
+
+  // ---- full progress demo: loops through a fake pipeline -----------------
+  const stages = [
+    ["PREPARING YOUR VIDEO", 0.12],
+    ["LISTENING TO THE AUDIO", 0.3],
+    ["FINDING THE BEST MOMENTS", 0.45],
+    ["MAKING YOUR CLIPS", 0.97],
+    ["DONE", 1],
+  ];
+  const dm = createDotMatrix(document.getElementById("dm-full"), { variant: "progress" });
+  const stageEl = document.getElementById("dm-stage");
+  const pctEl = document.getElementById("dm-pct");
+  const etaEl = document.getElementById("dm-eta");
+  let f = 0, timer = 0;
+
+  function tick() {
+    f = Math.min(1, f + 0.004);
+    const [name] = stages.find(([, end]) => f <= end) || stages.at(-1);
+    stageEl.textContent = name;
+    pctEl.textContent = `${Math.round(f * 100)}%`;
+    const left = Math.round((1 - f) * 160);
+    etaEl.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    dm.update({ fraction: f, state: f >= 1 ? "done" : "running" });
+    if (f < 1) timer = setTimeout(tick, 50);
+  }
+  function replay() { clearTimeout(timer); f = 0; tick(); }
+  replay();
+  document.getElementById("dm-replay").onclick = replay;
+  document.getElementById("dm-error").onclick = () => {
+    clearTimeout(timer);
+    stageEl.textContent = "SOMETHING WENT WRONG";
+    dm.update({ state: "error" });
+  };
+
+  // ---- minis ---------------------------------------------------------------
+  document.querySelectorAll(".dm-mini").forEach((c) =>
+    miniScore(c, Number(c.dataset.score)));
+
+  // ---- dialog / toasts -------------------------------------------------------
+  const dlg = document.getElementById("sg-dialog");
+  document.getElementById("sg-open-dialog").onclick = () => dlg.showModal();
+  document.getElementById("sg-close-dialog").onclick = () => dlg.close();
+
+  function toast(msg, cls) {
+    const el = document.createElement("div");
+    el.className = `toast ${cls}`;
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2600);
+  }
+  document.getElementById("sg-toast-ok").onclick =
+    () => toast("6 clips ready — scheduled to YouTube.", "is-ok");
+  document.getElementById("sg-toast-err").onclick =
+    () => toast("Couldn’t fetch that link — check it opens in your browser.", "is-error");
+</script>
+</body>
+</html>

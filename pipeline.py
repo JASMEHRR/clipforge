@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 
 from config import ROOT, load_config
-from errors import ClipForgeError
+from errors import ClipForgeError, JobCancelled
 from ffutil import verify_ffmpeg
 from logutil import add_file_handler, get_logger, remove_file_handler, stage_timer
 from schemas import validate
@@ -65,7 +65,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             full_transcribe: bool = False, music: str | None = None,
             music_volume_db: float = -22.0, progress_cb=None,
             tracker=None, style_refine: bool | None = None,
-            subs_mode: str | None = None) -> dict:
+            subs_mode: str | None = None, cancel=None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -78,6 +78,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     import style_refiner as style_mod
     import subtitle_detect as subs_mod
     import transcribe as transcribe_mod
+    import video_events as events_mod
     from config import config_hash
     from llm import resolve_provider
 
@@ -106,8 +107,15 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
     log.info("job start: source=%s provider=%s aspect=%s dir=%s",
              source, resolved, aspect, job_dir.name)
 
+    def _check_cancel():
+        """Cooperative cancel: honoured only BETWEEN stages (a running stage
+        always finishes), so completed markers stay valid for a resume."""
+        if cancel is not None and cancel.is_set():
+            raise JobCancelled("cancelled by user")
+
     def _stage(name, label, fn):
         """Run a marker-cached stage while keeping the tracker in sync."""
+        _check_cancel()
         marker = job_dir / f".done_{name}.json"
         if marker.exists() and not force:
             result = stages.run(name, fn)   # returns cached JSON, logs skip
@@ -170,11 +178,53 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             notes.append("empty transcript — mechanical windows used "
                          "(passed mechanically; re-verify with a real sample)")
 
+        # viral_v2: multimodal event detection (video via API, audio via DSP).
+        # Skipped entirely when disabled — highlights then run event-free and
+        # the transcript-only path is byte-identical to pre-feature behaviour.
+        _check_cancel()
+        viral_on = cfg.get("viral_v2", {}).get("enabled", False)
+        job["settings"]["viral_v2"] = bool(viral_on)
+        events: list = []
+        if viral_on:
+            events_key = config_hash(cfg, "viral_v2", "llm") + "_" + resolved
+            marker = job_dir / ".done_events.json"
+            if marker.exists() and not force and \
+                    json.loads(marker.read_text(encoding="utf-8")).get("key") == events_key:
+                events = json.loads(marker.read_text(encoding="utf-8"))["events"]
+                tracker.skip("events")
+                timings["events"] = {"status": "skipped", "seconds": 0.0}
+                log.info("stage events: marker present — skipped")
+            else:
+                tracker.start("events", "detecting viral events")
+                with stage_timer(log, "events", timings):
+                    try:
+                        events = events_mod.detect_events(
+                            info["video_path"], info["audio_path"],
+                            info["duration"], info, cfg, provider=provider,
+                            debug_dir=debug_dir,
+                            progress_cb=lambda f, msg: tracker.update(
+                                "events", f, msg))
+                    except Exception as e:  # noqa: BLE001 — events are additive signal
+                        log.warning("event detection failed (%s) — "
+                                    "continuing without events", e)
+                        notes.append(f"viral_v2 events failed: {e}")
+                        events = []
+                marker.write_text(json.dumps({"key": events_key,
+                                              "events": events}),
+                                  encoding="utf-8")
+                tracker.finish("events")
+            if events:
+                notes.append(f"viral_v2: {len(events)} events detected "
+                             f"({', '.join(sorted({e['source'] for e in events}))})")
+        else:
+            tracker.skip("events", "viral_v2 disabled")
+
         candidates = _stage("highlights", "selecting highlights",
                             lambda: hl.select_highlights(
                                 transcript, scene_data, info["duration"], cfg,
                                 provider=provider, debug_dir=debug_dir,
-                                max_candidates=target_count))
+                                max_candidates=target_count,
+                                events=events or None))
         if target_count and len(candidates) < target_count:
             notes.append(f"requested {target_count} clips but only "
                          f"{len(candidates)} candidates available")
@@ -186,6 +236,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         # pacing, endings, burned-sub handling) BEFORE rendering, so the render
         # path still produces each clip exactly once. Skipped entirely when
         # style.enabled is false — output then matches pre-feature behaviour.
+        _check_cancel()
         style_on = (cfg.get("style", {}).get("enabled", False)
                     if style_refine is None else style_refine)
         job["settings"]["style_refine"] = bool(style_on)
@@ -233,6 +284,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                 notes.append(f"music disabled: {e}")
                 log.warning("music setup failed: %s", e)
 
+        _check_cancel()
         clips = []
         n = max(1, len(candidates))
         workers = _worker_count(cfg, n)
@@ -260,7 +312,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     job_dir, cfg, provider, preset, aspect, debug_dir,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
                     scenes_mod, music_path, music_attr, music_volume_db,
-                    tracker, edit_plans[i] if edit_plans else None): i
+                    tracker, edit_plans[i] if edit_plans else None,
+                    events): i
                     for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
@@ -279,6 +332,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         if not clips:
             raise ClipForgeError("no clips rendered successfully")
 
+        _check_cancel()
         tracker.start("rescore", "re-scoring rendered clips")
         with stage_timer(log, "rescore", timings):
             clips = hl.rescore_clips(clips, transcript, cfg, provider,
@@ -287,6 +341,13 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 
         job["clips"] = clips
         job["status"] = "done"
+    except JobCancelled as e:
+        job["status"] = "cancelled"
+        notes.append("cancelled by user")
+        log.info("job cancelled: %s", e)
+        for row in tracker.snapshot()["stages"]:
+            if row["state"] == "running":
+                tracker.fail(row["key"], "cancelled")
     except Exception as e:  # noqa: BLE001 — job must record failure, not crash callers
         job["status"] = "failed"
         notes.append(f"job failed: {e}")
@@ -309,6 +370,9 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         remove_file_handler(fh)
         tracker.finish("cleanup")
 
+    if job["status"] == "cancelled":
+        tracker.fail("done", "cancelled")
+        raise JobCancelled(f"job {job['job_id']} cancelled")
     if job["status"] == "failed":
         tracker.fail("done", "failed")
         raise ClipForgeError(f"job {job['job_id']} failed", detail="; ".join(notes))
@@ -323,7 +387,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
 def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
                 metadata_mod, scenes_mod, music_path=None, music_attr="",
-                music_volume_db=-22.0, tracker=None, edit_plan=None) -> dict:
+                music_volume_db=-22.0, tracker=None, edit_plan=None,
+                events=None) -> dict:
     def _sub(frac: float) -> None:
         if tracker:
             tracker.item("render", f"clip_{i:02d}", frac)
@@ -345,6 +410,18 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         out_start, out_end = cand["start"], cand["end"]
         excl, hbias, multi, segments = 0.0, -1.0, False, [[out_start, out_end]]
 
+    # viral_v2 reaction cuts: reaction events with an actors_hint inside this
+    # clip, remapped to clip-relative output time (through the EditPlan's kept
+    # segments when present — events inside removed pauses are dropped).
+    event_cuts_rel = []
+    from video_events import REACTION_TYPES
+    for e in (events or []):
+        if e["type"] not in REACTION_TYPES or not e.get("actors_hint"):
+            continue
+        t = _remap_to_output(e["t_start_s"], segments)
+        if t is not None:
+            event_cuts_rel.append({"t": t, "actors_hint": e["actors_hint"]})
+
     if aspect == "16:9":
         # passthrough: a frame-accurate cut is the clip (captions burn onto it)
         if multi:
@@ -362,7 +439,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         metrics = reframe_mod.reframe_clip(
             cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
             aspect=aspect, debug_dir=debug_dir, info=None,
-            bottom_exclusion_ratio=excl, h_bias_center=hbias)
+            bottom_exclusion_ratio=excl, h_bias_center=hbias,
+            event_cuts_rel=event_cuts_rel)
         source_for_captions = clip_dir / "reframed.mp4"
     else:
         # single re-encode straight from the source (no full-res intermediate)
@@ -372,7 +450,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             source, out_start, out_end, clip_dir / "reframed.mp4", cuts_rel, cfg,
             aspect=aspect, debug_dir=debug_dir,
             info=(info if out_start == cand["start"] and out_end == cand["end"] else None),
-            bottom_exclusion_ratio=excl, h_bias_center=hbias)
+            bottom_exclusion_ratio=excl, h_bias_center=hbias,
+            event_cuts_rel=event_cuts_rel)
         source_for_captions = clip_dir / "reframed.mp4"
     _sub(0.5)
 
@@ -400,6 +479,21 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         tmp.replace(final)
     _sub(0.85)
 
+    dup_caption_warning = None
+    if edit_plan and edit_plan["existing_subs"]["decision"] in ("replace", "keep"):
+        import subtitle_detect as subs_mod
+        anchor = edit_plan["caption_anchor"]
+        exclude_top = max(0.0, anchor - 0.16)
+        exclude_bottom = min(1.0, anchor + 0.14)
+        leftover = subs_mod.verify_no_leftover_subs(final, exclude_top, exclude_bottom, cfg)
+        if leftover:
+            dup_caption_warning = (
+                f"double-caption risk: leftover text band band=[{leftover['band_top_pct']:.2f},"
+                f"{leftover['band_bottom_pct']:.2f}] conf={leftover['confidence']:.2f} "
+                f"outside own caption zone [{exclude_top:.2f},{exclude_bottom:.2f}] "
+                f"(existing_subs={edit_plan['existing_subs']['decision']})")
+            log.warning("clip %02d: %s", i, dup_caption_warning)
+
     duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
@@ -409,6 +503,10 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     import style_refiner as style_mod
     import virality as virality_mod
     refine_summary = style_mod.summarize(edit_plan) if edit_plan else None
+    if refine_summary and dup_caption_warning:
+        # informational only — not part of EDIT_PLAN's validated schema/enum,
+        # so it rides in the metadata.json summary rather than plan["flags"]
+        refine_summary = {**refine_summary, "double_caption_warning": dup_caption_warning}
     # cuts within this clip (real pacing signal for the engagement score)
     n_cuts = len(scenes_mod.scene_cuts_in_range(scene_data, out_start, out_end))
     cuts_per_min = (n_cuts / (duration / 60.0)) if duration > 0 else None
@@ -431,11 +529,19 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                "original_source_start_s": orig_start,
                "original_source_end_s": orig_end,
                "source_name": source_name}
+    # viral_v2 audit trail: which detected events fall inside this clip
+    clip_events = [e for e in (events or [])
+                   if e["t_start_s"] < out_end and e["t_end_s"] > out_start]
+    if clip_events:
+        payload["events"] = clip_events
     if refine_summary:
         payload["style"] = refine_summary
         log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
     (clip_dir / "metadata.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8")
+
+    import upload_scheduler
+    upload_scheduler.trigger_after_render(clip_dir, cfg)
 
     return {"index": i, "start": out_start, "end": out_end,
             "original_source_start_s": orig_start,
@@ -447,8 +553,21 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "metadata": meta, "virality": vir, "reframe": metrics,
+            "events": clip_events,
             "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
+
+
+def _remap_to_output(t: float, segments: list) -> float | None:
+    """Absolute source time -> clip-relative output time through the kept
+    segments (EditPlan pause-removal aware). None when t falls in a removed
+    gap or outside the clip."""
+    acc = 0.0
+    for s0, s1 in segments:
+        if s0 <= t < s1:
+            return round(acc + (t - s0), 3)
+        acc += s1 - s0
+    return None
 
 
 def _worker_count(cfg: dict, n_clips: int) -> int:

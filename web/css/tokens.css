@@ -1,0 +1,88 @@
+/* ClipForge design tokens — single source of truth.
+   Direction: iOS material depth + motion discipline fused with Nothing's
+   monochrome restraint and dot-matrix signature. One accent, used rarely. */
+
+@font-face {
+  font-family: "Doto";
+  src: url("../fonts/Doto-Variable.ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/Inter-Variable.ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-Variable.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-display: block;
+}
+
+:root {
+  /* ---- color: true monochrome foundation, near-black not gray-blue ---- */
+  --bg-0: #0a0a0b;        /* page */
+  --bg-1: #101012;        /* raised panel */
+  --bg-2: #17171a;        /* card */
+  --bg-3: #1f1f23;        /* elevated / hover */
+  --line: #2a2a2e;        /* hairline borders */
+  --line-strong: #3a3a40;
+
+  --ink: #ededea;         /* primary text (off-white, warm) */
+  --ink-dim: #a2a29f;     /* secondary text */
+  --ink-faint: #5f5f62;   /* placeholders, disabled, idle dots */
+
+  /* ONE accent: Nothing-red. Record / live / the primary action moment.
+     Never decoration, never links, never hover tints. */
+  --accent: #d71921;
+  --accent-hover: #ef2a32;
+  --accent-ink: #ffffff;
+
+  /* semantic states only */
+  --ok: #43b96f;
+  --warn: #e2a33d;
+
+  /* ---- type ------------------------------------------------------------ */
+  --font-display: "Doto", "JetBrains Mono", monospace;  /* titles, big numbers ONLY */
+  --font-ui: "Inter", system-ui, sans-serif;            /* everything else */
+  --font-mono: "JetBrains Mono", Consolas, monospace;   /* timecodes, readouts */
+
+  /* strict scale — do not invent sizes between these */
+  --text-xs: 0.75rem;      /* 12  labels, captions        lh 1.35 */
+  --text-sm: 0.8125rem;    /* 13  secondary UI            lh 1.45 */
+  --text-md: 0.9375rem;    /* 15  body / controls         lh 1.5  */
+  --text-lg: 1.0625rem;    /* 17  emphasized body         lh 1.45 */
+  --text-xl: 1.375rem;     /* 22  section titles          lh 1.3  */
+  --text-2xl: 2.125rem;    /* 34  screen titles (Doto)    lh 1.15 */
+  --text-3xl: 3.5rem;      /* 56  hero numbers (Doto)     lh 1.0  */
+
+  /* ---- space (4px grid) & radius ---------------------------------------- */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+
+  --r-sm: 8px;    /* controls */
+  --r-md: 12px;   /* inputs, small cards */
+  --r-lg: 18px;   /* cards, dialogs */
+  --r-full: 999px;
+
+  /* ---- depth: soft, real, layered (the iOS half) ------------------------ */
+  --shadow-1: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .25);
+  --shadow-2: 0 2px 4px rgb(0 0 0 / .5), 0 8px 24px rgb(0 0 0 / .35);
+  --shadow-3: 0 4px 8px rgb(0 0 0 / .5), 0 24px 64px rgb(0 0 0 / .5);
+  --edge: inset 0 1px 0 rgb(255 255 255 / .04);   /* top-light on surfaces */
+
+  /* ---- motion ----------------------------------------------------------- */
+  --t-fast: 150ms;   /* hover, focus, press */
+  --t-med: 220ms;    /* reveals, toggles */
+  --t-slow: 350ms;   /* modals, screen transitions */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.36, 1);
+
+  /* ---- dot matrix -------------------------------------------------------- */
+  --dot-idle: #2a2a2c;
+  --dot-lit: var(--ink);
+  --dot-head: var(--accent);
+  --dot-gap: 10px;   /* full variant pitch; mini uses 7px */
+}

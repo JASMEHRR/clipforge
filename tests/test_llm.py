@@ -40,7 +40,7 @@ def test_resolve_unknown_raises(cfg):
 def test_retry_then_success(cfg, monkeypatch):
     calls = {"n": 0}
 
-    def flaky(name, task, schema, prompt, context, c):
+    def flaky(name, task, schema, prompt, context, c, media=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return "not json at all"
@@ -106,3 +106,122 @@ def test_repair_json_variants():
 def test_synthesize_hashtag_pattern():
     out = llm.synthesize_from_schema(SCHEMAS["clip_metadata"], seed="t")
     validate(out, "clip_metadata")
+
+
+# --- viral_v2: openrouter provider + multimodal ----------------------------
+
+def test_openrouter_registered():
+    assert "openrouter" in llm.PROVIDERS
+
+
+def test_openrouter_without_key_raises_clean_error(cfg, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(LLMError):
+        llm._openrouter_complete(SCHEMAS["viral_events"], "p", cfg)
+
+
+def test_media_rejected_by_text_only_providers(cfg, monkeypatch):
+    media = [{"kind": "image", "mime": "image/jpeg", "data": b"x"}]
+    for name in ("groq", "ollama"):
+        with pytest.raises(LLMError):
+            llm._dispatch(name, "t", SCHEMAS["viral_events"], "p", None, cfg,
+                          media)
+
+
+def test_mock_viral_events_deterministic_and_valid(cfg):
+    ctx = {"chunk_start": 600.0, "chunk_seconds": 300.0}
+    a = llm.complete_json("viral_events", "viral_events", "p", provider="mock",
+                          context=ctx, cfg=cfg)
+    b = llm.complete_json("viral_events", "viral_events", "p", provider="mock",
+                          context=ctx, cfg=cfg)
+    assert a == b
+    validate(a, "viral_events")
+    assert len(a["events"]) == 2
+    types = {e["type"] for e in a["events"]}
+    assert "laughter" in types and "energy_spike" in types
+
+
+# --- gemini retry classification -------------------------------------------
+
+def test_gemini_503_retries_then_succeeds(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    class FakeServerError(Exception):
+        code = 503
+
+    def flaky_dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise llm._classify_gemini_error(FakeServerError("unavailable"))
+        return {"hook_strength": 5, "retention": 5, "clarity": 5, "impact": 5}
+
+    monkeypatch.setattr(llm, "_dispatch", flaky_dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    out = llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                            cfg=cfg)
+    assert calls["n"] == 3 and out["retention"] == 5
+    assert len(slept) == 2  # backed off before attempt 2 and 3
+
+
+def test_gemini_404_fails_fast_no_retry(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    class FakeClientError(Exception):
+        code = 404
+
+    def dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        raise llm._classify_gemini_error(FakeClientError("not found"))
+
+    monkeypatch.setattr(llm, "_dispatch", dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    with pytest.raises(LLMError):
+        llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                          cfg=cfg)
+    assert calls["n"] == 1 and slept == []
+
+
+def test_gemini_timeout_retries_then_succeeds(cfg, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_dispatch(name, task, schema, prompt, context, c, media=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise llm._classify_gemini_error(TimeoutError("Read timed out"))
+        return {"hook_strength": 5, "retention": 5, "clarity": 5, "impact": 5}
+
+    monkeypatch.setattr(llm, "_dispatch", flaky_dispatch)
+    slept = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: slept.append(s))
+    out = llm.complete_json("clip_score", "clip_score", "p", provider="gemini",
+                            cfg=cfg)
+    assert calls["n"] == 3 and out["retention"] == 5
+    assert len(slept) == 2
+
+
+def test_classify_timeout_error_is_retryable():
+    assert llm._classify_gemini_error(TimeoutError("Read timed out")).retryable
+    assert llm._classify_gemini_error(TimeoutError()).retryable
+
+
+def test_classify_gemini_error_retryable_vs_not():
+    class Fake503(Exception):
+        code = 503
+
+    class Fake404(Exception):
+        code = 404
+
+    assert llm._classify_gemini_error(Fake503("x")).retryable is True
+    assert llm._classify_gemini_error(Fake404("x")).retryable is False
+    assert llm._classify_gemini_error(Exception("429 RESOURCE_EXHAUSTED")).retryable
+    assert not llm._classify_gemini_error(Exception("400 invalid argument")).retryable
+
+
+def test_mock_ignores_media(cfg):
+    out = llm.complete_json(
+        "viral_events", "viral_events", "p", provider="mock",
+        context={"chunk_start": 0.0, "chunk_seconds": 60.0}, cfg=cfg,
+        media=[{"kind": "image", "mime": "image/jpeg", "data": b"x"}])
+    validate(out, "viral_events")
