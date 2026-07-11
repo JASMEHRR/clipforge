@@ -6,6 +6,8 @@ downloads/
 *.zip
 client_secret*.json
 *token*.json
+youtube.json
+youtube*.json
 __pycache__/
 *.pyc
 cache/
