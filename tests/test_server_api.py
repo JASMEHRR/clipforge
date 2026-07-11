@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import pipeline
 import progress
-from errors import JobCancelled
+from errors import JobCancelled, UploadError
 from server import create_app
 from server.copy import STAGE_LABELS
 
@@ -254,6 +254,131 @@ def test_presets_and_music_endpoints(client):
 
 def test_batch_zip_empty_queue_404(client):
     assert client.get("/api/batch/zip").status_code == 404
+
+
+def _write_candidate_clip(output_dir, job, clip, score, title="A clip"):
+    clip_dir = output_dir / job / clip
+    clip_dir.mkdir(parents=True)
+    (clip_dir / "final.mp4").write_bytes(b"\x00" * 10)
+    meta = {"title": title, "description": "Desc.", "hashtags": ["#a", "#shorts"],
+            "virality": {"score": score, "band": "Strong"},
+            "original_source_start_s": 10.0, "original_source_end_s": 40.0,
+            "source_name": "video.mp4"}
+    (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    return clip_dir
+
+
+def _wait_batch(client, batch_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        st = client.get(f"/api/youtube/queue/upload/{batch_id}").json()
+        if st["state"] == "done":
+            return st
+        time.sleep(0.02)
+    raise AssertionError(f"batch never finished: {st}")
+
+
+def _isolate_upload_scheduler(monkeypatch, tmp_path):
+    import upload_scheduler as sched
+    import server.routes_upload as ru
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(sched, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(sched, "ROOT", tmp_path)
+    monkeypatch.setattr(sched, "LOG_FILE", tmp_path / "cache" / "upload_log.json")
+    monkeypatch.setattr(ru, "ROOT", tmp_path)
+    return output_dir
+
+
+def test_youtube_queue_lists_candidates_and_serves_video(client, monkeypatch, tmp_path):
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=90, title="Best clip")
+
+    r = client.get("/api/youtube/queue").json()
+    assert len(r["candidates"]) == 1
+    cand = r["candidates"][0]
+    assert cand["title"] == "Best clip" and cand["score"] == 90
+    assert cand["band"] == "Strong" and cand["duration"] == 30.0
+
+    video = client.get(cand["video_url"])
+    assert video.status_code == 200
+
+    # path traversal via the video route is blocked
+    assert client.get("/api/youtube/queue/video/..%2f..%2fsecret").status_code == 404
+
+
+def test_youtube_queue_select_top_and_manual(client, monkeypatch, tmp_path):
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=90, title="High")
+    _write_candidate_clip(output_dir, "job1", "clip_01", score=60, title="Low")
+
+    top = client.post("/api/youtube/queue/select", json={"mode": "top", "count": 1}).json()
+    assert len(top["items"]) == 1 and top["items"][0]["title"] == "High"
+
+    all_keys = [c["key"] for c in client.get("/api/youtube/queue").json()["candidates"]]
+    manual = client.post("/api/youtube/queue/select",
+                         json={"mode": "manual", "keys": all_keys}).json()
+    assert len(manual["items"]) == 2
+
+    bad_mode = client.post("/api/youtube/queue/select", json={"mode": "nope"})
+    assert bad_mode.status_code == 422
+
+
+def test_youtube_queue_select_cap_warning(client, monkeypatch, tmp_path):
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    for i in range(5):
+        _write_candidate_clip(output_dir, "job1", f"clip_{i:02d}", score=90)
+    # real config.yaml's upload.max_per_day is 5; requesting all 5 fresh fits
+    fits = client.post("/api/youtube/queue/select", json={"mode": "top", "count": 5}).json()
+    assert fits["warning"] is None
+
+
+def test_youtube_queue_upload_requires_authorization(client, monkeypatch, tmp_path):
+    _isolate_upload_scheduler(monkeypatch, tmp_path)
+    monkeypatch.setattr("youtube_upload.credentials_available", lambda: False)
+    r = client.post("/api/youtube/queue/upload", json={"mode": "top", "count": 1})
+    assert r.status_code == 409
+
+
+def test_youtube_queue_upload_confirm_then_submit_flow(client, monkeypatch, tmp_path):
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=90, title="Good clip")
+    _write_candidate_clip(output_dir, "job1", "clip_01", score=80, title="Bad clip")
+
+    monkeypatch.setattr("youtube_upload.credentials_available", lambda: True)
+    monkeypatch.setattr("youtube_upload.has_cached_token", lambda: True)
+    monkeypatch.setattr("youtube_upload.build_service", lambda service=None: object())
+
+    def fake_upload_clip(video, snippet, privacy="private", service=None,
+                         publish_at=None, category_id=None):
+        assert privacy == "public" and publish_at is None   # immediate, not scheduled
+        if "clip_01" in str(video):
+            raise UploadError("quota hit")
+        return {"video_id": "vidX", "url": "https://youtu.be/vidX"}
+
+    monkeypatch.setattr("youtube_upload.upload_clip", fake_upload_clip)
+
+    # confirm step: see exactly what would be sent, before submitting
+    preview = client.post("/api/youtube/queue/select", json={"mode": "top", "count": 2}).json()
+    assert len(preview["items"]) == 2
+
+    run = client.post("/api/youtube/queue/upload", json={"mode": "top", "count": 2})
+    assert run.status_code == 200
+    batch_id = run.json()["batch_id"]
+
+    final = _wait_batch(client, batch_id)
+    statuses = {it["title"]: it["status"] for it in final["items"]}
+    assert statuses["Good clip"] == "done"
+    assert statuses["Bad clip"] == "failed"
+
+    # the failure didn't stop the batch, and only the success was logged
+    log_data = json.loads((tmp_path / "cache" / "upload_log.json").read_text())
+    assert len(log_data["uploads"]) == 1
+
+    # the uploaded clip no longer appears in a fresh queue fetch; the failed
+    # one is still eligible (it was never logged as uploaded)
+    remaining = client.get("/api/youtube/queue").json()["candidates"]
+    assert [c["title"] for c in remaining] == ["Bad clip"]
 
 
 def test_upload_size_cap(client, monkeypatch):

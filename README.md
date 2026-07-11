@@ -166,6 +166,7 @@ python upload.py report     # 28-day performance report + recommendations
 | `upload.min_virality` | skip auto-upload for clips scoring below this (0-100) | 40 |
 | `upload.max_per_day` / `max_per_run` | daily cap (persists across restarts) / per-batch cap | 3 / 2 |
 | `upload.publish_slots_ist` | hours of day (IST) videos are scheduled to go live | `[12, 19]` |
+| `upload.slot_spacing_minutes` | min gap between uploads; extra slots pack after the last configured hour so `max_per_day` is reachable even with fewer configured hours than uploads/day | 60 |
 | `upload.ntfy_topic` | ntfy.sh topic for phone push notifications; `""` disables | "" |
 | `llm.openrouter_model` | OpenRouter vision model for viral_v2's frame fallback (free ids rotate — update here) | `qwen/qwen2.5-vl-72b-instruct:free` |
 | `viral_v2.enabled` | multimodal event detection (`false` = transcript-only, pre-feature output) | `true` |

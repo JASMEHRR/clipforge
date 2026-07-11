@@ -1,11 +1,18 @@
 """YouTube: connection state, one-time authorization (explicit user action
-only), manual upload of a run's kept clips, and the auto-upload panel."""
+only), manual upload of a run's kept clips, the auto-upload panel, and the
+manual 'Upload now' batch override on top of the auto-upload candidate
+queue (upload_scheduler.find_candidates)."""
 from __future__ import annotations
 
+import threading
+import uuid
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import load_config, save_config
+from config import ROOT, load_config, save_config
 from logutil import get_logger
 from server.copy import friendly
 from server.routes_library import safe_job_path
@@ -89,3 +96,131 @@ def upload_job(req: UploadRequest):
         return {"uploaded": results}
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
         raise HTTPException(502, friendly(e, "Uploading"))
+
+
+# ---------------------------------------------------------------- queue --
+# The auto-upload candidate queue (upload_scheduler.find_candidates), plus a
+# manual "Upload now" override that publishes a chosen batch immediately
+# instead of waiting for the next scheduled slot.
+
+def _safe_candidate_path(key: str) -> Path:
+    """Resolve an upload_scheduler candidate key ('output/<job>/clip_NN') to
+    its clip directory, refusing anything that escapes output/."""
+    import upload_scheduler as sched
+    out_root = sched.OUTPUT_DIR.resolve()
+    p = (ROOT / key).resolve()
+    if not p.is_relative_to(out_root) or p == out_root:
+        raise HTTPException(404, "That clip can't be found.")
+    return p
+
+
+def _candidate_summary(c: dict) -> dict:
+    meta = c["meta"]
+    vir = meta.get("virality", {})
+    start, end = meta.get("original_source_start_s"), meta.get("original_source_end_s")
+    return {
+        "key": c["key"], "title": meta.get("title", "Untitled"), "score": c["score"],
+        "band": vir.get("band"), "source_name": meta.get("source_name", ""),
+        "duration": (end - start) if start is not None and end is not None else None,
+        "video_url": f"/api/youtube/queue/video/{c['key']}",
+    }
+
+
+@router.get("/api/youtube/queue")
+def youtube_queue():
+    import upload_scheduler as sched
+    cfg = load_config()
+    log_data = sched.load_log()
+    candidates = sched.find_candidates(cfg, log_data)
+    return {
+        "candidates": [_candidate_summary(c) for c in candidates],
+        "uploads_today": sched.uploads_today(log_data),
+        "max_per_day": cfg.get("upload", {}).get("max_per_day", 3),
+    }
+
+
+@router.get("/api/youtube/queue/video/{key:path}")
+def queue_video(key: str):
+    p = _safe_candidate_path(key) / "final.mp4"
+    if not p.is_file():
+        raise HTTPException(404, "File not found.")
+    return FileResponse(str(p))
+
+
+class QueueSelectRequest(BaseModel):
+    mode: str = "top"          # "top" (best `count` by score) | "manual" (`keys`)
+    count: int = 0
+    keys: list[str] = []
+
+
+def _select(req: QueueSelectRequest):
+    """Server-authoritative reselection: always recomputes candidates fresh
+    (never trusts a client-held list) so a stale UI can't upload/preview a
+    clip that's since been excluded, uploaded elsewhere, or deleted."""
+    import upload_scheduler as sched
+    if req.mode not in ("top", "manual"):
+        raise HTTPException(422, "That selection mode isn't recognized.")
+    cfg = load_config()
+    log_data = sched.load_log()
+    candidates = sched.find_candidates(cfg, log_data)
+    picked = sched.select_candidates(candidates, req.mode, req.count, req.keys)
+    return cfg, log_data, picked
+
+
+@router.post("/api/youtube/queue/select")
+def queue_select(req: QueueSelectRequest):
+    import upload_scheduler as sched
+    cfg, log_data, picked = _select(req)
+    return {"items": [_candidate_summary(c) for c in picked],
+            "warning": sched.cap_warning(cfg, log_data, len(picked))}
+
+
+_BATCHES: dict[str, dict] = {}
+_BATCHES_LOCK = threading.Lock()
+
+
+@router.post("/api/youtube/queue/upload")
+def queue_upload(req: QueueSelectRequest):
+    import upload_scheduler as sched
+    import youtube_upload as yt
+    if not _authorized():
+        raise HTTPException(409, "Connect to YouTube first (one-time).")
+    cfg, log_data, picked = _select(req)
+    if not picked:
+        raise HTTPException(422, "No clips to upload — pick at least one.")
+
+    batch_id = uuid.uuid4().hex[:12]
+    items = {c["key"]: {"key": c["key"],
+                        "title": sched.build_snippet(c["meta"])["title"],
+                        "status": "pending"} for c in picked}
+    with _BATCHES_LOCK:
+        _BATCHES[batch_id] = {"state": "running", "items": items}
+
+    def on_progress(result: dict) -> None:
+        with _BATCHES_LOCK:
+            _BATCHES[batch_id]["items"][result["key"]] = result
+
+    def work() -> None:
+        try:
+            youtube = yt.build_service()
+            for c in picked:
+                with _BATCHES_LOCK:
+                    _BATCHES[batch_id]["items"][c["key"]]["status"] = "uploading"
+                sched.upload_now(youtube, cfg, log_data, [c], on_progress=on_progress)
+        except Exception as e:  # noqa: BLE001 — batch worker must never crash silently
+            log.error("upload-now batch %s crashed: %s", batch_id, e)
+        finally:
+            with _BATCHES_LOCK:
+                _BATCHES[batch_id]["state"] = "done"
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"batch_id": batch_id}
+
+
+@router.get("/api/youtube/queue/upload/{batch_id}")
+def queue_upload_status(batch_id: str):
+    with _BATCHES_LOCK:
+        batch = _BATCHES.get(batch_id)
+        if batch is None:
+            raise HTTPException(404, "That batch isn't active anymore.")
+        return {"state": batch["state"], "items": list(batch["items"].values())}

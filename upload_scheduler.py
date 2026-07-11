@@ -132,6 +132,34 @@ def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
     return candidates
 
 
+def select_candidates(candidates: list[dict], mode: str, count: int = 0,
+                      keys: list[str] | None = None) -> list[dict]:
+    """Subset of `candidates` (already sorted best-first by find_candidates)
+    for a manual 'Upload now' batch: 'top' takes the first `count`; 'manual'
+    keeps only the requested keys, in their find_candidates order (unknown
+    keys — already uploaded/deleted since the UI last fetched — are dropped
+    silently rather than erroring, since the caller re-fetches candidates
+    fresh right before this)."""
+    if mode == "manual":
+        wanted = set(keys or [])
+        return [c for c in candidates if c["key"] in wanted]
+    return candidates[:max(0, int(count))]
+
+
+def cap_warning(cfg: dict, log_data: dict, requested_count: int) -> str | None:
+    """Plain-language warning when an immediate batch would push today's
+    count past max_per_day; None when it fits. Never blocks by itself — an
+    explicit 'Upload now' is a deliberate manual override, the caller decides
+    whether to proceed after showing this."""
+    max_day = cfg.get("upload", {}).get("max_per_day", 3)
+    over = uploads_today(log_data) + requested_count - max_day
+    if over <= 0:
+        return None
+    return (f"This is more than today's usual limit of {max_day} — the extra "
+           f"{over} clip{'s' if over != 1 else ''} will publish today anyway "
+           f"if you continue.")
+
+
 # ============================================================
 # Title / description / hashtags
 # ============================================================
@@ -191,33 +219,55 @@ def get_peak_hours(analytics) -> list[int] | None:
 
 
 def next_publish_times(count: int, analytics, log_data: dict,
-                       default_slots: list[int]) -> list[datetime]:
-    """Pick the next `count` free publish slots, never in the past,
-    never colliding with already-scheduled videos."""
-    import random
-    hours = get_peak_hours(analytics) or default_slots
+                       default_slots: list[int],
+                       slot_spacing_minutes: int = 60) -> list[datetime]:
+    """Pick the next `count` free publish slots, never in the past, never
+    within slot_spacing_minutes of an already-scheduled video.
 
-    taken = set()
+    Configured hours are the preferred slots for a day; if more slots are
+    needed than there are configured hours (e.g. a single publish_slots_ist
+    hour with max_per_day > 1), extra slots are packed after the last
+    configured hour, spaced by slot_spacing_minutes, so max_per_day is
+    actually reachable instead of silently capping at len(hours)/day.
+
+    Slots land exactly on their computed minute (no jitter): jitter would
+    let adjacent slots' effective gap shrink below slot_spacing_minutes,
+    occasionally rejecting a legitimate same-day slot and spilling into
+    the next day for no real reason."""
+    hours = sorted(set(get_peak_hours(analytics) or default_slots)) or [12]
+    gap = timedelta(minutes=max(1, int(slot_spacing_minutes)))
+
+    taken: list[datetime] = []
     for entry in log_data["uploads"].values():
         t = entry.get("publish_at")
-        if t:
-            taken.add(t[:13])  # date+hour granularity
+        if not t:
+            continue
+        try:
+            taken.append(datetime.fromisoformat(t))
+        except ValueError:
+            continue
 
-    times = []
+    def free(candidate: datetime) -> bool:
+        return all(abs(candidate - t) >= gap for t in taken)
+
+    times: list[datetime] = []
     now = datetime.now(IST)
     day = now.date()
     while len(times) < count:
-        for h in sorted(hours):
-            slot = datetime(day.year, day.month, day.day, h,
-                            random.randint(0, 14), 0, tzinfo=IST)
-            if slot <= now + timedelta(minutes=30):
-                continue
-            if slot.isoformat()[:13] in taken:
-                continue
-            times.append(slot)
-            taken.add(slot.isoformat()[:13])
+        day_bases = [datetime(day.year, day.month, day.day, h, 0, 0, tzinfo=IST)
+                    for h in hours]
+        cursor = day_bases[-1] + gap
+        while cursor.date() == day and len(day_bases) < 48:  # sane per-day ceiling
+            day_bases.append(cursor)
+            cursor += gap
+
+        for candidate in day_bases:
             if len(times) == count:
                 break
+            if candidate <= now + timedelta(minutes=30) or not free(candidate):
+                continue
+            times.append(candidate)
+            taken.append(candidate)
         day += timedelta(days=1)
     return times
 
@@ -234,7 +284,8 @@ def panel_state(cfg: dict, log_data: dict, authorized: bool) -> dict:
     next_slot = None
     if authorized and upload_cfg.get("auto_enabled") and today < max_day:
         slots = next_publish_times(
-            1, None, log_data, upload_cfg.get("publish_slots_ist", [12, 19]))
+            1, None, log_data, upload_cfg.get("publish_slots_ist", [12, 19]),
+            upload_cfg.get("slot_spacing_minutes", 60))
         next_slot = slots[0].isoformat() if slots else None
     recent = sorted(log_data["uploads"].values(),
                     key=lambda e: e.get("uploaded_at", ""), reverse=True)[:5]
@@ -277,7 +328,8 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> i
 
     batch = candidates[:limit]
     times = next_publish_times(len(batch), analytics, log_data,
-                               upload_cfg.get("publish_slots_ist", [12, 19]))
+                               upload_cfg.get("publish_slots_ist", [12, 19]),
+                               upload_cfg.get("slot_spacing_minutes", 60))
     category_id = upload_cfg.get("category_id", "22")
     ntfy_topic = upload_cfg.get("ntfy_topic", "")
 
@@ -306,6 +358,54 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> i
             ntfy_topic,
         )
     return done
+
+
+def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
+               on_progress=None) -> list[dict]:
+    """Publish `clips` immediately (public, no publish_at) — the manual
+    'Upload now' override, distinct from upload_batch's scheduled path.
+    Unlike upload_batch, a failed clip does NOT stop the rest of the batch
+    (this is an explicit one-click action the owner is watching; the rest
+    should still go out). Calls on_progress(result) after each clip, if
+    given, so a caller can stream live status. Returns one result dict per
+    clip: {key, title, status: 'done'|'failed', url?, error?}."""
+    upload_cfg = cfg.get("upload", {})
+    category_id = upload_cfg.get("category_id", "22")
+    ntfy_topic = upload_cfg.get("ntfy_topic", "")
+
+    results = []
+    for clip in clips:
+        snippet = build_snippet(clip["meta"])
+        try:
+            result = youtube_upload.upload_clip(
+                clip["video"], snippet, privacy="public", service=youtube,
+                publish_at=None, category_id=category_id)
+        except UploadError as e:
+            log.error("upload now failed for %s: %s", clip["key"], e)
+            notify("ClipForge upload FAILED", f"{clip['key']}: {e}", ntfy_topic)
+            item = {"key": clip["key"], "title": snippet["title"],
+                    "status": "failed", "error": str(e)}
+            results.append(item)
+            if on_progress:
+                on_progress(item)
+            continue
+
+        now_iso = datetime.now(IST).isoformat()
+        log_data["uploads"][clip["key"]] = {
+            "video_id": result["video_id"], "uploaded_at": now_iso,
+            "publish_at": now_iso, "title": snippet["title"],
+            "virality_score": clip["score"],
+        }
+        save_log(log_data)
+        notify("Short published",
+              f"'{snippet['title']}' (virality {clip['score']}) is live now\n"
+              f"{result['url']}", ntfy_topic)
+        item = {"key": clip["key"], "title": snippet["title"],
+                "status": "done", "url": result["url"]}
+        results.append(item)
+        if on_progress:
+            on_progress(item)
+    return results
 
 
 # ============================================================

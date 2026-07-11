@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import upload_scheduler as sched
+from errors import UploadError
 
 
 def _write_clip(output_dir, job, clip, score, uploaded=False, exclude=False):
@@ -119,8 +120,58 @@ def test_next_publish_times_no_collision_and_not_in_past():
     now = datetime.now(sched.IST)
     for t in times:
         assert t > now
-    hours = [(t.date(), t.hour) for t in times]
-    assert len(hours) == len(set(hours))  # no two slots same day+hour
+    times_sorted = sorted(times)
+    for a, b in zip(times_sorted, times_sorted[1:]):
+        assert (b - a) >= timedelta(minutes=60)  # default spacing, no two slots collide
+
+
+def test_next_publish_times_single_hour_reaches_max_per_day():
+    # regression: publish_slots_ist with ONE hour used to cap at 1 slot/day
+    # forever, no matter how high max_per_day was set (the reported bug).
+    # Not asserting same-day placement here: how many of the 5 land today
+    # vs spill to tomorrow legitimately depends on the wall-clock hour the
+    # test happens to run at (fewer hours remain before midnight late in
+    # the evening) — that's not the bug. The bug was being stuck at 1
+    # slot/day forever regardless of max_per_day; `len(times) == 5` is
+    # the actual regression check.
+    log_data = {"uploads": {}}
+    analytics = MagicMock()
+    analytics.reports.return_value.query.return_value.execute.return_value = {"rows": []}
+    times = sched.next_publish_times(5, analytics, log_data, [17])
+    assert len(times) == 5
+    now = datetime.now(sched.IST)
+    for t in times:
+        assert t > now + timedelta(minutes=30)
+    times_sorted = sorted(times)
+    for a, b in zip(times_sorted, times_sorted[1:]):
+        assert (b - a) >= timedelta(minutes=60)
+
+
+def test_next_publish_times_respects_custom_spacing():
+    log_data = {"uploads": {}}
+    analytics = MagicMock()
+    analytics.reports.return_value.query.return_value.execute.return_value = {"rows": []}
+    times = sched.next_publish_times(3, analytics, log_data, [17],
+                                     slot_spacing_minutes=90)
+    times_sorted = sorted(times)
+    for a, b in zip(times_sorted, times_sorted[1:]):
+        assert (b - a) >= timedelta(minutes=90)
+
+
+def test_next_publish_times_skips_slot_too_close_to_now():
+    # the reported scenario: single configured hour whose only chance today
+    # falls inside the 30-min safety buffer must still fill the REST of
+    # today from later spaced slots, not jump straight to tomorrow.
+    log_data = {"uploads": {}}
+    analytics = MagicMock()
+    analytics.reports.return_value.query.return_value.execute.return_value = {"rows": []}
+    now = datetime.now(sched.IST)
+    near_hour = (now + timedelta(minutes=20)).hour
+    times = sched.next_publish_times(1, analytics, log_data, [near_hour])
+    assert len(times) == 1
+    assert times[0] > now + timedelta(minutes=30)
+    if now.hour < 23:  # avoid the rare midnight-wrap edge in this assertion
+        assert times[0].date() == now.date()
 
 
 def test_uploads_today_counts_only_today(_isolate):
@@ -178,3 +229,98 @@ def test_trigger_after_render_noop_when_cap_reached(_isolate, monkeypatch):
     sched.trigger_after_render(_isolate / "job1" / "clip_01",
                                {"upload": {"auto_enabled": True, "max_per_day": 3}})
     assert called == []
+
+
+# ---------------------------------------------------------- upload now ---
+
+def test_select_candidates_top_n_by_score(_isolate):
+    output_dir = _isolate
+    _write_clip(output_dir, "job1", "clip_00", score=90)
+    _write_clip(output_dir, "job1", "clip_01", score=70)
+    _write_clip(output_dir, "job1", "clip_02", score=50)
+    candidates = sched.find_candidates(CFG, {"uploads": {}})
+    top2 = sched.select_candidates(candidates, "top", count=2)
+    assert [c["score"] for c in top2] == [90, 70]
+
+    assert sched.select_candidates(candidates, "top", count=0) == []
+    assert len(sched.select_candidates(candidates, "top", count=99)) == 3
+
+
+def test_select_candidates_manual_keys(_isolate):
+    output_dir = _isolate
+    d1 = _write_clip(output_dir, "job1", "clip_00", score=90)
+    _write_clip(output_dir, "job1", "clip_01", score=70)
+    candidates = sched.find_candidates(CFG, {"uploads": {}})
+    key0 = str(d1.relative_to(_isolate.parent)).replace("\\", "/")
+    picked = sched.select_candidates(candidates, "manual", keys=[key0])
+    assert len(picked) == 1 and picked[0]["key"] == key0
+
+    # unknown/stale keys are dropped silently, not errored
+    assert sched.select_candidates(candidates, "manual", keys=["nope"]) == []
+    assert sched.select_candidates(candidates, "manual", keys=[]) == []
+
+
+def test_cap_warning_only_when_over_max_per_day():
+    cfg = {"upload": {"max_per_day": 3}}
+    assert sched.cap_warning(cfg, {"uploads": {}}, requested_count=3) is None
+    warning = sched.cap_warning(cfg, {"uploads": {}}, requested_count=5)
+    assert warning is not None
+    assert "3" in warning and "2" in warning  # limit and overflow count
+
+
+def test_cap_warning_counts_todays_uploads_already_sent():
+    now = datetime.now(sched.IST)
+    cfg = {"upload": {"max_per_day": 3}}
+    log_data = {"uploads": {"a": {"uploaded_at": now.isoformat()}}}
+    # 1 already sent today + 3 requested = 4, one over the cap of 3
+    warning = sched.cap_warning(cfg, log_data, requested_count=3)
+    assert warning is not None and "1" in warning
+
+
+def test_upload_now_publishes_public_with_no_publish_at(_isolate, monkeypatch):
+    output_dir = _isolate
+    _write_clip(output_dir, "job1", "clip_00", score=90)
+    candidates = sched.find_candidates(CFG, {"uploads": {}})
+
+    calls = []
+
+    def fake_upload_clip(video, snippet, privacy="private", service=None,
+                         publish_at=None, category_id=None):
+        calls.append({"privacy": privacy, "publish_at": publish_at})
+        return {"video_id": "vid1", "url": "https://youtu.be/vid1"}
+
+    monkeypatch.setattr(sched.youtube_upload, "upload_clip", fake_upload_clip)
+    log_data = {"uploads": {}}
+    results = sched.upload_now(object(), CFG, log_data, candidates)
+
+    assert len(calls) == 1
+    assert calls[0]["privacy"] == "public"
+    assert calls[0]["publish_at"] is None
+    assert results[0]["status"] == "done"
+    assert log_data["uploads"][candidates[0]["key"]]["video_id"] == "vid1"
+
+
+def test_upload_now_continues_past_failures(_isolate, monkeypatch):
+    output_dir = _isolate
+    _write_clip(output_dir, "job1", "clip_00", score=90)
+    _write_clip(output_dir, "job1", "clip_01", score=80)
+    candidates = sched.find_candidates(CFG, {"uploads": {}})
+
+    def flaky_upload_clip(video, snippet, privacy="private", service=None,
+                          publish_at=None, category_id=None):
+        if "clip_00" in str(video):
+            raise UploadError("boom")
+        return {"video_id": "vid2", "url": "https://youtu.be/vid2"}
+
+    monkeypatch.setattr(sched.youtube_upload, "upload_clip", flaky_upload_clip)
+    log_data = {"uploads": {}}
+    progress = []
+    results = sched.upload_now(object(), CFG, log_data, candidates,
+                               on_progress=progress.append)
+
+    statuses = {r["key"]: r["status"] for r in results}
+    assert len(results) == 2  # both attempted despite the first failing
+    assert "failed" in statuses.values() and "done" in statuses.values()
+    assert len(progress) == 2  # on_progress fired for every clip, pass or fail
+    # only the successful upload is recorded in the log
+    assert len(log_data["uploads"]) == 1
