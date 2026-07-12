@@ -151,6 +151,38 @@ def upload_clip(video_path: str | Path, metadata: dict,
     return {"video_id": vid, "url": f"https://youtu.be/{vid}"}
 
 
+def delete_video(video_id: str, service=None) -> None:
+    """Delete an uploaded (scheduled-but-not-yet-public) video. Used to
+    un-schedule a pre-booked clip. ~50 quota units."""
+    yt = build_service(service)
+    try:
+        yt.videos().delete(id=video_id).execute()
+    except Exception as e:  # noqa: BLE001
+        raise _classify(e) from e
+    log.info("deleted video %s", video_id)
+
+
+def video_status(video_ids: list[str], service=None) -> dict[str, str]:
+    """Live privacyStatus per video id ('public' | 'private' | 'unlisted'),
+    for splitting scheduled vs published. Missing ids (deleted on YouTube) are
+    absent from the result. 1 quota unit per call; ids batched 50 at a time."""
+    if not video_ids:
+        return {}
+    yt = build_service(service)
+    out: dict[str, str] = {}
+    ids = [v for v in video_ids if v]
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        try:
+            resp = yt.videos().list(part="status", id=",".join(chunk)).execute()
+        except Exception as e:  # noqa: BLE001 — status is best-effort context
+            log.warning("video status lookup failed: %s", e)
+            continue
+        for item in resp.get("items", []):
+            out[item["id"]] = item.get("status", {}).get("privacyStatus", "")
+    return out
+
+
 def _media_upload(video_path: Path):
     from googleapiclient.http import MediaFileUpload
     return MediaFileUpload(str(video_path), mimetype="video/mp4",

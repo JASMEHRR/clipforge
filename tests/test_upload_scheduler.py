@@ -418,3 +418,106 @@ def test_find_pending_approval_lists_only_pending(_isolate):
     cfg = {"upload": {"min_virality": 40, "require_approval": True}}
     pending = sched.find_pending_approval(cfg, {"uploads": {}})
     assert [c["dir"].name for c in pending] == ["clip_00"]
+
+
+# ============================================================
+# Schedule-ahead (Part 3)
+# ============================================================
+SYNC_CFG = {"upload": {"min_virality": 40, "max_per_day": 5,
+                       "publish_slots_ist": [12, 19], "schedule_ahead_days": 2,
+                       "slot_spacing_minutes": 60, "category_id": "22"}}
+
+
+def _fake_upload_clip(*a, **k):
+    _fake_upload_clip.n += 1
+    return {"video_id": f"v{_fake_upload_clip.n}", "url": "u"}
+_fake_upload_clip.n = 0
+
+
+def test_next_publish_times_slots_per_day_spreads_across_days():
+    times = sched.next_publish_times(3, None, {"uploads": {}}, [12], 60,
+                                     slots_per_day=1)
+    assert len({t.date() for t in times}) == 3   # one slot/day -> three days
+
+
+def test_quota_status_counts_today():
+    today = datetime.now(sched.IST).isoformat()
+    log_data = {"uploads": {f"k{i}": {"uploaded_at": today} for i in range(2)}}
+    q = sched.quota_status(SYNC_CFG, log_data)
+    assert q["uploads_today"] == 2
+    assert q["can_schedule_now"] == min(6, 5) - 2   # quota ceiling vs max_per_day
+
+
+def test_sync_schedule_fills_horizon_bounded_by_slots(_isolate, monkeypatch):
+    output_dir = _isolate
+    for i in range(6):
+        _write_clip(output_dir, "job1", f"clip_{i:02d}", score=90)
+    _fake_upload_clip.n = 0
+    monkeypatch.setattr(sched.youtube_upload, "upload_clip", _fake_upload_clip)
+    log_data = {"uploads": {}}
+    r = sched.sync_schedule(object(), None, SYNC_CFG, log_data)
+    # 2 slots/day * 2-day horizon = 4 clips, and no day gets more than the
+    # configured 2 slots (spread across days, never stacked into one)
+    assert r["scheduled"] == 4
+    assert len(log_data["uploads"]) == 4
+    from collections import Counter
+    per_day = Counter(datetime.fromisoformat(e["publish_at"]).date()
+                      for e in log_data["uploads"].values())
+    assert max(per_day.values()) <= 2
+
+
+def test_sync_schedule_stops_at_quota(_isolate, monkeypatch):
+    output_dir = _isolate
+    for i in range(6):
+        _write_clip(output_dir, "job1", f"clip_{i:02d}", score=90)
+    monkeypatch.setattr(sched.youtube_upload, "upload_clip", _fake_upload_clip)
+    today = datetime.now(sched.IST).isoformat()
+    # 5 uploads already done today -> min(6,5) quota used up
+    log_data = {"uploads": {f"done{i}": {"uploaded_at": today, "video_id": f"d{i}"}
+                            for i in range(5)}}
+    r = sched.sync_schedule(object(), None, SYNC_CFG, log_data)
+    assert r["scheduled"] == 0 and r["can_schedule_now"] == 0
+
+
+def test_unschedule_deletes_and_frees_slot(_isolate, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(sched.youtube_upload, "delete_video",
+                        lambda vid, service=None: deleted.append(vid))
+    future = (datetime.now(sched.IST) + timedelta(hours=2)).isoformat()
+    log_data = {"uploads": {"output/j/clip_00": {"video_id": "vX",
+                                                 "publish_at": future}}}
+    r = sched.unschedule(object(), "output/j/clip_00", log_data)
+    assert deleted == ["vX"] and r["video_id"] == "vX"
+    assert "output/j/clip_00" not in log_data["uploads"]   # slot freed
+
+
+def test_unschedule_refuses_already_published(_isolate):
+    past = (datetime.now(sched.IST) - timedelta(hours=1)).isoformat()
+    log_data = {"uploads": {"k": {"video_id": "v", "publish_at": past}}}
+    with pytest.raises(UploadError):
+        sched.unschedule(object(), "k", log_data)
+
+
+def test_classify_uploads_time_split():
+    now = datetime.now(sched.IST)
+    log_data = {"uploads": {
+        "a": {"video_id": "va", "publish_at": (now + timedelta(hours=2)).isoformat()},
+        "b": {"video_id": "vb", "publish_at": (now - timedelta(hours=2)).isoformat()},
+    }}
+    split = sched.classify_uploads(log_data)
+    assert [r["video_id"] for r in split["scheduled"]] == ["va"]
+    assert [r["video_id"] for r in split["published"]] == ["vb"]
+
+
+def test_classify_uploads_live_status_overrides_clock():
+    now = datetime.now(sched.IST)
+    log_data = {"uploads": {
+        "a": {"video_id": "va", "publish_at": (now + timedelta(hours=2)).isoformat()},
+        "b": {"video_id": "vb", "publish_at": (now + timedelta(hours=3)).isoformat()},
+        "c": {"video_id": "vc", "publish_at": (now + timedelta(hours=4)).isoformat()},
+    }}
+    # va went public early (override), vb private (override), vc unknown to the
+    # status call -> falls back to its future publishAt = still scheduled
+    split = sched.classify_uploads(log_data, {"va": "public", "vb": "private"})
+    assert [r["video_id"] for r in split["published"]] == ["va"]
+    assert [r["video_id"] for r in split["scheduled"]] == ["vb", "vc"]

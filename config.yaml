@@ -241,6 +241,10 @@ upload:
                                 # upload; false = fully automatic (pre-approval behavior)
   max_per_day: 5
   max_per_run: 5
+  schedule_ahead_days: 3        # "Sync schedule" pre-books this many days of
+                                # slots as private+publishAt uploads, so the
+                                # laptop needn't be on at publish time (capped
+                                # by API quota ~6 uploads/day)
   min_virality: 40
   publish_slots_ist: [17]    # fallback publish hours while the channel is young
   slot_spacing_minutes: 60      # min gap between uploads; extra slots pack after the

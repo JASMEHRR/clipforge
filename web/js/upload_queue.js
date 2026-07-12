@@ -27,7 +27,8 @@ const STATUS_BADGE = {
 
 export function mountUploadQueue(container) {
   const state = { candidates: [], pending: [], requireApproval: false,
-                  selected: new Set(), endWatermark: null, cleanable: 0 };
+                  selected: new Set(), endWatermark: null, cleanable: 0,
+                  scheduled: [], published: [], quota: null, horizon: 3 };
   let openDialog = null;   // tracked so navigating away can force-close it
 
   const countIn = el("input", { class: "input t-mono", type: "number",
@@ -40,7 +41,11 @@ export function mountUploadQueue(container) {
   const rowsWrap = el("div", { class: "uq-rows" });
   const emptyMsg = el("p", { class: "t-dim", style: "margin:0" },
     "No clips are waiting to publish right now.");
-  const uploadedWrap = el("div", { class: "uq-rows" });
+  const syncBtn = el("button", { class: "btn btn-primary btn-sm", type: "button" },
+    "Sync schedule");
+  const quotaLine = el("p", { class: "t-dim", style: "margin:0;font-size:var(--text-xs)" });
+  const scheduledWrap = el("div", { class: "uq-rows" });
+  const publishedWrap = el("div", { class: "uq-rows" });
   const cleanupBtn = el("button", { class: "btn btn-danger btn-sm",
                                     type: "button" }, "Clean up uploaded");
   const approveAllBtn = el("button", { class: "btn", type: "button" },
@@ -63,10 +68,16 @@ export function mountUploadQueue(container) {
       el("div", { class: "field-inline" }, selBtn, delSelBtn)),
     rowsWrap,
     el("div", { class: "uq-controls", style: "margin-top:8px" },
-      el("div", { class: "uq-section-label t-label" },
-        "Uploaded — already sent to YouTube"),
+      el("div", {},
+        el("div", { class: "uq-section-label t-label" },
+          "Scheduled on YouTube — publishes with the app closed"),
+        quotaLine),
+      syncBtn),
+    scheduledWrap,
+    el("div", { class: "uq-controls", style: "margin-top:8px" },
+      el("div", { class: "uq-section-label t-label" }, "Published"),
       cleanupBtn),
-    uploadedWrap);
+    publishedWrap);
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
   selBtn.addEventListener("click", () => openConfirm("manual", 0, [...state.selected]));
@@ -131,6 +142,24 @@ export function mountUploadQueue(container) {
     approveAllBtn.disabled = false;
   });
 
+  syncBtn.addEventListener("click", async () => {
+    syncBtn.disabled = true;
+    syncBtn.textContent = "Scheduling…";
+    try {
+      const r = await api.post("/api/youtube/sync-schedule");
+      toast(r.scheduled
+        ? `Scheduled ${r.scheduled} clip${r.scheduled === 1 ? "" : "s"} `
+          + "ahead — they'll publish on their own."
+        : r.can_schedule_now === 0
+          ? "Daily upload quota is used up — try again tomorrow."
+          : "Nothing to schedule right now.",
+        r.scheduled ? "is-ok" : "is-error");
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+    syncBtn.textContent = "Sync schedule";
+    syncBtn.disabled = false;
+  });
+
   async function refresh() {
     rowsWrap.replaceChildren(el("div", { class: "skeleton", style: "height:60px" }));
     let data, approvals, storage;
@@ -146,6 +175,10 @@ export function mountUploadQueue(container) {
     state.pending = approvals.items || [];
     state.requireApproval = !!data.require_approval;
     state.uploaded = data.uploaded || [];
+    state.scheduled = data.scheduled || [];
+    state.published = data.published || [];
+    state.quota = data.quota || null;
+    state.horizon = data.schedule_ahead_days ?? 3;
     state.cleanable = storage ? storage.cleanable_bytes : 0;
     state.endWatermark = data.end_watermark || null;
     state.selected = new Set([...state.selected].filter(
@@ -168,7 +201,31 @@ export function mountUploadQueue(container) {
     approvalsSection.style.display = state.pending.length ? "" : "none";
     approveAllBtn.textContent = `Approve all (${state.pending.length})`;
     approvalsWrap.replaceChildren(...state.pending.map(approvalRow));
-    renderUploaded();
+    renderSchedule();
+    renderPublished();
+  }
+
+  function renderSchedule() {
+    const q = state.quota;
+    const canNow = q ? q.can_schedule_now : 0;
+    // honest quota math: each upload spends real API quota, ~6/day ceiling
+    quotaLine.textContent = q
+      ? `Can schedule ${canNow} more today `
+        + `(${q.uploads_today}/${Math.min(q.uploads_per_day_by_quota, q.max_per_day)} used; `
+        + `~${q.quota_per_upload.toLocaleString()} quota units each, `
+        + `${q.quota_daily.toLocaleString()}/day). Books up to ${state.horizon} days ahead.`
+      : "";
+    syncBtn.disabled = canNow === 0 || state.candidates.length === 0;
+    scheduledWrap.replaceChildren(...(state.scheduled.length
+      ? state.scheduled.map(scheduledRow)
+      : [el("p", { class: "t-dim", style: "margin:0" },
+          "Nothing scheduled ahead yet. Approve clips, then Sync schedule.")]));
+  }
+
+  function renderPublished() {
+    publishedWrap.replaceChildren(...(state.published.length
+      ? state.published.map(uploadedRow)
+      : [el("p", { class: "t-dim", style: "margin:0" }, "Nothing published yet.")]));
   }
 
   /* key = "output/<job>/clip_NN" — the same per-clip approval endpoint the
@@ -226,49 +283,79 @@ export function mountUploadQueue(container) {
       el("div", { class: "field-inline" }, approveBtn, rejectBtn));
   }
 
-  function renderUploaded() {
-    const rows = state.uploaded || [];
-    if (!rows.length) {
-      uploadedWrap.replaceChildren(el("p", { class: "t-dim", style: "margin:0" },
-        "Nothing uploaded yet."));
-      return;
-    }
-    uploadedWrap.replaceChildren(...rows.map((u) => {
-      const delBtn = u.on_disk && u.key
-        ? el("button", { class: "btn btn-danger btn-sm", type: "button",
-                         "aria-label": `Delete local files of ${u.title}` },
-            "Delete local")
-        : null;
-      if (delBtn) {
-        delBtn.addEventListener("click", async () => {
-          const ok = await confirmDialog({
-            title: "Delete local files?",
-            body: `This removes your local copy of "${u.title}". It stays live `
-              + "on YouTube; only the local files go.",
-          });
-          if (!ok) return;
-          try {
-            const r = await api.del("/api/clips", { keys: [u.key] });
-            toast(r.deleted ? `Deleted — freed ${fmtBytes(r.reclaimed_bytes)}.`
-              : "Couldn't delete that clip.", r.deleted ? "is-ok" : "is-error");
-            await refresh();
-          } catch (e) { toast(e.message, "is-error"); }
-        });
-      }
-      return el("div", { class: "uq-uploaded-row" },
-        el("div", { class: "uq-meta" },
-          el("div", { class: "uq-title" }, u.title),
-          el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
-            u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
-            u.score != null ? ` · score ${u.score}` : "")),
-        el("div", { class: "field-inline" },
-          u.video_id
-            ? el("a", { class: "t-mono", style: "font-size:var(--text-xs)",
-                        href: u.url, target: "_blank", rel: "noopener" },
-                "youtu.be ↗")
-            : el("span", { class: "t-dim" }, "scheduled"),
-          delBtn));
-    }));
+  function deleteLocalBtn(u) {
+    if (!(u.on_disk && u.key)) return null;
+    const btn = el("button", { class: "btn btn-danger btn-sm", type: "button",
+                               "aria-label": `Delete local files of ${u.title}` },
+      "Delete local");
+    btn.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Delete local files?",
+        body: `This removes your local copy of "${u.title}". It stays on `
+          + "YouTube; only the local files go.",
+      });
+      if (!ok) return;
+      try {
+        const r = await api.del("/api/clips", { keys: [u.key] });
+        toast(r.deleted ? `Deleted — freed ${fmtBytes(r.reclaimed_bytes)}.`
+          : "Couldn't delete that clip.", r.deleted ? "is-ok" : "is-error");
+        await refresh();
+      } catch (e) { toast(e.message, "is-error"); }
+    });
+    return btn;
+  }
+
+  function ytLink(u) {
+    return u.video_id
+      ? el("a", { class: "t-mono", style: "font-size:var(--text-xs)",
+                  href: u.url, target: "_blank", rel: "noopener" }, "youtu.be ↗")
+      : null;
+  }
+
+  /* A published (live-on-YouTube) row. */
+  function uploadedRow(u) {
+    return el("div", { class: "uq-uploaded-row" },
+      el("div", { class: "uq-meta" },
+        el("div", { class: "uq-title" }, u.title),
+        el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+          u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
+          u.score != null ? ` · score ${u.score}` : "")),
+      el("div", { class: "field-inline" }, ytLink(u), deleteLocalBtn(u)));
+  }
+
+  /* A scheduled row: booked on YouTube, publishes at its slot. Offers
+   * un-schedule (pulls it back before publish; re-uploading costs quota). */
+  function scheduledRow(u) {
+    const when = u.publish_at
+      ? new Date(u.publish_at).toLocaleString([], {
+          weekday: "short", day: "numeric", month: "short",
+          hour: "numeric", minute: "2-digit" })
+      : "soon";
+    const unBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button" },
+      "Un-schedule");
+    unBtn.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Un-schedule this clip?",
+        body: `This pulls "${u.title}" back off YouTube before it publishes and `
+          + "frees the slot. Re-uploading it later costs API quota again.",
+        confirmLabel: "Un-schedule",
+      });
+      if (!ok) return;
+      unBtn.disabled = true;
+      try {
+        await api.post("/api/youtube/unschedule", { key: u.key });
+        toast("Un-scheduled — it's eligible again.", "is-ok");
+        await refresh();
+      } catch (e) { toast(e.message, "is-error"); unBtn.disabled = false; }
+    });
+    return el("div", { class: "uq-uploaded-row" },
+      el("div", { class: "uq-meta" },
+        el("div", { class: "uq-title" }, u.title),
+        el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+          `publishes ${when}`, u.score != null ? ` · score ${u.score}` : "")),
+      el("div", { class: "field-inline" },
+        el("span", { class: "badge badge-live" }, "Scheduled"),
+        ytLink(u), unBtn));
   }
 
   function candidateRow(c) {

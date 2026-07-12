@@ -161,6 +161,22 @@ def youtube_queue():
         ({**v, "key": k, "on_disk": _on_disk(k)}
          for k, v in log_data.get("uploads", {}).items()),
         key=lambda e: e.get("uploaded_at", ""), reverse=True)
+
+    # Split scheduled-on-YouTube vs published, refining with live status when
+    # we can reach the API (best-effort; falls back to the publishAt clock).
+    live = None
+    if _authorized():
+        try:
+            import youtube_upload as yt
+            ids = [e.get("video_id") for e in log_data.get("uploads", {}).values()
+                   if e.get("video_id")]
+            live = yt.video_status(ids, service=yt.build_service())
+        except Exception as e:  # noqa: BLE001 — status is optional context
+            log.info("live video status unavailable: %s", e)
+    split = sched.classify_uploads(log_data, live)
+    on_disk = {u["key"]: u["on_disk"] for u in uploaded}
+    for row in split["scheduled"] + split["published"]:
+        row["on_disk"] = on_disk.get(row["key"], False)
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
         "require_approval": bool(
@@ -177,6 +193,10 @@ def youtube_queue():
                       "publish_at": e.get("publish_at", ""),
                       "key": e.get("key", ""), "on_disk": e.get("on_disk", False),
                       "score": e.get("virality_score")} for e in uploaded],
+        "scheduled": split["scheduled"],
+        "published": split["published"],
+        "quota": sched.quota_status(cfg, log_data),
+        "schedule_ahead_days": cfg.get("upload", {}).get("schedule_ahead_days", 3),
     }
 
 
@@ -382,3 +402,47 @@ def cleanup_uploaded():
         except OSError as e:
             log.warning("cleanup skipped %s: %s", key, e)
     return {"deleted": deleted, "reclaimed_bytes": reclaimed}
+
+
+# ------------------------------------------------------- schedule-ahead --
+
+@router.post("/api/youtube/sync-schedule")
+def sync_schedule():
+    """Pre-book open publish slots across the horizon with approved clips
+    (private + publishAt), so YouTube publishes them with the app closed.
+    Stops cleanly at today's quota, the horizon's open slots, or the last
+    approved clip — whichever comes first."""
+    import upload_scheduler as sched
+    import youtube_upload as yt
+    if not _authorized():
+        raise HTTPException(409, "Connect to YouTube first (one-time).")
+    cfg = load_config()
+    log_data = sched.load_log()
+    try:
+        result = sched.sync_schedule(yt.build_service(),
+                                     yt.build_analytics_service(), cfg, log_data)
+    except Exception as e:  # noqa: BLE001 — includes friendly quota message
+        raise HTTPException(502, friendly(e, "Scheduling uploads"))
+    return result
+
+
+class UnscheduleRequest(BaseModel):
+    key: str
+
+
+@router.post("/api/youtube/unschedule")
+def unschedule(req: UnscheduleRequest):
+    """Pull a pre-booked clip back before it publishes (deletes the private
+    upload on YouTube, frees the slot, makes the clip eligible again)."""
+    import upload_scheduler as sched
+    import youtube_upload as yt
+    from errors import UploadError
+    if not _authorized():
+        raise HTTPException(409, "Connect to YouTube first (one-time).")
+    log_data = sched.load_log()
+    try:
+        return sched.unschedule(yt.build_service(), req.key, log_data)
+    except UploadError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, friendly(e, "Un-scheduling"))

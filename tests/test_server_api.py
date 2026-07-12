@@ -588,3 +588,44 @@ def test_storage_reports_total_and_cleanable(client, monkeypatch, tmp_path):
 
     s = client.get("/api/storage").json()
     assert s["total_bytes"] > s["cleanable_bytes"] > 0
+
+
+def test_sync_schedule_and_unschedule_flow(client, monkeypatch, tmp_path):
+    import youtube_upload as yt
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    for i in range(3):
+        _write_candidate_clip(output_dir, "job1", f"clip_{i:02d}", score=90,
+                              title=f"Clip {i}")
+    monkeypatch.setattr(yt, "credentials_available", lambda: True)
+    monkeypatch.setattr(yt, "has_cached_token", lambda: True)
+    monkeypatch.setattr(yt, "build_service", lambda service=None: object())
+    monkeypatch.setattr(yt, "build_analytics_service", lambda service=None: None)
+    n = {"i": 0}
+
+    def fake_upload_clip(video, snippet, privacy="private", service=None,
+                         publish_at=None, category_id=None):
+        assert privacy == "private" and publish_at    # scheduled, not immediate
+        n["i"] += 1
+        return {"video_id": f"vid{n['i']}", "url": f"https://youtu.be/vid{n['i']}"}
+
+    monkeypatch.setattr(yt, "upload_clip", fake_upload_clip)
+    # no live status calls in this test -> keep classify on the clock
+    monkeypatch.setattr(yt, "video_status", lambda ids, service=None: {})
+
+    r = client.post("/api/youtube/sync-schedule").json()
+    assert r["scheduled"] == 3
+
+    q = client.get("/api/youtube/queue").json()
+    assert len(q["scheduled"]) == 3 and q["published"] == []
+    assert q["candidates"] == []                    # all moved to scheduled
+
+    # un-schedule one: deletes on YouTube, frees the slot, re-lists as candidate
+    deleted = []
+    monkeypatch.setattr(yt, "delete_video",
+                        lambda vid, service=None: deleted.append(vid))
+    key = q["scheduled"][0]["key"]
+    assert client.post("/api/youtube/unschedule", json={"key": key}).status_code == 200
+    assert len(deleted) == 1
+    q2 = client.get("/api/youtube/queue").json()
+    assert len(q2["scheduled"]) == 2
+    assert any(c["key"] == key for c in q2["candidates"])   # eligible again

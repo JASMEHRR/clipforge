@@ -29,6 +29,11 @@ LOG_FILE = ROOT / "cache" / "upload_log.json"
 IST = timezone(timedelta(hours=5, minutes=30))
 MIN_VIEWS_FOR_ANALYTICS = 500
 
+# YouTube Data API daily quota. A resumable video insert costs ~1600 units, so
+# ~6 uploads/day is the hard ceiling regardless of how many slots exist.
+QUOTA_DAILY_UNITS = 10000
+QUOTA_PER_UPLOAD = 1600
+
 
 
 # ============================================================
@@ -299,7 +304,8 @@ def get_peak_hours(analytics) -> list[int] | None:
 
 def next_publish_times(count: int, analytics, log_data: dict,
                        default_slots: list[int],
-                       slot_spacing_minutes: int = 60) -> list[datetime]:
+                       slot_spacing_minutes: int = 60,
+                       slots_per_day: int | None = None) -> list[datetime]:
     """Pick the next `count` free publish slots, never in the past, never
     within slot_spacing_minutes of an already-scheduled video.
 
@@ -335,10 +341,15 @@ def next_publish_times(count: int, analytics, log_data: dict,
     while len(times) < count:
         day_bases = [datetime(day.year, day.month, day.day, h, 0, 0, tzinfo=IST)
                     for h in hours]
-        cursor = day_bases[-1] + gap
-        while cursor.date() == day and len(day_bases) < 48:  # sane per-day ceiling
-            day_bases.append(cursor)
-            cursor += gap
+        if slots_per_day is not None:
+            # schedule-ahead: exactly the configured slots per day, no packing —
+            # so N clips spread across days instead of stacking into one day.
+            day_bases = day_bases[:max(1, slots_per_day)]
+        else:
+            cursor = day_bases[-1] + gap
+            while cursor.date() == day and len(day_bases) < 48:  # per-day ceiling
+                day_bases.append(cursor)
+                cursor += gap
 
         for candidate in day_bases:
             if len(times) == count:
@@ -474,9 +485,12 @@ def upload_one(youtube, clip: dict, publish_at: datetime, category_id: str,
             Path(video).unlink(missing_ok=True)
 
 
-def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> int:
+def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
+                 slots_per_day: int | None = None) -> int:
     """Upload up to `limit` eligible, fully-rendered clips.
-    Returns how many were uploaded. Safe to call repeatedly."""
+    Returns how many were uploaded. Safe to call repeatedly.
+    `slots_per_day` caps publishes per calendar day (schedule-ahead spreads a
+    batch across days instead of stacking it into one)."""
     upload_cfg = cfg.get("upload", {})
     if limit <= 0:
         return 0
@@ -487,7 +501,8 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> i
     batch = candidates[:limit]
     times = next_publish_times(len(batch), analytics, log_data,
                                upload_cfg.get("publish_slots_ist", [12, 19]),
-                               upload_cfg.get("slot_spacing_minutes", 60))
+                               upload_cfg.get("slot_spacing_minutes", 60),
+                               slots_per_day=slots_per_day)
     category_id = upload_cfg.get("category_id", "22")
     ntfy_topic = upload_cfg.get("ntfy_topic", "")
 
@@ -516,6 +531,127 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int) -> i
             ntfy_topic,
         )
     return done
+
+
+# ============================================================
+# Schedule-ahead: pre-book slots so the laptop needn't stay on
+# ============================================================
+def _slots_per_day(cfg: dict) -> int:
+    up = cfg.get("upload", {})
+    return max(1, min(len(up.get("publish_slots_ist", [12, 19])) or 1,
+                      up.get("max_per_day", 5)))
+
+
+def quota_status(cfg: dict, log_data: dict) -> dict:
+    """Honest quota math for the UI. Each upload spends QUOTA_PER_UPLOAD units
+    against a QUOTA_DAILY_UNITS/day ceiling, so only so many clips can be
+    *pushed to YouTube* per day; `can_schedule_now` is how many more today,
+    counting what's already gone out (survives restarts via the log)."""
+    up = cfg.get("upload", {})
+    today = uploads_today(log_data)
+    by_quota = QUOTA_DAILY_UNITS // QUOTA_PER_UPLOAD
+    max_day = up.get("max_per_day", 5)
+    can_now = max(0, min(by_quota, max_day) - today)
+    return {"uploads_today": today, "uploads_per_day_by_quota": by_quota,
+            "max_per_day": max_day, "can_schedule_now": can_now,
+            "quota_per_upload": QUOTA_PER_UPLOAD,
+            "quota_daily": QUOTA_DAILY_UNITS}
+
+
+def _future_scheduled_count(log_data: dict, within_days: int | None = None) -> int:
+    """How many uploads are booked to publish in the future (optionally only
+    within `within_days`) — i.e. slots already filled in the horizon."""
+    now = datetime.now(IST)
+    end = now + timedelta(days=within_days) if within_days else None
+    n = 0
+    for e in log_data["uploads"].values():
+        pa = e.get("publish_at")
+        if not pa:
+            continue
+        try:
+            t = datetime.fromisoformat(pa)
+        except ValueError:
+            continue
+        if t > now and (end is None or t <= end):
+            n += 1
+    return n
+
+
+def sync_schedule(youtube, analytics, cfg: dict, log_data: dict,
+                  horizon_days: int | None = None) -> dict:
+    """Fill open publish slots across the horizon with approved clips, uploading
+    each as private + publishAt so YouTube publishes them with the app closed.
+    Bounded by (a) today's remaining quota, (b) open slots left in the horizon,
+    (c) available approved candidates — stops cleanly at the first limit.
+    Single-sourced: selection is find_candidates, placement is upload_batch."""
+    up = cfg.get("upload", {})
+    horizon_days = int(horizon_days or up.get("schedule_ahead_days", 3))
+    spd = _slots_per_day(cfg)
+    capacity = spd * horizon_days
+    open_slots = max(0, capacity - _future_scheduled_count(log_data, horizon_days))
+    q = quota_status(cfg, log_data)
+    candidates = find_candidates(cfg, log_data)
+    n = min(q["can_schedule_now"], open_slots, len(candidates))
+    done = upload_batch(youtube, analytics, cfg, log_data, limit=n,
+                        slots_per_day=spd) if n > 0 else 0
+    return {"scheduled": done, "open_slots": open_slots,
+            "candidates": len(candidates), "horizon_days": horizon_days,
+            "slots_per_day": spd, **quota_status(cfg, log_data)}
+
+
+def classify_uploads(log_data: dict, live_status: dict | None = None) -> dict:
+    """Split the upload log into clips still scheduled (publishAt in the future)
+    versus already published. `live_status` maps video_id -> privacyStatus (from
+    youtube_upload.video_status) and *refines* the split for the ids it knows: a
+    'public' video counts as published even before its publishAt, a private one
+    as still scheduled. Ids it doesn't cover (partial/failed status call) fall
+    back to the publishAt clock, so a flaky status lookup never hides a clip."""
+    now = datetime.now(IST)
+    scheduled, published = [], []
+    for key, e in log_data["uploads"].items():
+        vid = e.get("video_id", "")
+        row = {"key": key, "video_id": vid, "title": e.get("title", "Untitled"),
+               "url": f"https://youtu.be/{vid}", "publish_at": e.get("publish_at", ""),
+               "uploaded_at": e.get("uploaded_at", ""),
+               "score": e.get("virality_score")}
+        try:
+            future = bool(e.get("publish_at")) and \
+                datetime.fromisoformat(e["publish_at"]) > now
+        except ValueError:
+            future = False
+        status = (live_status or {}).get(vid)
+        if status == "public":
+            published.append(row)
+        elif status in ("private", "unlisted"):
+            scheduled.append(row)
+        else:                            # unknown -> trust the publishAt clock
+            (scheduled if future else published).append(row)
+    scheduled.sort(key=lambda r: r.get("publish_at", ""))
+    published.sort(key=lambda r: r.get("uploaded_at", ""), reverse=True)
+    return {"scheduled": scheduled, "published": published}
+
+
+def unschedule(youtube, key: str, log_data: dict) -> dict:
+    """Pull a pre-booked clip back before it publishes: delete the private
+    upload on YouTube and drop its log entry, so the local clip becomes
+    eligible again. Refuses a clip whose publish time has already passed
+    (it may be live — deleting a public video is not an 'un-schedule')."""
+    entry = log_data["uploads"].get(key)
+    if not entry:
+        raise UploadError("That clip isn't scheduled.")
+    pa = entry.get("publish_at")
+    try:
+        if pa and datetime.fromisoformat(pa) <= datetime.now(IST):
+            raise UploadError("That clip has already published — un-schedule "
+                              "only works before its publish time.")
+    except ValueError:
+        pass
+    vid = entry.get("video_id")
+    if vid:
+        youtube_upload.delete_video(vid, service=youtube)
+    del log_data["uploads"][key]
+    save_log(log_data)
+    return {"unscheduled": key, "video_id": vid}
 
 
 def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
