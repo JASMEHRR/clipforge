@@ -44,6 +44,11 @@
   --ok: #43b96f;
   --warn: #e2a33d;
 
+  /* chart marks — both current charts are single-series; add a second hue
+     only when a chart needs an overlaid series */
+  --chart-1: #9aa0a6;
+  --chart-grid: rgb(255 255 255 / .06);
+
   /* ---- type ------------------------------------------------------------ */
   --font-display: "Doto", "JetBrains Mono", monospace;  /* titles, big numbers ONLY */
   --font-ui: "Inter", system-ui, sans-serif;            /* everything else */

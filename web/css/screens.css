@@ -332,6 +332,30 @@ body.dragging .drop-hint {
 .yt-recent-row a { color: var(--ink); }
 .yt-grid .card.uq-span { grid-column: 1 / -1; }
 
+/* ----------------------------------------------------------- analytics -- */
+
+.an-chart { display: block; width: 100%; height: auto; }
+.an-rec {
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+.an-rec:last-child { border-bottom: 0; }
+.an-rec .an-evidence { color: var(--ink-faint); font-size: var(--text-xs); margin-top: 4px; }
+.an-table { display: grid; gap: var(--sp-2); }
+.an-row {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(4, auto);
+  gap: var(--sp-3);
+  align-items: center;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+.an-row:last-child { border-bottom: 0; }
+.an-row .an-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-row-head { color: var(--ink-faint); font-size: var(--text-xs); }
+
 /* --------------------------------------------------------- upload queue -- */
 
 .uq-controls {

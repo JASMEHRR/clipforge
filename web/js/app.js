@@ -4,6 +4,7 @@
  * All copy is plain language; server sentences are shown verbatim. */
 
 import { api, uploadFile, watchRun } from "./api.js";
+import { barsSVG, sparklineSVG } from "./charts.js";
 import { createDotMatrix, miniScore } from "./dots.js";
 import { clipVideo, el, field, fmtClock, isKept, toast, toggle } from "./ui.js";
 import {
@@ -25,6 +26,7 @@ const routes = {
   edit: renderEditor,
   queue: renderQueue,
   youtube: renderYouTube,
+  analytics: renderAnalytics,
   settings: renderSettings,
   history: renderHistory,
 };
@@ -1062,6 +1064,177 @@ async function renderYouTube() {
     const uq = mountUploadQueue(queueCard);
     cleanup = uq.dispose;
   }
+}
+
+// ----------------------------------------------------------- analytics ----
+
+function fmtIstHour(h) {
+  return `${((h + 11) % 12) + 1} ${h < 12 ? "AM" : "PM"}`;
+}
+
+// publish_at is always an ISO string with a fixed +05:30 offset (see
+// upload_scheduler.py's IST constant) — read the hour off the string
+// directly rather than through Date, which would convert to the browser's
+// local timezone and disagree with the backend's IST-based recommendations.
+function istHourFromIso(iso) {
+  const m = /T(\d{2}):/.exec(iso || "");
+  return m ? Number(m[1]) : null;
+}
+
+function analyticsRecCard(rec) {
+  const evidence = Object.entries(rec.evidence || {})
+    .map(([k, v]) => `${k}: ${Array.isArray(v) || typeof v === "object" ? JSON.stringify(v) : v}`)
+    .join(" · ");
+  const applyBtn = rec.action?.kind === "apply_publish_slot"
+    ? el("button", { class: "btn btn-sm", type: "button" },
+        `Add ${fmtIstHour(rec.action.hour)} to publish slots`)
+    : null;
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      applyBtn.disabled = true;
+      try {
+        await api.put("/api/analytics/publish-slot", { hour: rec.action.hour });
+        toast("Added to your publish slots.", "is-ok");
+      } catch (e) {
+        toast(e.message, "is-error");
+      } finally {
+        applyBtn.disabled = false;
+      }
+    });
+  }
+  return el("div", { class: "an-rec" },
+    el("p", { style: "margin:0" }, rec.message),
+    evidence ? el("p", { class: "an-evidence" }, evidence) : null,
+    applyBtn);
+}
+
+function analyticsVideoHeadRow() {
+  return el("div", { class: "an-row an-row-head" },
+    el("div", { class: "an-title" }, "Title"),
+    el("div", {}, "Views"), el("div", {}, "Avg %"),
+    el("div", {}, "Likes"), el("div", {}, "Subs+"));
+}
+
+function analyticsVideoRow(v) {
+  return el("div", { class: "an-row" },
+    el("div", { class: "an-title" }, v.title),
+    el("div", {}, v.views),
+    el("div", {}, `${v.avg_view_pct}%`),
+    el("div", {}, v.likes),
+    el("div", {}, v.subs_gained));
+}
+
+async function renderAnalytics() {
+  const body = el("div", { class: "yt-grid" },
+    el("div", { class: "skeleton", style: "height:220px" }),
+    el("div", { class: "skeleton", style: "height:220px" }));
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Analytics"),
+        el("h1", { class: "t-display" }, "How your clips are doing"),
+        el("p", { class: "t-dim", style: "margin:4px 0 0" },
+          "Numbers and suggestions come only from your own uploaded clips."))),
+    body));
+
+  let st;
+  try {
+    st = await api.get("/api/analytics/state");
+  } catch (e) {
+    body.replaceChildren(el("div", { class: "card" },
+      el("p", { class: "t-dim", style: "margin:0" }, e.message)));
+    return;
+  }
+
+  const left = el("div", { class: "card", style: "display:grid;gap:16px" });
+  const right = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
+  body.replaceChildren(left, right);
+
+  if (!st.configured) {
+    left.append(
+      el("h2", { class: "t-title", style: "margin:0" }, "One-time setup"),
+      el("p", { class: "t-dim", style: "margin:0" },
+        "Connect YouTube on the YouTube tab first — Analytics uses the same connection."),
+      el("pre", { class: "setup-pre t-mono" },
+        (st.setup_instructions || "").replace(/[#*`]/g, "")));
+    return;
+  }
+  if (!st.authorized) {
+    left.append(
+      el("h2", { class: "t-title", style: "margin:0" }, "Connect your channel"),
+      el("p", { class: "t-dim", style: "margin:0" },
+        "Go to the YouTube tab and connect your channel — Analytics will show up here once you have."));
+    return;
+  }
+
+  const overview = st.overview || {};
+  const videos = st.videos || [];
+  const recs = st.recommendations || [];
+
+  const statTile = (label, stats) => el("div", {},
+    el("div", { class: "t-hero-num" }, (stats?.views ?? 0).toLocaleString()),
+    el("div", { class: "t-label" }, label),
+    el("p", { class: "t-dim", style: "margin:4px 0 0;font-size:var(--text-sm)" },
+      `${(stats?.avg_view_pct ?? 0)}% avg watch · +${stats?.subs_gained ?? 0} subs`));
+
+  const refreshBtn = el("button", { class: "btn btn-sm", type: "button" }, "Refresh");
+  refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Refreshing…";
+    try {
+      await api.get("/api/analytics/state?refresh=1");
+      navigate();
+    } catch (e) {
+      toast(e.message, "is-error");
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "Refresh";
+    }
+  });
+
+  left.append(
+    el("div", { class: "field-inline" },
+      el("h2", { class: "t-title", style: "margin:0" }, "Channel overview"),
+      refreshBtn),
+    el("div", { class: "yt-stats" },
+      statTile("Last 28 days", overview["28d"]),
+      statTile("Last 90 days", overview["90d"])),
+    el("p", { class: "t-dim", style: "margin:0;font-size:var(--text-xs)" },
+      st.fetched_at ? `Updated ${new Date(st.fetched_at).toLocaleString()}` : ""));
+
+  const sorted = [...videos].sort((a, b) =>
+    new Date(a.publish_at || 0) - new Date(b.publish_at || 0));
+  left.append(
+    el("h2", { class: "t-title", style: "margin:0" }, "Views over time"),
+    sparklineSVG(sorted.map((v) => ({ y: v.views }))));
+
+  const byHour = {};
+  for (const v of videos) {
+    const h = istHourFromIso(v.publish_at);
+    if (h === null) continue;
+    if (!byHour[h]) byHour[h] = [];
+    byHour[h].push(v.views);
+  }
+  const hourBars = Object.keys(byHour).map(Number).sort((a, b) => a - b)
+    .map((h) => ({ label: `${h}:00`,
+                  value: byHour[h].reduce((a, b) => a + b, 0) / byHour[h].length }));
+  left.append(
+    el("h2", { class: "t-title", style: "margin:0" }, "Performance by publish hour"),
+    barsSVG(hourBars));
+
+  right.append(el("h2", { class: "t-title", style: "margin:0" }, "Recommendations"));
+  if (recs.length) recs.forEach((r) => right.append(analyticsRecCard(r)));
+  else right.append(el("p", { class: "t-dim", style: "margin:0" },
+    "No recommendations yet."));
+
+  const tableCard = el("div", { class: "card uq-span", style: "display:grid;gap:12px" },
+    el("h2", { class: "t-title", style: "margin:0" }, "Your uploaded clips"),
+    videos.length
+      ? el("div", { class: "an-table" },
+          analyticsVideoHeadRow(),
+          ...videos.map((v) => analyticsVideoRow(v)))
+      : el("p", { class: "t-dim", style: "margin:0" },
+          "Nothing uploaded through ClipForge yet."));
+  body.append(tableCard);
 }
 
 // ------------------------------------------------------------ settings ----

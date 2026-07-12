@@ -44,6 +44,16 @@ def has_cached_token() -> bool:
     return TOKEN_PATH.exists()
 
 
+def authorized() -> bool:
+    """True if the app can talk to the channel right now (credentials
+    configured AND a token has been granted). Any probe failure counts as
+    not connected — shared by every route that gates on YouTube access."""
+    try:
+        return bool(credentials_available() and has_cached_token())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def authorize() -> None:
     """Run the OAuth browser flow. ONLY called from an explicit user action
     (UI button / CLI flag). Never runs during the automated build."""

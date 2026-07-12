@@ -23,10 +23,7 @@ router = APIRouter()
 
 def _authorized() -> bool:
     import youtube_upload as yt
-    try:
-        return bool(yt.credentials_available() and yt.has_cached_token())
-    except Exception:  # noqa: BLE001 — any probe failure counts as not connected
-        return False
+    return yt.authorized()
 
 
 @router.get("/api/youtube/state")

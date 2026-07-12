@@ -35,16 +35,19 @@ def create_app() -> FastAPI:
         jobs.set_loop(asyncio.get_running_loop())
         import updater
         updater.check_async()
+        import analytics
+        analytics.start_background_refresh()
         yield
 
     app = FastAPI(title="ClipForge", lifespan=lifespan)
 
-    from server import (routes_edit, routes_library, routes_run,
-                        routes_settings, routes_upload)
+    from server import (routes_analytics, routes_edit, routes_library,
+                        routes_run, routes_settings, routes_upload)
     app.include_router(routes_run.router)
     app.include_router(routes_library.router)
     app.include_router(routes_edit.router)
     app.include_router(routes_upload.router)
+    app.include_router(routes_analytics.router)
     app.include_router(routes_settings.router)
 
     web_dir = ROOT / "web"
