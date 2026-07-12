@@ -27,6 +27,11 @@ def _authorized() -> bool:
     return yt.authorized()
 
 
+def _dry_run() -> bool:
+    import youtube_upload as yt
+    return yt.dry_run()
+
+
 @router.get("/api/youtube/state")
 def youtube_state():
     import youtube_upload as yt
@@ -197,6 +202,7 @@ def youtube_queue():
         "published": split["published"],
         "quota": sched.quota_status(cfg, log_data),
         "schedule_ahead_days": cfg.get("upload", {}).get("schedule_ahead_days", 3),
+        "dry_run": _dry_run(),
     }
 
 

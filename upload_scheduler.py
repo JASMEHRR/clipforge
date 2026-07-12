@@ -39,23 +39,34 @@ QUOTA_PER_UPLOAD = 1600
 # ============================================================
 # Upload log (memory of what's already uploaded)
 # ============================================================
+def _log_file() -> Path:
+    """Active log path. Dry-run keeps a SEPARATE log so simulated uploads never
+    pollute the real one's dedupe/quota state — flip CLIPFORGE_DRY_RUN off and
+    the real history is exactly as it was."""
+    if youtube_upload.dry_run():
+        return LOG_FILE.with_name(LOG_FILE.stem + ".dryrun.json")
+    return LOG_FILE
+
+
 def load_log() -> dict:
-    if LOG_FILE.exists():
+    path = _log_file()
+    if path.exists():
         try:
-            return json.loads(LOG_FILE.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            backup = LOG_FILE.with_suffix(".json.corrupt")
-            LOG_FILE.rename(backup)
-            log.warning("upload_log.json was corrupt; moved to %s, starting fresh",
-                       backup.name)
+            backup = path.with_suffix(".json.corrupt")
+            path.rename(backup)
+            log.warning("%s was corrupt; moved to %s, starting fresh",
+                       path.name, backup.name)
     return {"uploads": {}}
 
 
 def save_log(log_data: dict) -> None:
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = LOG_FILE.with_suffix(".json.tmp")
+    path = _log_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(log_data, indent=2), encoding="utf-8")
-    tmp.replace(LOG_FILE)  # atomic on same drive; no half-written logs
+    tmp.replace(path)  # atomic on same drive; no half-written logs
 
 
 def uploads_today(log_data: dict) -> int:

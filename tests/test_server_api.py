@@ -629,3 +629,22 @@ def test_sync_schedule_and_unschedule_flow(client, monkeypatch, tmp_path):
     q2 = client.get("/api/youtube/queue").json()
     assert len(q2["scheduled"]) == 2
     assert any(c["key"] == key for c in q2["candidates"])   # eligible again
+
+
+def test_dry_run_sync_schedule_never_hits_api(client, monkeypatch, tmp_path):
+    import youtube_upload as yt
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    for i in range(2):
+        _write_candidate_clip(output_dir, "job1", f"clip_{i:02d}", score=90)
+    # authorized on this machine, but dry-run must still block every real call
+    monkeypatch.setenv("CLIPFORGE_DRY_RUN", "1")
+    monkeypatch.setattr(yt, "credentials_available", lambda: True)
+    monkeypatch.setattr(yt, "has_cached_token", lambda: True)
+    monkeypatch.setattr(yt, "_load_credentials",
+                        lambda: pytest.fail("reached real credentials in dry-run"))
+
+    r = client.post("/api/youtube/sync-schedule").json()
+    assert r["scheduled"] == 2
+    q = client.get("/api/youtube/queue").json()
+    assert q["dry_run"] is True
+    assert all(s["video_id"].startswith("DRYRUN") for s in q["scheduled"])

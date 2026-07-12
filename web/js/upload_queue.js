@@ -28,8 +28,13 @@ const STATUS_BADGE = {
 export function mountUploadQueue(container) {
   const state = { candidates: [], pending: [], requireApproval: false,
                   selected: new Set(), endWatermark: null, cleanable: 0,
-                  scheduled: [], published: [], quota: null, horizon: 3 };
+                  scheduled: [], published: [], quota: null, horizon: 3,
+                  dryRun: false };
   let openDialog = null;   // tracked so navigating away can force-close it
+
+  const dryBanner = el("div", { class: "uq-dryrun", style: "display:none" },
+    "Dry run — uploads and schedules are simulated. Nothing reaches YouTube "
+    + "(CLIPFORGE_DRY_RUN is set).");
 
   const countIn = el("input", { class: "input t-mono", type: "number",
                                 min: "0", step: "1", style: "width:80px" });
@@ -59,6 +64,7 @@ export function mountUploadQueue(container) {
     approvalsHead, approvalsWrap, el("div", { style: "height:8px" }));
 
   container.append(
+    dryBanner,
     approvalsSection,
     el("div", { class: "uq-section-label t-label" }, "Queue — waiting to publish"),
     el("div", { class: "uq-controls" },
@@ -179,6 +185,7 @@ export function mountUploadQueue(container) {
     state.published = data.published || [];
     state.quota = data.quota || null;
     state.horizon = data.schedule_ahead_days ?? 3;
+    state.dryRun = !!data.dry_run;
     state.cleanable = storage ? storage.cleanable_bytes : 0;
     state.endWatermark = data.end_watermark || null;
     state.selected = new Set([...state.selected].filter(
@@ -190,6 +197,7 @@ export function mountUploadQueue(container) {
   }
 
   function render() {
+    dryBanner.style.display = state.dryRun ? "" : "none";
     selBtn.disabled = delSelBtn.disabled = state.selected.size === 0;
     countBtn.disabled = state.candidates.length === 0;
     cleanupBtn.style.display = state.cleanable ? "" : "none";

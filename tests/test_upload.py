@@ -67,3 +67,44 @@ def test_no_creds_guidance(monkeypatch):
     with pytest.raises(UploadError) as ei:
         yt.authorize()
     assert "console.cloud.google.com" in (ei.value.detail or "")
+
+
+# ---- Dry-run guard: sync/upload paths must never reach the real API ----
+
+def test_dry_run_flag_reads_env(monkeypatch):
+    monkeypatch.delenv("CLIPFORGE_DRY_RUN", raising=False)
+    assert yt.dry_run() is False
+    for on in ("1", "true", "YES", "on"):
+        monkeypatch.setenv("CLIPFORGE_DRY_RUN", on)
+        assert yt.dry_run() is True
+    for off in ("0", "false", "no", "", "off"):
+        monkeypatch.setenv("CLIPFORGE_DRY_RUN", off)
+        assert yt.dry_run() is False
+
+
+def test_dry_run_never_builds_a_real_client(monkeypatch, tmp_path):
+    # any attempt to reach Google (credentials or discovery) is a hard failure
+    monkeypatch.setenv("CLIPFORGE_DRY_RUN", "1")
+    monkeypatch.setattr(yt, "_load_credentials",
+                        lambda: pytest.fail("touched real credentials in dry-run"))
+    clip = tmp_path / "final.mp4"
+    clip.write_bytes(b"\x00" * 16)
+
+    assert yt.build_service() is yt._DRY_SERVICE
+    out = yt.upload_clip(clip, META)              # no service passed
+    assert out["video_id"].startswith("DRYRUN")
+    assert yt.delete_video("anything") is None    # no-op
+    assert yt.video_status(["a", "b"]) == {}      # no live status call
+
+
+def test_dry_run_upload_is_deterministic(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_DRY_RUN", "1")
+    clip = tmp_path / "final.mp4"
+    clip.write_bytes(b"\x00" * 16)
+    assert yt.upload_clip(clip, META) == yt.upload_clip(clip, META)
+
+
+def test_dry_run_still_validates_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_DRY_RUN", "1")
+    with pytest.raises(UploadError):
+        yt.upload_clip(tmp_path / "gone.mp4", META)

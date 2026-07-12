@@ -35,6 +35,19 @@ SETUP_INSTRUCTIONS = """### YouTube upload — one-time setup (manual)
 Uploads default to **private** — flip them public in YouTube Studio."""
 
 
+# Hard dev/test guard. When CLIPFORGE_DRY_RUN is set, nothing in this module
+# reaches the real YouTube API — build_service hands back a sentinel, uploads
+# return a fake video, deletes/status no-op. This is a floor, not a flag the
+# UI can override: sync/upload endpoints can never touch a real channel while
+# it's set, regardless of whatever OAuth token exists on the machine.
+_DRY_SERVICE = object()   # handed to callers in dry-run; never used for a call
+
+
+def dry_run() -> bool:
+    return os.environ.get("CLIPFORGE_DRY_RUN", "").strip().lower() \
+        not in ("", "0", "false", "no", "off")
+
+
 def credentials_available() -> bool:
     p = os.environ.get("YOUTUBE_CLIENT_SECRETS", "")
     return bool(p) and Path(p).exists()
@@ -84,6 +97,9 @@ def build_service(service=None):
     """Build the YouTube API client. Tests inject a mocked `service`."""
     if service is not None:
         return service
+    if dry_run():
+        log.warning("[DRY RUN] not building a real YouTube client")
+        return _DRY_SERVICE
     from googleapiclient.discovery import build
     return build("youtube", "v3", credentials=_load_credentials(),
                  cache_discovery=False)
@@ -93,6 +109,8 @@ def build_analytics_service(service=None):
     """Build the YouTube Analytics API client. Tests inject a mocked `service`."""
     if service is not None:
         return service
+    if dry_run():
+        return _DRY_SERVICE
     from googleapiclient.discovery import build
     return build("youtubeAnalytics", "v2", credentials=_load_credentials(),
                  cache_discovery=False)
@@ -134,6 +152,12 @@ def upload_clip(video_path: str | Path, metadata: dict,
     video_path = Path(video_path)
     if not video_path.exists():
         raise UploadError(f"clip not found: {video_path}")
+    if dry_run():
+        import hashlib
+        vid = "DRYRUN" + hashlib.sha1(str(video_path).encode()).hexdigest()[:9]
+        log.warning("[DRY RUN] not uploading %s (privacy=%s); pretend video %s",
+                    video_path.name, privacy, vid)
+        return {"video_id": vid, "url": f"https://youtu.be/{vid}"}
     yt = build_service(service)
     body = build_request_body(metadata, privacy, publish_at, category_id)
     media = _media_upload(video_path)
@@ -154,6 +178,9 @@ def upload_clip(video_path: str | Path, metadata: dict,
 def delete_video(video_id: str, service=None) -> None:
     """Delete an uploaded (scheduled-but-not-yet-public) video. Used to
     un-schedule a pre-booked clip. ~50 quota units."""
+    if dry_run():
+        log.warning("[DRY RUN] not deleting video %s", video_id)
+        return
     yt = build_service(service)
     try:
         yt.videos().delete(id=video_id).execute()
@@ -168,6 +195,8 @@ def video_status(video_ids: list[str], service=None) -> dict[str, str]:
     absent from the result. 1 quota unit per call; ids batched 50 at a time."""
     if not video_ids:
         return {}
+    if dry_run():
+        return {}   # no live status in dry-run -> classify falls back to clock
     yt = build_service(service)
     out: dict[str, str] = {}
     ids = [v for v in video_ids if v]

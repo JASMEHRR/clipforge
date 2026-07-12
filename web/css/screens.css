@@ -374,6 +374,15 @@ body.dragging .drop-hint {
   transition: background var(--t-fast) var(--ease-out);
 }
 .uq-row:hover { background: var(--bg-1); }
+.uq-dryrun {
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-radius: var(--r-sm);
+  border: 1px solid rgb(226 163 61 / .35);
+  background: rgb(226 163 61 / .12);
+  color: var(--warn);
+  font-size: var(--text-sm);
+}
 .uq-approval-row {
   display: grid;
   grid-template-columns: 64px 1fr auto auto;
