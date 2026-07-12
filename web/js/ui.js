@@ -27,6 +27,39 @@ export function fmtClock(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+export function fmtBytes(n) {
+  if (!n || n < 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+/* A modal yes/no confirm. Resolves true only if the user confirms; closing or
+ * cancelling resolves false. `body` is a string or a DOM node. */
+export function confirmDialog({ title, body, confirmLabel = "Delete",
+                               danger = true }) {
+  return new Promise((resolve) => {
+    let decided = false;
+    const done = (v) => { if (!decided) { decided = true; resolve(v); }
+                          dlg.close(); };
+    const confirmBtn = el("button",
+      { class: `btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`,
+        type: "button", onclick: () => done(true) }, confirmLabel);
+    const cancelBtn = el("button",
+      { class: "btn btn-ghost btn-sm", type: "button",
+        onclick: () => done(false) }, "Cancel");
+    const dlg = el("dialog", { class: "dialog" },
+      el("div", { class: "dialog-head" }, el("h2", { class: "t-title" }, title)),
+      el("div", { class: "dialog-body", style: "display:grid;gap:16px" },
+        typeof body === "string"
+          ? el("p", { class: "t-dim", style: "margin:0" }, body) : body,
+        el("div", { class: "field-inline" }, confirmBtn, cancelBtn)));
+    dlg.addEventListener("close", () => { resolve(false); dlg.remove(); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
 // one truthiness rule for the keep flag everywhere: absent = kept
 export const isKept = (clip) => clip.kept !== false;
 

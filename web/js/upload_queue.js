@@ -5,7 +5,8 @@
  * an additional manual trigger into it, not a second selection system. */
 
 import { api } from "./api.js";
-import { clipVideo, el, fmtClock, openClipPreview, toast } from "./ui.js";
+import { clipVideo, confirmDialog, el, fmtBytes, fmtClock, openClipPreview,
+  toast } from "./ui.js";
 
 /* A compact clip thumbnail that opens a full click-to-play preview. Shared by
  * the queue rows and the confirm dialog so preview behaves the same in both. */
@@ -26,7 +27,7 @@ const STATUS_BADGE = {
 
 export function mountUploadQueue(container) {
   const state = { candidates: [], pending: [], requireApproval: false,
-                  selected: new Set(), endWatermark: null };
+                  selected: new Set(), endWatermark: null, cleanable: 0 };
   let openDialog = null;   // tracked so navigating away can force-close it
 
   const countIn = el("input", { class: "input t-mono", type: "number",
@@ -34,10 +35,14 @@ export function mountUploadQueue(container) {
   const countBtn = el("button", { class: "btn btn-primary", type: "button" },
     "Upload now");
   const selBtn = el("button", { class: "btn", type: "button" }, "Upload selected now");
+  const delSelBtn = el("button", { class: "btn btn-danger", type: "button" },
+    "Delete selected");
   const rowsWrap = el("div", { class: "uq-rows" });
   const emptyMsg = el("p", { class: "t-dim", style: "margin:0" },
     "No clips are waiting to publish right now.");
   const uploadedWrap = el("div", { class: "uq-rows" });
+  const cleanupBtn = el("button", { class: "btn btn-danger btn-sm",
+                                    type: "button" }, "Clean up uploaded");
   const approveAllBtn = el("button", { class: "btn", type: "button" },
     "Approve all");
   const approvalsHead = el("div", { class: "uq-controls" },
@@ -55,14 +60,66 @@ export function mountUploadQueue(container) {
       el("div", { class: "field-inline" },
         el("span", { class: "t-label" }, "Upload"), countIn,
         el("span", { class: "t-dim" }, "of the best clips now"), countBtn),
-      selBtn),
+      el("div", { class: "field-inline" }, selBtn, delSelBtn)),
     rowsWrap,
-    el("div", { class: "uq-section-label t-label", style: "margin-top:8px" },
-      "Uploaded — already sent to YouTube"),
+    el("div", { class: "uq-controls", style: "margin-top:8px" },
+      el("div", { class: "uq-section-label t-label" },
+        "Uploaded — already sent to YouTube"),
+      cleanupBtn),
     uploadedWrap);
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
   selBtn.addEventListener("click", () => openConfirm("manual", 0, [...state.selected]));
+
+  /* Shared delete path for every "remove from disk" action here. Queue clips
+   * are approved and waiting to upload, so deleting them cancels a pending
+   * publish — the confirm says so. Keeps the upload log (dedupe intact). */
+  async function deleteKeys(keys, { approvedPending = false } = {}) {
+    if (!keys.length) return;
+    const bytes = state.candidates
+      .filter((c) => keys.includes(c.key))
+      .reduce((sum, c) => sum + (c.bytes || 0), 0);
+    const ok = await confirmDialog({
+      title: `Delete ${keys.length} clip${keys.length === 1 ? "" : "s"}?`,
+      body: `This removes ${keys.length === 1 ? "its" : "their"} files from disk`
+        + (bytes ? ` (${fmtBytes(bytes)})` : "") + ". "
+        + (approvedPending
+          ? "They're approved and waiting to upload — deleting cancels that. " : "")
+        + "This can't be undone.",
+    });
+    if (!ok) return;
+    try {
+      const r = await api.del("/api/clips", { keys });
+      const busy = r.results.filter((x) => x.status === "uploading").length;
+      let msg = `Deleted ${r.deleted} — freed ${fmtBytes(r.reclaimed_bytes)}.`;
+      if (busy) msg += ` ${busy} skipped (uploading).`;
+      toast(msg, busy ? "is-error" : "is-ok");
+      state.selected.clear();
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+  }
+
+  delSelBtn.addEventListener("click", () =>
+    deleteKeys([...state.selected], { approvedPending: state.requireApproval }));
+
+  cleanupBtn.addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Clean up uploaded clips?",
+      body: `This deletes the local files of everything already uploaded to `
+        + `YouTube${state.cleanable ? ` (${fmtBytes(state.cleanable)})` : ""}. `
+        + "They stay live on YouTube; only your local copies go. "
+        + "This can't be undone.",
+    });
+    if (!ok) return;
+    cleanupBtn.disabled = true;
+    try {
+      const r = await api.post("/api/youtube/cleanup-uploaded");
+      toast(`Cleaned up ${r.deleted} clip${r.deleted === 1 ? "" : "s"} — `
+        + `freed ${fmtBytes(r.reclaimed_bytes)}.`, "is-ok");
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+    cleanupBtn.disabled = false;
+  });
   approveAllBtn.addEventListener("click", async () => {
     approveAllBtn.disabled = true;
     try {
@@ -76,10 +133,11 @@ export function mountUploadQueue(container) {
 
   async function refresh() {
     rowsWrap.replaceChildren(el("div", { class: "skeleton", style: "height:60px" }));
-    let data, approvals;
+    let data, approvals, storage;
     try {
-      [data, approvals] = await Promise.all([
-        api.get("/api/youtube/queue"), api.get("/api/youtube/approvals")]);
+      [data, approvals, storage] = await Promise.all([
+        api.get("/api/youtube/queue"), api.get("/api/youtube/approvals"),
+        api.get("/api/storage").catch(() => null)]);
     } catch (e) {
       rowsWrap.replaceChildren(el("p", { class: "t-dim", style: "margin:0" }, e.message));
       return;
@@ -88,6 +146,7 @@ export function mountUploadQueue(container) {
     state.pending = approvals.items || [];
     state.requireApproval = !!data.require_approval;
     state.uploaded = data.uploaded || [];
+    state.cleanable = storage ? storage.cleanable_bytes : 0;
     state.endWatermark = data.end_watermark || null;
     state.selected = new Set([...state.selected].filter(
       (k) => data.candidates.some((c) => c.key === k)));
@@ -98,8 +157,11 @@ export function mountUploadQueue(container) {
   }
 
   function render() {
-    selBtn.disabled = state.selected.size === 0;
+    selBtn.disabled = delSelBtn.disabled = state.selected.size === 0;
     countBtn.disabled = state.candidates.length === 0;
+    cleanupBtn.style.display = state.cleanable ? "" : "none";
+    cleanupBtn.textContent = state.cleanable
+      ? `Clean up uploaded (${fmtBytes(state.cleanable)})` : "Clean up uploaded";
     rowsWrap.replaceChildren(
       ...(state.candidates.length ? state.candidates.map(candidateRow)
         : [emptyMsg]));
@@ -171,18 +233,42 @@ export function mountUploadQueue(container) {
         "Nothing uploaded yet."));
       return;
     }
-    uploadedWrap.replaceChildren(...rows.map((u) =>
-      el("div", { class: "uq-uploaded-row" },
+    uploadedWrap.replaceChildren(...rows.map((u) => {
+      const delBtn = u.on_disk && u.key
+        ? el("button", { class: "btn btn-danger btn-sm", type: "button",
+                         "aria-label": `Delete local files of ${u.title}` },
+            "Delete local")
+        : null;
+      if (delBtn) {
+        delBtn.addEventListener("click", async () => {
+          const ok = await confirmDialog({
+            title: "Delete local files?",
+            body: `This removes your local copy of "${u.title}". It stays live `
+              + "on YouTube; only the local files go.",
+          });
+          if (!ok) return;
+          try {
+            const r = await api.del("/api/clips", { keys: [u.key] });
+            toast(r.deleted ? `Deleted — freed ${fmtBytes(r.reclaimed_bytes)}.`
+              : "Couldn't delete that clip.", r.deleted ? "is-ok" : "is-error");
+            await refresh();
+          } catch (e) { toast(e.message, "is-error"); }
+        });
+      }
+      return el("div", { class: "uq-uploaded-row" },
         el("div", { class: "uq-meta" },
           el("div", { class: "uq-title" }, u.title),
           el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
             u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
             u.score != null ? ` · score ${u.score}` : "")),
-        u.video_id
-          ? el("a", { class: "t-mono", style: "font-size:var(--text-xs)",
-                      href: u.url, target: "_blank", rel: "noopener" },
-              "youtu.be ↗")
-          : el("span", { class: "t-dim" }, "scheduled"))));
+        el("div", { class: "field-inline" },
+          u.video_id
+            ? el("a", { class: "t-mono", style: "font-size:var(--text-xs)",
+                        href: u.url, target: "_blank", rel: "noopener" },
+                "youtu.be ↗")
+            : el("span", { class: "t-dim" }, "scheduled"),
+          delBtn));
+    }));
   }
 
   function candidateRow(c) {
@@ -196,9 +282,13 @@ export function mountUploadQueue(container) {
     const setSel = (on) => {
       check.checked = on;
       if (on) state.selected.add(c.key); else state.selected.delete(c.key);
-      selBtn.disabled = state.selected.size === 0;
+      selBtn.disabled = delSelBtn.disabled = state.selected.size === 0;
     };
     check.addEventListener("change", () => setSel(check.checked));
+    const delBtn = el("button", { class: "btn btn-danger btn-sm", type: "button",
+                                  "aria-label": `Delete ${c.title}` }, "Delete");
+    delBtn.addEventListener("click", () =>
+      deleteKeys([c.key], { approvedPending: state.requireApproval }));
     return el("div", { class: "uq-row" },
       check,
       thumbButton(c.video_url, c.title, "uq-thumb"),
@@ -206,6 +296,7 @@ export function mountUploadQueue(container) {
         el("div", { class: "uq-title" }, c.title),
         el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
           c.source_name, c.duration != null ? ` · ${fmtClock(c.duration)}` : "",
+          c.bytes ? ` · ${fmtBytes(c.bytes)}` : "",
           c.duplicates ? ` · +${c.duplicates} duplicate`
             + `${c.duplicates > 1 ? "s" : ""} collapsed` : "")),
       el("div", { class: "uq-score" },
@@ -216,7 +307,8 @@ export function mountUploadQueue(container) {
         c.band ? el("span", {
           class: `badge ${c.band === "Strong" ? "badge-ok"
             : c.band === "Weak" ? "badge-warn" : ""}`,
-        }, c.band) : null));
+        }, c.band) : null,
+        delBtn));
   }
 
   async function openConfirm(mode, count, keys) {

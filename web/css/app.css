@@ -93,6 +93,11 @@ body {
 .btn-ghost { background: transparent; border-color: transparent; box-shadow: none; }
 .btn-ghost:hover { background: var(--bg-2); border-color: transparent; }
 
+/* destructive, kept visually quieter than the primary CTA */
+.btn-danger { background: transparent; box-shadow: none; color: var(--accent); }
+.btn-danger:hover { background: rgb(215 25 33 / .12); border-color: rgb(215 25 33 / .4); }
+.btn-danger:disabled { color: var(--ink-faint); background: var(--bg-1); }
+
 .btn-lg { padding: 14px 26px; font-size: var(--text-lg); border-radius: var(--r-lg); }
 .btn-sm { padding: 6px 12px; font-size: var(--text-sm); border-radius: var(--r-sm); }
 

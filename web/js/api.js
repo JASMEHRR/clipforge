@@ -24,6 +24,7 @@ export const api = {
   get: (url) => request("GET", url),
   post: (url, body) => request("POST", url, body),
   put: (url, body) => request("PUT", url, body),
+  del: (url, body) => request("DELETE", url, body),
 };
 
 /* Multipart upload with progress (fetch has no upload progress; XHR does). */

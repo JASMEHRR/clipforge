@@ -328,12 +328,16 @@ def _wait_batch(client, batch_id, timeout=5.0):
 def _isolate_upload_scheduler(monkeypatch, tmp_path):
     import upload_scheduler as sched
     import server.routes_upload as ru
+    import server.routes_library as rl
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     monkeypatch.setattr(sched, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(sched, "ROOT", tmp_path)
     monkeypatch.setattr(sched, "LOG_FILE", tmp_path / "cache" / "upload_log.json")
     monkeypatch.setattr(ru, "ROOT", tmp_path)
+    # keep the library's output_root (used by delete/storage/cleanup) pointed at
+    # the same isolated tree the scheduler scans, so keys resolve consistently
+    monkeypatch.setattr(rl, "output_root", lambda: output_dir.resolve())
     return output_dir
 
 
@@ -511,3 +515,76 @@ def test_jobs_listing_includes_niches(client, tmp_path, monkeypatch):
     assert jobs[0]["niches"] == ["gaming"]
     detail = client.get(f"/api/jobs/{jd.name}").json()
     assert detail["clips"][0]["niche"] == "gaming"
+
+
+# ============================================================
+# Delete + cleanup + storage (Part 1)
+# ============================================================
+def _write_job_with_clip(output_dir, job, idx, score=90, uploaded_log=None):
+    """A clip folder plus a matching job.json entry, so delete can prune it."""
+    clip = f"clip_{idx:02d}"
+    _write_candidate_clip(output_dir, job, clip, score=score)
+    (output_dir / job / "job.json").write_text(json.dumps({
+        "clips": [{"index": idx, "path": str(output_dir / job / clip / "final.mp4")}],
+    }), encoding="utf-8")
+    return output_dir / job / clip
+
+
+def test_delete_clip_removes_folder_and_prunes_job(client, monkeypatch, tmp_path):
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    clip_dir = _write_job_with_clip(output_dir, "job1", 0)
+    key = "output/job1/clip_00"
+
+    r = client.request("DELETE", "/api/clips", json={"keys": [key]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["deleted"] == 1 and body["reclaimed_bytes"] > 0
+    assert not clip_dir.exists()
+    # job.json no longer lists the deleted clip
+    job = json.loads((output_dir / "job1" / "job.json").read_text())
+    assert job["clips"] == []
+
+
+def test_delete_refuses_mid_upload(client, monkeypatch, tmp_path):
+    import server.routes_upload as ru
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    clip_dir = _write_job_with_clip(output_dir, "job1", 0)
+    key = "output/job1/clip_00"
+    # simulate an in-flight upload batch holding this clip
+    monkeypatch.setitem(ru._BATCHES, "b1", {
+        "state": "running", "items": {key: {"key": key, "status": "uploading"}}})
+
+    r = client.request("DELETE", "/api/clips", json={"keys": [key]})
+    assert r.json()["results"][0]["status"] == "uploading"
+    assert clip_dir.exists()  # never deleted mid-upload
+
+
+def test_cleanup_uploaded_keeps_log_and_dedupe(client, monkeypatch, tmp_path):
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    up = _write_job_with_clip(output_dir, "job1", 0)          # uploaded
+    kept = _write_job_with_clip(output_dir, "job2", 0)        # not uploaded
+    up_key = "output/job1/clip_00"
+    sched.save_log({"uploads": {up_key: {"video_id": "v", "title": "Up",
+                                         "uploaded_at": "2026-07-12T00:00:00"}}})
+
+    r = client.post("/api/youtube/cleanup-uploaded")
+    assert r.json()["deleted"] == 1 and r.json()["reclaimed_bytes"] > 0
+    assert not up.exists()      # uploaded clip's local files gone
+    assert kept.exists()        # un-uploaded clip untouched
+    # log entry survives → clip stays deduped, never re-eligible
+    log_data = sched.load_log()
+    assert up_key in log_data["uploads"]
+    assert up_key not in {c["key"] for c in sched.find_candidates(
+        {"upload": {"min_virality": 40}}, log_data)}
+
+
+def test_storage_reports_total_and_cleanable(client, monkeypatch, tmp_path):
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_job_with_clip(output_dir, "job1", 0)
+    _write_job_with_clip(output_dir, "job2", 0)
+    sched.save_log({"uploads": {"output/job1/clip_00": {"video_id": "v"}}})
+
+    s = client.get("/api/storage").json()
+    assert s["total_bytes"] > s["cleanable_bytes"] > 0

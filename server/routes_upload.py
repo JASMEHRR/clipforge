@@ -127,6 +127,7 @@ def _safe_candidate_path(key: str) -> Path:
 
 
 def _candidate_summary(c: dict) -> dict:
+    from server.routes_library import dir_size
     meta = c["meta"]
     vir = meta.get("virality", {})
     start, end = meta.get("original_source_start_s"), meta.get("original_source_end_s")
@@ -137,6 +138,7 @@ def _candidate_summary(c: dict) -> dict:
         "duration": (end - start) if start is not None and end is not None else None,
         "video_url": f"/api/youtube/queue/video/{c['key']}",
         "duplicates": len(c.get("duplicates", [])),
+        "bytes": dir_size(c["dir"]),
     }
 
 
@@ -145,10 +147,20 @@ def youtube_queue():
     import upload_scheduler as sched
     cfg = load_config()
     log_data = sched.load_log()
+    from server.routes_library import _clip_dir_from_key
     candidates = sched.find_candidates(cfg, log_data)
     wm = cfg.get("upload", {}).get("end_watermark", {})
-    uploaded = sorted(log_data.get("uploads", {}).values(),
-                      key=lambda e: e.get("uploaded_at", ""), reverse=True)
+
+    def _on_disk(key: str) -> bool:
+        try:
+            return _clip_dir_from_key(key).is_dir()
+        except HTTPException:
+            return False
+
+    uploaded = sorted(
+        ({**v, "key": k, "on_disk": _on_disk(k)}
+         for k, v in log_data.get("uploads", {}).items()),
+        key=lambda e: e.get("uploaded_at", ""), reverse=True)
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
         "require_approval": bool(
@@ -163,6 +175,7 @@ def youtube_queue():
                       "url": f"https://youtu.be/{e.get('video_id', '')}",
                       "uploaded_at": e.get("uploaded_at", ""),
                       "publish_at": e.get("publish_at", ""),
+                      "key": e.get("key", ""), "on_disk": e.get("on_disk", False),
                       "score": e.get("virality_score")} for e in uploaded],
     }
 
@@ -265,6 +278,19 @@ _BATCHES: dict[str, dict] = {}
 _BATCHES_LOCK = threading.Lock()
 
 
+def key_is_uploading(key: str) -> bool:
+    """True while an in-flight 'Upload now' batch is still handling this clip —
+    deleting its file mid-upload would corrupt the upload, so delete refuses."""
+    with _BATCHES_LOCK:
+        for batch in _BATCHES.values():
+            if batch["state"] != "running":
+                continue
+            item = batch["items"].get(key)
+            if item and item.get("status") in ("pending", "uploading"):
+                return True
+    return False
+
+
 @router.post("/api/youtube/queue/upload")
 def queue_upload(req: QueueSelectRequest):
     import upload_scheduler as sched
@@ -310,3 +336,49 @@ def queue_upload_status(batch_id: str):
         if batch is None:
             raise HTTPException(404, "That batch isn't active anymore.")
         return {"state": batch["state"], "items": list(batch["items"].values())}
+
+
+# --------------------------------------------------------- disk cleanup --
+
+@router.get("/api/storage")
+def storage():
+    """Disk used by output/, and how much is safely reclaimable — the local
+    files of clips already uploaded (they live on YouTube now)."""
+    import upload_scheduler as sched
+    from server.routes_library import _clip_dir_from_key, dir_size, output_root
+    root = output_root()
+    total = dir_size(root) if root.exists() else 0
+    cleanable = 0
+    for key in sched.load_log().get("uploads", {}):
+        try:
+            d = _clip_dir_from_key(key)
+        except HTTPException:
+            continue
+        if d.is_dir() and not key_is_uploading(key):
+            cleanable += dir_size(d)
+    return {"total_bytes": total, "cleanable_bytes": cleanable}
+
+
+@router.post("/api/youtube/cleanup-uploaded")
+def cleanup_uploaded():
+    """Delete local files of every clip already uploaded. Keeps the upload log
+    (history + dedupe intact); skips anything mid-upload."""
+    import upload_scheduler as sched
+    from server.routes_library import _clip_dir_from_key, delete_clip_dir
+    deleted = 0
+    reclaimed = 0
+    for key in sched.load_log().get("uploads", {}):
+        if key_is_uploading(key):
+            continue
+        try:
+            d = _clip_dir_from_key(key)
+        except HTTPException:
+            continue
+        if not d.is_dir():
+            continue
+        try:
+            reclaimed += delete_clip_dir(d)
+            deleted += 1
+        except OSError as e:
+            log.warning("cleanup skipped %s: %s", key, e)
+    return {"deleted": deleted, "reclaimed_bytes": reclaimed}

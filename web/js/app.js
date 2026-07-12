@@ -6,7 +6,8 @@
 import { api, uploadFile, watchRun } from "./api.js";
 import { barsSVG, sparklineSVG } from "./charts.js";
 import { createDotMatrix, miniScore } from "./dots.js";
-import { clipVideo, el, field, fmtClock, isKept, toast, toggle } from "./ui.js";
+import { clipVideo, confirmDialog, el, field, fmtBytes, fmtClock, isKept,
+  toast, toggle } from "./ui.js";
 import {
   pickFont, pickMusic, pickPosition, pickPreset, pickProfile, pickShape,
   pickSubsMode,
@@ -658,6 +659,36 @@ function clipCard(jobName, clip, dots) {
     }
   });
 
+  const key = `output/${jobName}/clip_${nn}`;
+  const delBtn = el("button", { class: "btn btn-danger btn-sm", type: "button" },
+    "Delete");
+  delBtn.addEventListener("click", async () => {
+    const size = clip.bytes ? ` (${fmtBytes(clip.bytes)})` : "";
+    const approvedPending = clip.approval === "approved";
+    const ok = await confirmDialog({
+      title: "Delete this clip?",
+      body: `This removes the clip's files from disk${size}. `
+        + (approvedPending
+          ? "It's approved and waiting to upload — deleting it now cancels that. "
+          : "")
+        + "This can't be undone.",
+    });
+    if (!ok) return;
+    delBtn.disabled = true;
+    try {
+      const r = await api.del("/api/clips", { keys: [key] });
+      if (r.deleted) {
+        toast(`Deleted — freed ${fmtBytes(r.reclaimed_bytes)}.`, "is-ok");
+        card.remove();
+      } else {
+        toast(r.results[0]?.status === "uploading"
+          ? "That clip is uploading right now — try again once it's done."
+          : "Couldn't delete that clip.", "is-error");
+        delBtn.disabled = false;
+      }
+    } catch (e) { toast(e.message, "is-error"); delBtn.disabled = false; }
+  });
+
   card.append(
     clipVideo(fileUrl("final.mp4"), { preload: isKept(clip) ? "metadata" : "none" }),
     el("div", { class: "clip-body" },
@@ -680,7 +711,7 @@ function clipCard(jobName, clip, dots) {
           class: "btn btn-sm", href: fileUrl("final.mp4"),
           download: `clip_${nn}.mp4`,
         }, "Download"),
-        keptBtn)));
+        keptBtn, delBtn)));
   return card;
 }
 
@@ -1259,10 +1290,11 @@ async function renderSettings() {
         el("h1", { class: "t-display" }, "How ClipForge works"))),
     wrap));
 
-  let s, sys, upd;
+  let s, sys, upd, storage;
   try {
-    [s, sys, upd] = await Promise.all([
-      api.get("/api/settings"), api.get("/api/system"), api.get("/api/update")]);
+    [s, sys, upd, storage] = await Promise.all([
+      api.get("/api/settings"), api.get("/api/system"), api.get("/api/update"),
+      api.get("/api/storage").catch(() => null)]);
   } catch (e) {
     wrap.replaceChildren(el("div", { class: "card" },
       el("p", { class: "t-dim", style: "margin:0" }, e.message)));
@@ -1374,6 +1406,9 @@ async function renderSettings() {
       kv("Version", upd.current || sys.version),
       kv("Speed", accel),
       kv("Processor cores", String(sys.cpu_count ?? "—")),
+      storage ? kv("Clips on disk", storage.cleanable_bytes
+        ? `${fmtBytes(storage.total_bytes)} · ${fmtBytes(storage.cleanable_bytes)} reclaimable`
+        : fmtBytes(storage.total_bytes)) : null,
       el("div", { class: "hr", style: "margin:4px 0" }),
       updRow));
 }

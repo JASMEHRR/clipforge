@@ -3,10 +3,13 @@ bundles, music tracks, fonts, and caption-style previews."""
 from __future__ import annotations
 
 import json
+import re
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from config import ROOT, load_config
 from logutil import get_logger
@@ -31,6 +34,95 @@ def safe_job_path(job_name: str, *parts: str) -> Path:
     return p
 
 
+def dir_size(path: Path) -> int:
+    """Total size in bytes of everything under `path` (0 if it doesn't exist)."""
+    total = 0
+    for f in path.rglob("*"):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _clip_dir_from_key(key: str) -> Path:
+    """Resolve an upload-scheduler clip key ('output/<job>/clip_NN', however
+    the output dir is named) to its folder. Only the last two path segments
+    (job, clip) are trusted; safe_job_path re-sandboxes them under output/."""
+    parts = [p for p in key.replace("\\", "/").split("/") if p]
+    if len(parts) < 2:
+        raise HTTPException(404, "That clip can't be found.")
+    return safe_job_path(parts[-2], parts[-1])
+
+
+def _prune_job_clip(job_name: str, index: int) -> None:
+    """Drop a deleted clip's entry from job.json so Results/History don't list
+    a clip whose files are gone. Best-effort — a stale job.json never blocks
+    the disk deletion that already happened."""
+    try:
+        jp = safe_job_path(job_name, "job.json")
+        if not jp.exists():
+            return
+        job = json.loads(jp.read_text(encoding="utf-8"))
+        clips = job.get("clips")
+        if not isinstance(clips, list):
+            return
+        job["clips"] = [c for c in clips if c.get("index") != index]
+        jp.write_text(json.dumps(job, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
+    except (OSError, json.JSONDecodeError, HTTPException) as e:
+        log.warning("could not prune %s clip %s from job.json: %s",
+                    job_name, index, e)
+
+
+def delete_clip_dir(clip_dir: Path) -> int:
+    """Delete a clip folder (final.mp4 + intermediates) and return bytes freed,
+    then prune its job.json entry. The upload log is deliberately never touched:
+    a deleted-but-uploaded clip keeps its log entry, so it stays deduped and
+    never becomes re-eligible for upload."""
+    size = dir_size(clip_dir)
+    shutil.rmtree(clip_dir)
+    m = re.match(r"clip_(\d+)$", clip_dir.name)
+    if m:
+        _prune_job_clip(clip_dir.parent.name, int(m.group(1)))
+    return size
+
+
+class DeleteClipsRequest(BaseModel):
+    keys: list[str]
+
+
+@router.delete("/api/clips")
+def delete_clips(req: DeleteClipsRequest):
+    """Delete clip folders from disk. Refuses any clip that's currently
+    uploading; keeps every upload_log entry intact (see delete_clip_dir)."""
+    from server.routes_upload import key_is_uploading
+    results = []
+    reclaimed = 0
+    for key in req.keys:
+        try:
+            clip_dir = _clip_dir_from_key(key)
+        except HTTPException:
+            results.append({"key": key, "status": "not_found"})
+            continue
+        if not clip_dir.is_dir():
+            results.append({"key": key, "status": "not_found"})
+            continue
+        if key_is_uploading(key):
+            results.append({"key": key, "status": "uploading"})
+            continue
+        try:
+            freed = delete_clip_dir(clip_dir)
+        except OSError as e:
+            results.append({"key": key, "status": "error", "error": str(e)})
+            continue
+        reclaimed += freed
+        results.append({"key": key, "status": "deleted", "bytes": freed})
+    return {"results": results, "reclaimed_bytes": reclaimed,
+            "deleted": sum(1 for r in results if r["status"] == "deleted")}
+
+
 def _load_job_record(job_name: str) -> dict:
     p = safe_job_path(job_name, "job.json")
     if not p.exists():
@@ -49,9 +141,12 @@ def _clip_extras(job_name: str, clip: dict) -> dict:
     excluded = False
     niche = None
     approval = "pending"
+    size = 0
     try:
-        meta_p = safe_job_path(job_name, f"clip_{clip['index']:02d}",
-                               "metadata.json")
+        clip_dir = safe_job_path(job_name, f"clip_{clip['index']:02d}")
+        meta_p = clip_dir / "metadata.json"
+        if clip_dir.is_dir():
+            size = dir_size(clip_dir)
         if meta_p.exists():
             meta = json.loads(meta_p.read_text(encoding="utf-8"))
             excluded = bool(meta.get("upload", {}).get("exclude"))
@@ -60,7 +155,7 @@ def _clip_extras(job_name: str, clip: dict) -> dict:
     except Exception:  # noqa: BLE001 — missing/old metadata → defaults
         excluded = False
     return {"upload_excluded": excluded, "niche": niche,
-            "approval": approval}
+            "approval": approval, "bytes": size}
 
 
 @router.get("/api/jobs")
