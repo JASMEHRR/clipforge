@@ -25,7 +25,8 @@ const STATUS_BADGE = {
 };
 
 export function mountUploadQueue(container) {
-  const state = { candidates: [], selected: new Set(), endWatermark: null };
+  const state = { candidates: [], pending: [], requireApproval: false,
+                  selected: new Set(), endWatermark: null };
   let openDialog = null;   // tracked so navigating away can force-close it
 
   const countIn = el("input", { class: "input t-mono", type: "number",
@@ -37,8 +38,18 @@ export function mountUploadQueue(container) {
   const emptyMsg = el("p", { class: "t-dim", style: "margin:0" },
     "No clips are waiting to publish right now.");
   const uploadedWrap = el("div", { class: "uq-rows" });
+  const approveAllBtn = el("button", { class: "btn", type: "button" },
+    "Approve all");
+  const approvalsHead = el("div", { class: "uq-controls" },
+    el("div", { class: "uq-section-label t-label" },
+      "Awaiting approval — review before they can upload"),
+    approveAllBtn);
+  const approvalsWrap = el("div", { class: "uq-rows" });
+  const approvalsSection = el("div", { style: "display:none" },
+    approvalsHead, approvalsWrap, el("div", { style: "height:8px" }));
 
   container.append(
+    approvalsSection,
     el("div", { class: "uq-section-label t-label" }, "Queue — waiting to publish"),
     el("div", { class: "uq-controls" },
       el("div", { class: "field-inline" },
@@ -52,17 +63,30 @@ export function mountUploadQueue(container) {
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
   selBtn.addEventListener("click", () => openConfirm("manual", 0, [...state.selected]));
+  approveAllBtn.addEventListener("click", async () => {
+    approveAllBtn.disabled = true;
+    try {
+      const r = await api.post("/api/youtube/approvals/all",
+        { approval: "approved" });
+      toast(`Approved ${r.updated} clip${r.updated === 1 ? "" : "s"}.`, "is-ok");
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+    approveAllBtn.disabled = false;
+  });
 
   async function refresh() {
     rowsWrap.replaceChildren(el("div", { class: "skeleton", style: "height:60px" }));
-    let data;
+    let data, approvals;
     try {
-      data = await api.get("/api/youtube/queue");
+      [data, approvals] = await Promise.all([
+        api.get("/api/youtube/queue"), api.get("/api/youtube/approvals")]);
     } catch (e) {
       rowsWrap.replaceChildren(el("p", { class: "t-dim", style: "margin:0" }, e.message));
       return;
     }
     state.candidates = data.candidates;
+    state.pending = approvals.items || [];
+    state.requireApproval = !!data.require_approval;
     state.uploaded = data.uploaded || [];
     state.endWatermark = data.end_watermark || null;
     state.selected = new Set([...state.selected].filter(
@@ -79,7 +103,65 @@ export function mountUploadQueue(container) {
     rowsWrap.replaceChildren(
       ...(state.candidates.length ? state.candidates.map(candidateRow)
         : [emptyMsg]));
+    approvalsSection.style.display = state.pending.length ? "" : "none";
+    approveAllBtn.textContent = `Approve all (${state.pending.length})`;
+    approvalsWrap.replaceChildren(...state.pending.map(approvalRow));
     renderUploaded();
+  }
+
+  /* key = "output/<job>/clip_NN" — the same per-clip approval endpoint the
+   * Results screen uses, addressed by job + clip index. */
+  function setApproval(key, approval) {
+    const [, job, clip] = key.split("/");
+    const index = Number(clip.slice(5));
+    return api.put(
+      `/api/jobs/${encodeURIComponent(job)}/clips/${index}/approval`,
+      { approval });
+  }
+
+  function approvalRow(c) {
+    const slot = c.proposed_publish_at
+      ? new Date(c.proposed_publish_at).toLocaleString([], {
+          weekday: "short", day: "numeric", month: "short",
+          hour: "numeric", minute: "2-digit" })
+      : null;
+    const approveBtn = el("button", { class: "btn btn-primary btn-sm",
+                                      type: "button" }, "Approve");
+    const rejectBtn = el("button", { class: "btn btn-ghost btn-sm",
+                                     type: "button" }, "Reject");
+    const act = async (approval) => {
+      approveBtn.disabled = rejectBtn.disabled = true;
+      try {
+        await setApproval(c.key, approval);
+        toast(approval === "approved"
+          ? "Approved — it can now be scheduled."
+          : "Rejected — it won't be uploaded.", "is-ok");
+        await refresh();
+      } catch (e) {
+        toast(e.message, "is-error");
+        approveBtn.disabled = rejectBtn.disabled = false;
+      }
+    };
+    approveBtn.addEventListener("click", () => act("approved"));
+    rejectBtn.addEventListener("click", () => act("rejected"));
+    return el("div", { class: "uq-approval-row" },
+      thumbButton(c.video_url, c.title, "uq-thumb"),
+      el("div", { class: "uq-meta" },
+        el("div", { class: "uq-title" }, c.title),
+        c.description ? el("div", { class: "t-dim",
+                                    style: "font-size:var(--text-xs)" },
+          c.description) : null,
+        (c.hashtags && c.hashtags.length)
+          ? el("div", { class: "t-dim t-mono",
+                        style: "font-size:var(--text-xs)" },
+              c.hashtags.join(" ")) : null,
+        el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+          slot ? `would publish ${slot}` : "",
+          c.duration != null ? ` · ${fmtClock(c.duration)}` : "")),
+      el("div", { class: "uq-score" },
+        el("span", { class: "t-mono" }, String(c.score)),
+        c.niche ? el("span", { class: "badge" }, c.niche) : null),
+      el("div", { class: "field-inline" }, approveBtn, rejectBtn));
   }
 
   function renderUploaded() {
@@ -129,6 +211,8 @@ export function mountUploadQueue(container) {
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
         c.niche ? el("span", { class: "badge" }, c.niche) : null,
+        state.requireApproval
+          ? el("span", { class: "badge badge-ok" }, "Approved") : null,
         c.band ? el("span", {
           class: `badge ${c.band === "Strong" ? "badge-ok"
             : c.band === "Weak" ? "badge-warn" : ""}`,

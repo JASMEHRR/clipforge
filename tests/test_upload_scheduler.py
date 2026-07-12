@@ -364,3 +364,57 @@ def test_upload_now_continues_past_failures(_isolate, monkeypatch):
     assert len(progress) == 2  # on_progress fired for every clip, pass or fail
     # only the successful upload is recorded in the log
     assert len(log_data["uploads"]) == 1
+
+
+# ============================================================
+# Approval gate (Part 4)
+# ============================================================
+def _set_approval(clip_dir, approval):
+    meta = json.loads((clip_dir / "metadata.json").read_text(encoding="utf-8"))
+    meta.setdefault("upload", {})["approval"] = approval
+    (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_approval_state_defaults_to_pending():
+    assert sched.approval_state({}) == "pending"
+    assert sched.approval_state({"upload": {}}) == "pending"
+    assert sched.approval_state({"upload": {"approval": "approved"}}) == "approved"
+
+
+def test_approval_ok_respects_require_approval():
+    on = {"upload": {"require_approval": True}}
+    off = {"upload": {"require_approval": False}}
+    # rejected never uploads, in either mode
+    assert not sched.approval_ok({"upload": {"approval": "rejected"}}, on)
+    assert not sched.approval_ok({"upload": {"approval": "rejected"}}, off)
+    # pending: gated only when approval is required
+    assert not sched.approval_ok({"upload": {"approval": "pending"}}, on)
+    assert sched.approval_ok({"upload": {"approval": "pending"}}, off)
+    # approved uploads regardless
+    assert sched.approval_ok({"upload": {"approval": "approved"}}, on)
+
+
+def test_find_candidates_gates_on_approval(_isolate):
+    output_dir = _isolate
+    a = _write_clip(output_dir, "job1", "clip_00", score=90)
+    _write_clip(output_dir, "job1", "clip_01", score=80)  # stays pending
+    _set_approval(a, "approved")
+    cfg = {"upload": {"min_virality": 40, "require_approval": True}}
+    cands = sched.find_candidates(cfg, {"uploads": {}})
+    # only the explicitly approved clip is uploadable when approval is required
+    assert [c["dir"].name for c in cands] == ["clip_00"]
+    # with approval off, both pending clips are eligible again
+    cfg["upload"]["require_approval"] = False
+    assert len(sched.find_candidates(cfg, {"uploads": {}})) == 2
+
+
+def test_find_pending_approval_lists_only_pending(_isolate):
+    output_dir = _isolate
+    _write_clip(output_dir, "job1", "clip_00", score=90)          # pending
+    approved = _write_clip(output_dir, "job1", "clip_01", score=85)
+    rejected = _write_clip(output_dir, "job1", "clip_02", score=80)
+    _set_approval(approved, "approved")
+    _set_approval(rejected, "rejected")
+    cfg = {"upload": {"min_virality": 40, "require_approval": True}}
+    pending = sched.find_pending_approval(cfg, {"uploads": {}})
+    assert [c["dir"].name for c in pending] == ["clip_00"]

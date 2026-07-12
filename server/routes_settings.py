@@ -30,6 +30,8 @@ def get_settings():
         "auto_open": cfg.get("ui", {}).get("auto_open", True),
         "custom_niches": ", ".join(
             cfg.get("classify", {}).get("custom_niches", []) or []),
+        "require_approval": bool(
+            cfg.get("upload", {}).get("require_approval", False)),
     }
 
 
@@ -41,6 +43,7 @@ class SettingsRequest(BaseModel):
     groq_model: str = ""
     ollama_model: str = ""
     custom_niches: str = ""
+    require_approval: bool = True
 
 
 @router.put("/api/settings")
@@ -58,6 +61,7 @@ def put_settings(req: SettingsRequest):
             "classify": {"custom_niches": sorted(
                 {s.strip().lower() for s in req.custom_niches.split(",")
                  if s.strip()})},
+            "upload": {"require_approval": bool(req.require_approval)},
         })
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, friendly(e, "Saving your settings"))

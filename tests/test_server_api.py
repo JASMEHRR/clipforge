@@ -293,20 +293,24 @@ def test_batch_zip_empty_queue_404(client):
     assert client.get("/api/batch/zip").status_code == 404
 
 
-def _write_candidate_clip(output_dir, job, clip, score, title=None):
+def _write_candidate_clip(output_dir, job, clip, score, title=None,
+                          approval="approved"):
     clip_dir = output_dir / job / clip
     clip_dir.mkdir(parents=True)
     (clip_dir / "final.mp4").write_bytes(b"\x00" * 10)
     # distinct title + non-overlapping source window per clip so the queue
     # dedupe treats them as separate clips (its job, tested in
-    # test_upload_scheduler); clip_00 stays at 10-40 for the duration check
+    # test_upload_scheduler); clip_00 stays at 10-40 for the duration check.
+    # Queue clips are the approved lineup — config.yaml defaults
+    # require_approval on, so unapproved clips would be gated out of the queue.
     idx = int("".join(c for c in clip if c.isdigit()) or 0)
     meta = {"title": title or f"Clip {job} {clip}", "description": "Desc.",
             "hashtags": ["#a", "#shorts"],
             "virality": {"score": score, "band": "Strong"},
             "original_source_start_s": 10.0 + idx * 60,
             "original_source_end_s": 40.0 + idx * 60,
-            "source_name": "video.mp4"}
+            "source_name": "video.mp4",
+            "upload": {"approval": approval}}
     (clip_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
     return clip_dir
 
@@ -381,6 +385,28 @@ def test_youtube_queue_upload_requires_authorization(client, monkeypatch, tmp_pa
     monkeypatch.setattr("youtube_upload.credentials_available", lambda: False)
     r = client.post("/api/youtube/queue/upload", json={"mode": "top", "count": 1})
     assert r.status_code == 409
+
+
+def test_approvals_pending_then_approve_all_moves_to_queue(client, monkeypatch, tmp_path):
+    # config.yaml defaults require_approval on, so a freshly-produced (pending)
+    # clip is invisible to the queue and shows up under Awaiting approval.
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=90,
+                          title="Fresh clip", approval="pending")
+
+    assert client.get("/api/youtube/queue").json()["candidates"] == []
+    pend = client.get("/api/youtube/approvals").json()
+    assert pend["require_approval"] is True
+    assert [i["title"] for i in pend["items"]] == ["Fresh clip"]
+    assert pend["items"][0]["proposed_publish_at"]  # a proposed slot is shown
+
+    r = client.post("/api/youtube/approvals/all", json={"approval": "approved"})
+    assert r.json()["updated"] == 1
+
+    # approved → now the queue's uploadable lineup, gone from approvals
+    assert [c["title"] for c in client.get("/api/youtube/queue").json()["candidates"]] \
+        == ["Fresh clip"]
+    assert client.get("/api/youtube/approvals").json()["items"] == []
 
 
 def test_youtube_queue_upload_confirm_then_submit_flow(client, monkeypatch, tmp_path):

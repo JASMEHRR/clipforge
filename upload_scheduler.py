@@ -95,13 +95,16 @@ def is_settled(video: Path, settle_seconds: int = 90) -> bool:
 # ============================================================
 # Clip discovery
 # ============================================================
-def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
-    """All not-yet-uploaded clips with final.mp4 + metadata, best virality first."""
+def _scan_clips(cfg: dict, log_data: dict) -> list[dict]:
+    """All not-yet-uploaded clips with final.mp4 + readable metadata, above
+    min_virality and not user-excluded, best virality first — the shared scan
+    behind the upload queue (find_candidates) and the approvals view
+    (find_pending_approval)."""
     upload_cfg = cfg.get("upload", {})
     min_virality = upload_cfg.get("min_virality", 40)
-    candidates = []
+    clips = []
     if not OUTPUT_DIR.exists():
-        return candidates
+        return clips
 
     for meta_path in OUTPUT_DIR.glob("*/clip_*/metadata.json"):
         clip_dir = meta_path.parent
@@ -121,11 +124,48 @@ def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
         score = meta.get("virality", {}).get("score", 0)
         if score < min_virality:
             continue
-        candidates.append({"key": key, "dir": clip_dir, "video": video,
-                           "meta": meta, "score": score})
+        clips.append({"key": key, "dir": clip_dir, "video": video,
+                      "meta": meta, "score": score})
 
-    candidates.sort(key=lambda c: c["score"], reverse=True)
+    clips.sort(key=lambda c: c["score"], reverse=True)
+    return clips
+
+
+def approval_state(meta: dict) -> str:
+    """'approved' | 'rejected' | 'pending' (an absent field means pending —
+    every clip produced before the approval feature reads as pending)."""
+    return meta.get("upload", {}).get("approval") or "pending"
+
+
+def approval_ok(meta: dict, cfg: dict) -> bool:
+    """Whether the owner allows this clip to upload. Rejected clips never
+    upload. With upload.require_approval on, only explicitly approved clips
+    may (pending = not reviewed yet); with it off, pending clips stay
+    eligible — the pre-approval fully-automatic behavior."""
+    state = approval_state(meta)
+    if state == "rejected":
+        return False
+    if cfg.get("upload", {}).get("require_approval", False):
+        return state == "approved"
+    return True
+
+
+def find_candidates(cfg: dict, log_data: dict) -> list[dict]:
+    """All uploadable clips (scanned + approval-gated), best virality first,
+    near-duplicates collapsed. Every upload path — trigger_after_render,
+    watch, the CLI and the UI queue — selects through here, so the approval
+    gate holds everywhere by construction."""
+    candidates = [c for c in _scan_clips(cfg, log_data)
+                  if approval_ok(c["meta"], cfg)]
     return _dedupe_candidates(candidates)
+
+
+def find_pending_approval(cfg: dict, log_data: dict) -> list[dict]:
+    """Clips awaiting the owner's approve/reject decision, best first.
+    Deliberately no duplicate collapsing — the owner should see and judge
+    every pending clip, not just the best of each near-duplicate group."""
+    return [c for c in _scan_clips(cfg, log_data)
+            if approval_state(c["meta"]) == "pending"]
 
 
 def _norm_title(t: str | None) -> str:

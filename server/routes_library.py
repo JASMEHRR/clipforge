@@ -48,6 +48,7 @@ def _clip_extras(job_name: str, clip: dict) -> dict:
     opt-out flag and the content niche."""
     excluded = False
     niche = None
+    approval = "pending"
     try:
         meta_p = safe_job_path(job_name, f"clip_{clip['index']:02d}",
                                "metadata.json")
@@ -55,9 +56,11 @@ def _clip_extras(job_name: str, clip: dict) -> dict:
             meta = json.loads(meta_p.read_text(encoding="utf-8"))
             excluded = bool(meta.get("upload", {}).get("exclude"))
             niche = meta.get("niche")
+            approval = meta.get("upload", {}).get("approval") or "pending"
     except Exception:  # noqa: BLE001 — missing/old metadata → defaults
         excluded = False
-    return {"upload_excluded": excluded, "niche": niche}
+    return {"upload_excluded": excluded, "niche": niche,
+            "approval": approval}
 
 
 @router.get("/api/jobs")

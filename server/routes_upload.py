@@ -4,6 +4,7 @@ manual 'Upload now' batch override on top of the auto-upload candidate
 queue (upload_scheduler.find_candidates)."""
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from pathlib import Path
@@ -77,20 +78,34 @@ class UploadRequest(BaseModel):
 
 @router.post("/api/youtube/upload")
 def upload_job(req: UploadRequest):
+    import upload_scheduler as sched
     import youtube_upload as yt
     from rerender import load_job
     if not _authorized():
         raise HTTPException(409, "Connect to YouTube first (one-time).")
+    cfg = load_config()
     job_dir = safe_job_path(req.job_name)
     try:
         job = load_job(job_dir)
         results = []
+        skipped = 0
         for c in job["clips"]:
             if not c.get("kept"):
                 continue
+            # the manual per-job path bypasses find_candidates, so it applies
+            # the same approval gate itself (unreadable metadata == pending)
+            try:
+                meta = json.loads(
+                    (Path(c["path"]).parent / "metadata.json")
+                    .read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+            if not sched.approval_ok(meta, cfg):
+                skipped += 1
+                continue
             r = yt.upload_clip(c["path"], c["metadata"], privacy=req.privacy)
             results.append({"title": c["metadata"]["title"], "url": r["url"]})
-        return {"uploaded": results}
+        return {"uploaded": results, "skipped_approval": skipped}
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
         raise HTTPException(502, friendly(e, "Uploading"))
 
@@ -136,6 +151,8 @@ def youtube_queue():
                       key=lambda e: e.get("uploaded_at", ""), reverse=True)
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
+        "require_approval": bool(
+            cfg.get("upload", {}).get("require_approval", False)),
         "uploads_today": sched.uploads_today(log_data),
         "max_per_day": cfg.get("upload", {}).get("max_per_day", 3),
         "end_watermark": {"enabled": bool(wm.get("enabled")),
@@ -148,6 +165,64 @@ def youtube_queue():
                       "publish_at": e.get("publish_at", ""),
                       "score": e.get("virality_score")} for e in uploaded],
     }
+
+
+# ------------------------------------------------------------ approvals --
+# The review step between "produced" and "uploadable": pending clips wait
+# here until the owner approves or rejects them (upload_scheduler holds the
+# gate; these routes only read state and write the per-clip decision).
+
+@router.get("/api/youtube/approvals")
+def youtube_approvals():
+    import upload_scheduler as sched
+    cfg = load_config()
+    upload_cfg = cfg.get("upload", {})
+    log_data = sched.load_log()
+    pending = sched.find_pending_approval(cfg, log_data)
+    # Proposed (not reserved) slots so the owner sees roughly when each clip
+    # would publish if approved right now, in scan order.
+    slots = sched.next_publish_times(
+        len(pending), None, log_data,
+        upload_cfg.get("publish_slots_ist", [12, 19]),
+        upload_cfg.get("slot_spacing_minutes", 60))
+    items = []
+    for c, when in zip(pending, slots):
+        item = _candidate_summary(c)
+        item["description"] = c["meta"].get("description", "")
+        item["hashtags"] = c["meta"].get("hashtags", [])
+        item["proposed_publish_at"] = when.isoformat()
+        items.append(item)
+    return {"items": items,
+            "require_approval": bool(upload_cfg.get("require_approval",
+                                                    False))}
+
+
+class ApproveAllRequest(BaseModel):
+    approval: str = "approved"
+
+
+@router.post("/api/youtube/approvals/all")
+def approve_all(req: ApproveAllRequest):
+    """Approve (or reject) every pending clip in one server-side pass — one
+    request, no client-side race against a changing pending list."""
+    import upload_scheduler as sched
+    if req.approval not in ("approved", "rejected"):
+        raise HTTPException(422, "Approval must be approved or rejected.")
+    cfg = load_config()
+    pending = sched.find_pending_approval(cfg, sched.load_log())
+    updated = 0
+    for c in pending:
+        meta_path = c["dir"] / "metadata.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta.setdefault("upload", {})["approval"] = req.approval
+            meta_path.write_text(json.dumps(meta, indent=2,
+                                            ensure_ascii=False),
+                                 encoding="utf-8")
+            updated += 1
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("approve-all skipped %s: %s", c["key"], e)
+    return {"updated": updated}
 
 
 @router.get("/api/youtube/queue/video/{key:path}")

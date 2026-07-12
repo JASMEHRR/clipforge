@@ -172,3 +172,28 @@ def set_exclude(job_name: str, index: int, req: ExcludeRequest):
     except (OSError, json.JSONDecodeError) as e:
         raise HTTPException(500, friendly(e, "Saving that choice"))
     return {"exclude": bool(req.exclude)}
+
+
+class ApprovalRequest(BaseModel):
+    approval: str
+
+
+@router.put("/api/jobs/{job_name}/clips/{index}/approval")
+def set_approval(job_name: str, index: int, req: ApprovalRequest):
+    """Persist the owner's approve/reject decision where the upload
+    scheduler's approval gate reads it (clip_NN/metadata.json →
+    upload.approval)."""
+    if req.approval not in ("approved", "rejected", "pending"):
+        raise HTTPException(422, "Approval must be approved, rejected or "
+                                 "pending.")
+    meta_path = safe_job_path(job_name, f"clip_{index:02d}", "metadata.json")
+    if not meta_path.exists():
+        raise HTTPException(404, "That clip can't be found.")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta.setdefault("upload", {})["approval"] = req.approval
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(500, friendly(e, "Saving that decision"))
+    return {"approval": req.approval}

@@ -237,6 +237,8 @@ classify:
 
 upload:
   auto_enabled: true            # off by default; turn on once YouTube is authorized
+  require_approval: true        # new clips wait in "Awaiting approval" before any
+                                # upload; false = fully automatic (pre-approval behavior)
   max_per_day: 5
   max_per_run: 5
   min_virality: 40

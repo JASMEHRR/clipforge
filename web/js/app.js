@@ -1293,6 +1293,8 @@ async function renderSettings() {
   const nichesIn = el("input", { class: "input", type: "text",
                                  placeholder: "e.g. cooking, travel" });
   nichesIn.value = s.custom_niches || "";
+  const approvalToggle = toggle(!!s.require_approval,
+    "Require approval before upload");
 
   const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, "Save");
   saveBtn.addEventListener("click", async () => {
@@ -1306,6 +1308,7 @@ async function renderSettings() {
         groq_model: groqIn.value,
         ollama_model: ollamaIn.value,
         custom_niches: nichesIn.value,
+        require_approval: approvalToggle.input.checked,
       });
       toast("Saved — takes effect on the next run.", "is-ok");
     } catch (e) { toast(e.message, "is-error"); }
@@ -1364,6 +1367,7 @@ async function renderSettings() {
       field("Speed", computeSel),
       field("Speech recognition accuracy", whisperSel),
       field("Custom niches (comma-separated)", nichesIn),
+      approvalToggle.node,
       el("div", {}, saveBtn)),
     el("div", { class: "card card-flat", style: "display:grid;gap:12px" },
       el("h2", { class: "t-title", style: "margin:0" }, "This computer"),
