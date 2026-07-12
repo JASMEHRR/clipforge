@@ -723,6 +723,125 @@ def test_archive_backfill_endpoint(client, monkeypatch, tmp_path):
     assert client.post("/api/archive/backfill").json()["archived"] == 0
 
 
+def _wait_zip_job(client, job_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        st = client.get(f"/api/archive/zip/{job_id}").json()
+        if st["state"] in ("done", "error"):
+            return st
+        time.sleep(0.02)
+    raise AssertionError(f"zip job never finished: {st}")
+
+
+def _seed_archived_clips(output_dir, sched, n, prefix="v"):
+    """n already-uploaded, already-archived clips — the common precondition
+    for the zip-backup tests."""
+    import archive
+    ids = []
+    uploads = {}
+    for i in range(n):
+        job = f"job{prefix}{i}"
+        clip_dir = _write_job_with_clip(output_dir, job, 0, score=50 + i)
+        video_id = f"{prefix}{i}"
+        key = f"output/{job}/clip_00"
+        uploads[key] = {"video_id": video_id,
+                        "uploaded_at": "2026-07-12T00:00:00"}
+        archive.ensure_archived(key, uploads[key])
+        ids.append(video_id)
+    sched.save_log({"uploads": uploads})
+    return ids
+
+
+def test_archive_zip_status_endpoint(client, monkeypatch, tmp_path):
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _seed_archived_clips(output_dir, sched, 3)
+
+    r = client.get("/api/archive/zip-status").json()
+    assert r == {"since_last_zip": 3, "threshold": 100, "should_prompt": False}
+
+
+def test_archive_zip_backup_job_creates_verified_zip(client, monkeypatch, tmp_path):
+    import archive
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    ids = _seed_archived_clips(output_dir, sched, 2)
+
+    r = client.post("/api/archive/zip", json={"delete_originals": False})
+    assert r.status_code == 200
+    final = _wait_zip_job(client, r.json()["job_id"])
+    assert final["state"] == "done" and final["zipped"] == 2
+    assert final["done"] == final["total"] == 2
+
+    for vid in ids:
+        assert archive.find_zip_for(vid) == final["zip_name"]
+        assert archive.find_archive_dir(vid) is not None  # kept (opt-in was off)
+
+    status_after = client.get("/api/archive/zip-status").json()
+    assert status_after["since_last_zip"] == 0
+
+
+def test_archive_zip_backup_job_surfaces_verify_failure_as_error_state(
+        client, monkeypatch, tmp_path):
+    """create_backup_zip reports a verify/IO failure by returning an "error"
+    key rather than raising — the job must land in state="error", not "done"
+    (which the UI reads as the harmless "nothing new to back up" case)."""
+    import archive
+    _isolate_upload_scheduler(monkeypatch, tmp_path)
+    monkeypatch.setattr(archive, "create_backup_zip",
+                        lambda **kw: {"zipped": 0, "zip_name": None,
+                                      "error": "The backup zip didn't verify."})
+
+    r = client.post("/api/archive/zip", json={})
+    final = _wait_zip_job(client, r.json()["job_id"])
+    assert final["state"] == "error"
+    assert final["error"] == "The backup zip didn't verify."
+
+
+def test_archive_zip_backup_delete_originals(client, monkeypatch, tmp_path):
+    import archive
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    ids = _seed_archived_clips(output_dir, sched, 1)
+
+    r = client.post("/api/archive/zip", json={"delete_originals": True})
+    final = _wait_zip_job(client, r.json()["job_id"])
+    assert final["zipped"] == 1
+    assert archive.find_archive_dir(ids[0]) is None       # source folder gone
+    assert archive.find_zip_for(ids[0]) == final["zip_name"]  # still tracked
+
+
+def test_youtube_queue_shows_archive_zip_for_zipped_and_deleted_clip(
+        client, monkeypatch, tmp_path):
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _seed_archived_clips(output_dir, sched, 1, prefix="zq")
+
+    r = client.post("/api/archive/zip", json={"delete_originals": True})
+    final = _wait_zip_job(client, r.json()["job_id"])
+
+    row = client.get("/api/youtube/queue").json()["published"][0]
+    assert row["archived"] is True
+    assert row["archive_zip"] == final["zip_name"]
+
+
+def test_youtube_queue_keeps_open_folder_when_zipped_without_deleting(
+        client, monkeypatch, tmp_path):
+    """delete_originals defaults to False — a zipped clip whose archive/
+    folder is still on disk must keep showing 'Open folder', not switch to
+    the 'in backup <zip>' label (that's only for folders that are gone)."""
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _seed_archived_clips(output_dir, sched, 1, prefix="zk")
+
+    r = client.post("/api/archive/zip", json={"delete_originals": False})
+    _wait_zip_job(client, r.json()["job_id"])
+
+    row = client.get("/api/youtube/queue").json()["published"][0]
+    assert row["archived"] is True
+    assert row["archive_zip"] is None
+
+
 def test_archive_open_folder(client, monkeypatch, tmp_path):
     import archive
     _isolate_upload_scheduler(monkeypatch, tmp_path)

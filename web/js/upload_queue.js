@@ -19,12 +19,13 @@ export function mountUploadQueue(container) {
   const state = { candidates: [], pending: [], requireApproval: false,
                   selected: new Set(), endWatermark: null, cleanable: 0,
                   scheduled: [], published: [], quota: null, horizon: 3,
-                  dryRun: false };
+                  dryRun: false, zipStatus: null };
   let openDialog = null;   // tracked so navigating away can force-close it
 
   const dryBanner = el("div", { class: "uq-dryrun", style: "display:none" },
     "Dry run — uploads and schedules are simulated. Nothing reaches YouTube "
     + "(CLIPFORGE_DRY_RUN is set).");
+  const zipPromptBanner = el("div", { class: "uq-dryrun", style: "display:none" });
 
   const countIn = el("input", { class: "input t-mono", type: "number",
                                 min: "0", step: "1", style: "width:80px" });
@@ -45,6 +46,8 @@ export function mountUploadQueue(container) {
                                     type: "button" }, "Clean up uploaded");
   const archiveBackfillBtn = el("button", { class: "btn btn-ghost btn-sm",
                                             type: "button" }, "Archive older uploads");
+  const zipNowBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button" },
+    "Zip archive now");
   const approveAllBtn = el("button", { class: "btn", type: "button" },
     "Approve all");
   const approvalsHead = el("div", { class: "uq-controls" },
@@ -57,6 +60,7 @@ export function mountUploadQueue(container) {
 
   container.append(
     dryBanner,
+    zipPromptBanner,
     approvalsSection,
     el("div", { class: "uq-section-label t-label" }, "Queue — waiting to publish"),
     el("div", { class: "uq-controls" },
@@ -74,7 +78,7 @@ export function mountUploadQueue(container) {
     scheduledWrap,
     el("div", { class: "uq-controls", style: "margin-top:8px" },
       el("div", { class: "uq-section-label t-label" }, "Published"),
-      el("div", { class: "field-inline" }, archiveBackfillBtn, cleanupBtn)),
+      el("div", { class: "field-inline" }, archiveBackfillBtn, zipNowBtn, cleanupBtn)),
     publishedWrap);
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
@@ -140,6 +144,59 @@ export function mountUploadQueue(container) {
     } catch (e) { toast(e.message, "is-error"); }
     archiveBackfillBtn.disabled = false;
   });
+
+  /* Polls a zip-backup job to completion, reporting the result. */
+  function pollZipJob(jobId) {
+    return new Promise((resolve) => {
+      const tick = async () => {
+        let st;
+        try { st = await api.get(`/api/archive/zip/${jobId}`); }
+        catch { setTimeout(tick, 1000); return; }
+        if (st.state === "running") { setTimeout(tick, 800); return; }
+        if (st.state === "error") {
+          toast(st.error || "The backup zip didn't work — try again.", "is-error");
+        } else if (st.zipped) {
+          toast(`Backed up ${st.zipped} clip${st.zipped === 1 ? "" : "s"} `
+            + `into ${st.zip_name}.`, "is-ok");
+        } else {
+          toast("Nothing new to back up.", "is-ok");
+        }
+        resolve();
+      };
+      tick();
+    });
+  }
+
+  /* Also guarded server-side (archive.create_backup_zip holds a lock), but
+   * disabling here too avoids popping a second confirm dialog while a zip
+   * job from the other trigger (banner vs. this button) is still running. */
+  async function openZipDialog() {
+    if (state.zipping) return;
+    const delToggle = el("input", { type: "checkbox" });
+    const body = el("div", { style: "display:grid;gap:16px" },
+      el("p", { class: "t-dim", style: "margin:0" },
+        `This zips every archived clip not already backed up `
+        + `(${state.zipStatus ? state.zipStatus.since_last_zip : 0} right now) `
+        + "into archive/backups/."),
+      el("label", { class: "opt-toggle" },
+        "Delete the zipped originals from archive/uploaded/ to reclaim space",
+        el("span", { class: "switch" }, delToggle, el("span", { class: "knob" }))));
+    const ok = await confirmDialog({
+      title: "Create backup zip?", body, confirmLabel: "Zip now", danger: false,
+    });
+    if (!ok) return;
+    state.zipping = true;
+    zipNowBtn.disabled = true;
+    try {
+      const { job_id } = await api.post("/api/archive/zip",
+        { delete_originals: delToggle.checked });
+      await pollZipJob(job_id);
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+    state.zipping = false;
+    zipNowBtn.disabled = false;
+  }
+  zipNowBtn.addEventListener("click", openZipDialog);
   approveAllBtn.addEventListener("click", async () => {
     approveAllBtn.disabled = true;
     try {
@@ -171,15 +228,17 @@ export function mountUploadQueue(container) {
 
   async function refresh() {
     rowsWrap.replaceChildren(el("div", { class: "skeleton", style: "height:60px" }));
-    let data, approvals, storage;
+    let data, approvals, storage, zipStatus;
     try {
-      [data, approvals, storage] = await Promise.all([
+      [data, approvals, storage, zipStatus] = await Promise.all([
         api.get("/api/youtube/queue"), api.get("/api/youtube/approvals"),
-        api.get("/api/storage").catch(() => null)]);
+        api.get("/api/storage").catch(() => null),
+        api.get("/api/archive/zip-status").catch(() => null)]);
     } catch (e) {
       rowsWrap.replaceChildren(el("p", { class: "t-dim", style: "margin:0" }, e.message));
       return;
     }
+    state.zipStatus = zipStatus;
     state.candidates = data.candidates;
     state.pending = approvals.items || [];
     state.requireApproval = !!data.require_approval;
@@ -201,6 +260,19 @@ export function mountUploadQueue(container) {
 
   function render() {
     dryBanner.style.display = state.dryRun ? "" : "none";
+    zipNowBtn.disabled = !!state.zipping;
+    if (state.zipStatus && state.zipStatus.should_prompt) {
+      zipPromptBanner.style.display = "";
+      const zipHereBtn = el("button", { class: "btn btn-sm", type: "button",
+                                        disabled: state.zipping ? "" : null },
+        "Create backup zip");
+      zipHereBtn.addEventListener("click", openZipDialog);
+      zipPromptBanner.replaceChildren(
+        `${state.zipStatus.since_last_zip} clips archived since the last `
+        + "backup — ", zipHereBtn);
+    } else {
+      zipPromptBanner.style.display = "none";
+    }
     selBtn.disabled = delSelBtn.disabled = state.selected.size === 0;
     countBtn.disabled = state.candidates.length === 0;
     cleanupBtn.style.display = state.cleanable ? "" : "none";
@@ -324,10 +396,11 @@ export function mountUploadQueue(container) {
   }
 
   /* Opens this clip's permanent archive/uploaded/ folder in Explorer. Only
-   * shown once it's actually archived (auto on upload, or via the "Archive
-   * older uploads" backfill button above). */
+   * shown while a live folder exists — once it's swept into a backup zip
+   * (archive_zip set) there's no folder to open, archiveLabel below says
+   * where the file lives instead. */
   function openFolderBtn(u) {
-    if (!(u.archived && u.video_id)) return null;
+    if (!(u.archived && u.video_id) || u.archive_zip) return null;
     const btn = el("button", { class: "btn btn-ghost btn-sm", type: "button" },
       "Open folder");
     btn.addEventListener("click", async () => {
@@ -336,6 +409,13 @@ export function mountUploadQueue(container) {
       } catch (e) { toast(e.message, "is-error"); }
     });
     return btn;
+  }
+
+  function archiveLabel(u) {
+    return u.archive_zip
+      ? el("span", { class: "t-dim", style: "font-size:var(--text-xs)" },
+          `in backup ${u.archive_zip}`)
+      : null;
   }
 
   /* A published (live-on-YouTube) row. */
@@ -347,7 +427,7 @@ export function mountUploadQueue(container) {
           u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
           u.score != null ? ` · score ${u.score}` : "")),
       el("div", { class: "field-inline" },
-        ytLink(u), openFolderBtn(u), deleteLocalBtn(u)));
+        ytLink(u), openFolderBtn(u), archiveLabel(u), deleteLocalBtn(u)));
   }
 
   /* A scheduled row: booked on YouTube, publishes at its slot. Offers

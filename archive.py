@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +22,20 @@ log = get_logger("archive")
 
 ARCHIVE_DIR = ROOT / "archive" / "uploaded"
 _SLUG_MAX = 60
+ZIP_THRESHOLD = 100
+_ZIP_LOCK = threading.Lock()
+
+
+def _backups_dir() -> Path:
+    # derived from ARCHIVE_DIR (not its own module-level constant) so tests
+    # that isolate ARCHIVE_DIR automatically isolate this too — a second
+    # unpatched constant is exactly how testing wrote into the real repo's
+    # archive/uploaded/ during Part 2's development
+    return ARCHIVE_DIR.parent / "backups"
+
+
+def _manifest_path() -> Path:
+    return _backups_dir() / "zip_manifest.json"
 
 
 def _slugify(title: str) -> str:
@@ -175,6 +191,137 @@ def backfill_from_log(log_data: dict) -> dict:
         else:
             skipped += 1
     return {"archived": archived, "skipped": skipped}
+
+
+# ============================================================
+# Zip backups
+# ============================================================
+def _load_manifest() -> dict:
+    path = _manifest_path()
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            backup = path.with_suffix(".json.corrupt")
+            try:
+                path.replace(backup)  # overwrites a stale .corrupt from a
+            except OSError as e:      # prior event instead of raising on it
+                log.warning("could not quarantine corrupt %s (%s); "
+                           "deleting it instead", path.name, e)
+                path.unlink(missing_ok=True)
+            else:
+                log.warning("%s was corrupt; moved to %s, starting fresh",
+                           path.name, backup.name)
+    return {"zips": {}}
+
+
+def _save_manifest(data: dict) -> None:
+    path = _manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)  # atomic on the same drive; no half-written manifest
+
+
+def zipped_video_ids(manifest: dict | None = None) -> set[str]:
+    manifest = manifest if manifest is not None else _load_manifest()
+    ids: set[str] = set()
+    for z in manifest.get("zips", {}).values():
+        ids.update(z.get("clips", []))
+    return ids
+
+
+def find_zip_for(video_id: str | None) -> str | None:
+    """Which backup zip (if any) holds this video_id — lets the Uploaded
+    panel say "in backup <name>" for a clip whose archive/uploaded/ folder
+    was deleted after being zipped (the delete-originals opt-in)."""
+    if not video_id:
+        return None
+    for name, z in _load_manifest().get("zips", {}).items():
+        if video_id in z.get("clips", []):
+            return name
+    return None
+
+
+def zip_status() -> dict:
+    """How many archived clips aren't in any backup zip yet, and whether
+    that's enough to prompt for a new one."""
+    since_last_zip = len(set(index_by_video_id()) - zipped_video_ids())
+    return {"since_last_zip": since_last_zip, "threshold": ZIP_THRESHOLD,
+            "should_prompt": since_last_zip >= ZIP_THRESHOLD}
+
+
+def create_backup_zip(on_progress=None, delete_originals: bool = False) -> dict:
+    """Zip every archived clip not already covered by a previous backup into
+    archive/backups/clipforge_backup_<date>_<n>of<n>.zip (n = how many backup
+    zips exist once this one is written). Streams each file straight from
+    disk via ZipFile.write() (never holds a whole clip's bytes in memory);
+    after closing, reopens and verifies member count + testzip() before the
+    manifest is updated or anything is deleted — a failed verify removes the
+    broken zip and changes nothing else. `on_progress(done, total)` fires
+    after each clip. Returns {"zipped": 0} with no file created if there's
+    nothing new to back up. Serialized by _ZIP_LOCK: two callers racing here
+    (e.g. the zip-prompt banner and the manual button both clicked) would
+    otherwise compute the same output filename and the second ZipFile("w")
+    would truncate the first one's in-progress zip."""
+    with _ZIP_LOCK:
+        manifest = _load_manifest()
+        already = zipped_video_ids(manifest)
+        to_zip = {vid: d for vid, d in index_by_video_id().items()
+                 if vid not in already}
+        if not to_zip:
+            return {"zipped": 0, "zip_name": None}
+
+        backups_dir = _backups_dir()
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        n = len(manifest.get("zips", {})) + 1
+        date = datetime.now().strftime("%Y-%m-%d")
+        name = f"clipforge_backup_{date}_{n}of{n}.zip"
+        path = backups_dir / name
+
+        items = sorted(to_zip.items())
+        files_written = 0
+        try:
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, (video_id, clip_dir) in enumerate(items, start=1):
+                    for f in sorted(clip_dir.iterdir()):
+                        if f.is_file():
+                            zf.write(f, f"{clip_dir.name}/{f.name}")
+                            files_written += 1
+                    if on_progress:
+                        on_progress(i, len(items))
+        except OSError as e:
+            log.warning("zip backup failed (%s); no manifest change", e)
+            path.unlink(missing_ok=True)
+            return {"zipped": 0, "zip_name": None, "error": str(e)}
+
+        try:
+            with zipfile.ZipFile(path) as zf:
+                bad_member = zf.testzip()
+                member_count = len(zf.namelist())
+        except (OSError, zipfile.BadZipFile) as e:
+            log.warning("zip verify failed (%s); removing broken zip", e)
+            path.unlink(missing_ok=True)
+            return {"zipped": 0, "zip_name": None, "error": str(e)}
+
+        if bad_member is not None or member_count != files_written:
+            log.warning("zip verify mismatch (bad=%s, %d/%d members); removing %s",
+                        bad_member, member_count, files_written, name)
+            path.unlink(missing_ok=True)
+            return {"zipped": 0, "zip_name": None,
+                    "error": "The backup zip didn't verify — try again."}
+
+        manifest.setdefault("zips", {})[name] = {
+            "created_at": datetime.now().isoformat(),
+            "clips": sorted(to_zip.keys()), "count": len(to_zip),
+        }
+        _save_manifest(manifest)
+
+        if delete_originals:
+            for clip_dir in to_zip.values():
+                shutil.rmtree(clip_dir, ignore_errors=True)
+
+        return {"zipped": len(to_zip), "zip_name": name, "zip_path": str(path)}
 
 
 if __name__ == "__main__":

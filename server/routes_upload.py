@@ -183,9 +183,18 @@ def youtube_queue():
     split = sched.classify_uploads(log_data, live)
     on_disk = {u["key"]: u["on_disk"] for u in uploaded}
     archived_ids = archive.index_by_video_id()  # one directory walk, not one glob per row
+    zipped_ids = archive.zipped_video_ids()
     for row in split["scheduled"] + split["published"]:
         row["on_disk"] = on_disk.get(row["key"], False)
-        row["archived"] = row.get("video_id") in archived_ids
+        vid = row.get("video_id")
+        has_folder = vid in archived_ids
+        # "archived" covers both: still a live folder in archive/uploaded/, or
+        # already swept into a backup zip. archive_zip only names the backup
+        # when there's no live folder left to open — a zipped-but-kept clip
+        # (delete_originals was off) still shows "Open folder", not this.
+        row["archived"] = has_folder or vid in zipped_ids
+        row["archive_zip"] = (archive.find_zip_for(vid)
+                              if not has_folder and vid in zipped_ids else None)
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
         "require_approval": bool(
@@ -501,3 +510,64 @@ def archive_open_folder(video_id: str):
     except OSError as e:      # from find_archive_dir, already sandboxed under archive/
         raise HTTPException(500, friendly(e, "Opening that folder"))
     return {"opened": str(d)}
+
+
+@router.get("/api/archive/zip-status")
+def archive_zip_status():
+    """How many archived clips aren't backed up into a zip yet, and whether
+    that's enough to prompt for a new backup — the Uploaded panel's banner."""
+    import archive
+    return archive.zip_status()
+
+
+_ZIP_JOBS: dict[str, dict] = {}
+_ZIP_JOBS_LOCK = threading.Lock()
+
+
+class ZipBackupRequest(BaseModel):
+    delete_originals: bool = False
+
+
+@router.post("/api/archive/zip")
+def start_zip_backup(req: ZipBackupRequest):
+    """Zip every not-yet-backed-up archived clip into archive/backups/ in a
+    background thread (streamed, verified before the manifest updates — see
+    archive.create_backup_zip); poll /api/archive/zip/{job_id} for progress."""
+    import archive
+    job_id = uuid.uuid4().hex[:12]
+    with _ZIP_JOBS_LOCK:
+        _ZIP_JOBS[job_id] = {"state": "running", "done": 0, "total": 0}
+
+    def on_progress(done: int, total: int) -> None:
+        with _ZIP_JOBS_LOCK:
+            _ZIP_JOBS[job_id]["done"] = done
+            _ZIP_JOBS[job_id]["total"] = total
+
+    def work() -> None:
+        try:
+            result = archive.create_backup_zip(
+                on_progress=on_progress, delete_originals=req.delete_originals)
+            # create_backup_zip reports a verify/IO failure by returning an
+            # "error" key rather than raising — that must reach the client as
+            # state="error" too, not "done" (the frontend only surfaces errors
+            # from the "error" state; "done" with zipped=0 reads as the
+            # harmless "nothing new to back up" case)
+            state = "error" if result.get("error") else "done"
+            with _ZIP_JOBS_LOCK:
+                _ZIP_JOBS[job_id].update(state=state, **result)
+        except Exception as e:  # noqa: BLE001 — job worker must never crash silently
+            log.error("zip backup job %s crashed: %s", job_id, e)
+            with _ZIP_JOBS_LOCK:
+                _ZIP_JOBS[job_id].update(state="error", error=str(e))
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@router.get("/api/archive/zip/{job_id}")
+def zip_backup_status(job_id: str):
+    with _ZIP_JOBS_LOCK:
+        job = _ZIP_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "That backup job isn't active anymore.")
+        return dict(job)
