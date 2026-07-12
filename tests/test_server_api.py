@@ -559,6 +559,97 @@ def test_delete_refuses_mid_upload(client, monkeypatch, tmp_path):
     assert clip_dir.exists()  # never deleted mid-upload
 
 
+# ============================================================
+# All-clips library (Part 1 of the library/archive task)
+# ============================================================
+def test_all_clips_lists_every_status(client, monkeypatch, tmp_path):
+    import server.routes_library as lib
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    lib._ALL_CLIPS_CACHE = None
+
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=70,
+                          title="Pending clip", approval="pending")
+    _write_candidate_clip(output_dir, "job1", "clip_01", score=50,
+                          title="Rejected clip", approval="rejected")
+    (output_dir / "job1" / "job.json").write_text(json.dumps({
+        "created": "2026-07-12T00:00:00", "source": "https://example.com/v",
+        "clips": [
+            {"index": 0, "duration": 30.0,
+             "metadata": {"title": "Pending clip"}, "virality": {"score": 70}},
+            {"index": 1, "duration": 40.0,
+             "metadata": {"title": "Rejected clip"}, "virality": {"score": 50}},
+        ]}), encoding="utf-8")
+
+    # a clip from a --sample run: no approval decision made, but the job's
+    # source is exactly sample_source.SAMPLE_PATH so it reads as "sample"
+    # rather than "pending"
+    from sample_source import SAMPLE_PATH
+    _write_candidate_clip(output_dir, "job2", "clip_00", score=10,
+                          title="Sample clip", approval="pending")
+    (output_dir / "job2" / "job.json").write_text(json.dumps({
+        "created": "2026-07-11T00:00:00", "source": str(SAMPLE_PATH),
+        "clips": [{"index": 0, "duration": 20.0,
+                   "metadata": {"title": "Sample clip"},
+                   "virality": {"score": 10}}],
+    }), encoding="utf-8")
+
+    clips = client.get("/api/clips/all").json()["clips"]
+    by_title = {c["title"]: c for c in clips}
+    assert by_title["Pending clip"]["status"] == "pending"
+    assert by_title["Rejected clip"]["status"] == "rejected"
+    assert by_title["Sample clip"]["status"] == "sample"
+    assert by_title["Pending clip"]["duration"] == 30.0
+    assert by_title["Pending clip"]["bytes"] > 0
+
+
+def test_all_clips_cached_until_refresh_or_delete(client, monkeypatch, tmp_path):
+    import server.routes_library as lib
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    lib._ALL_CLIPS_CACHE = None
+    _write_job_with_clip(output_dir, "job1", 0)
+
+    first = client.get("/api/clips/all").json()["clips"]
+    assert len(first) == 1
+
+    _write_job_with_clip(output_dir, "job2", 0)
+    still_cached = client.get("/api/clips/all").json()["clips"]
+    assert len(still_cached) == 1  # new clip on disk, but the index is stale
+
+    refreshed = client.get("/api/clips/all?refresh=1").json()["clips"]
+    assert len(refreshed) == 2
+
+    r = client.request("DELETE", "/api/clips",
+                       json={"keys": ["output/job1/clip_00"]})
+    assert r.json()["deleted"] == 1
+    after_delete = client.get("/api/clips/all").json()["clips"]
+    assert len(after_delete) == 1  # delete invalidates the cache too
+
+
+def test_all_clips_reflects_approval_change_without_manual_refresh(
+        client, monkeypatch, tmp_path):
+    """A clip approved/rejected via the per-clip route (used by Results and
+    the Upload queue) must show its new status on the next /api/clips/all
+    call — not just after the UI's manual Refresh button."""
+    import server.routes_library as lib
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    lib._ALL_CLIPS_CACHE = None
+    _write_candidate_clip(output_dir, "job1", "clip_00", score=60,
+                          title="Clip", approval="pending")
+    (output_dir / "job1" / "job.json").write_text(json.dumps({
+        "clips": [{"index": 0, "duration": 30.0,
+                   "metadata": {"title": "Clip"}, "virality": {"score": 60}}],
+    }), encoding="utf-8")
+
+    before = client.get("/api/clips/all").json()["clips"]
+    assert before[0]["status"] == "pending"
+
+    r = client.put("/api/jobs/job1/clips/0/approval", json={"approval": "approved"})
+    assert r.status_code == 200
+
+    after = client.get("/api/clips/all").json()["clips"]
+    assert after[0]["status"] == "approved"
+
+
 def test_cleanup_uploaded_keeps_log_and_dedupe(client, monkeypatch, tmp_path):
     import upload_scheduler as sched
     output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)

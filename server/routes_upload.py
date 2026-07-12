@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from config import ROOT, load_config, save_config
 from logutil import get_logger
 from server.copy import friendly
-from server.routes_library import safe_job_path
+from server.routes_library import invalidate_all_clips_cache, safe_job_path
 
 log = get_logger("server")
 router = APIRouter()
@@ -261,6 +261,8 @@ def approve_all(req: ApproveAllRequest):
             updated += 1
         except (OSError, json.JSONDecodeError) as e:
             log.warning("approve-all skipped %s: %s", c["key"], e)
+    if updated:
+        invalidate_all_clips_cache()
     return {"updated": updated}
 
 
@@ -350,6 +352,7 @@ def queue_upload(req: QueueSelectRequest):
         finally:
             with _BATCHES_LOCK:
                 _BATCHES[batch_id]["state"] = "done"
+            invalidate_all_clips_cache()  # some clips may have gone out before a crash
 
     threading.Thread(target=work, daemon=True).start()
     return {"batch_id": batch_id}
@@ -407,6 +410,8 @@ def cleanup_uploaded():
             deleted += 1
         except OSError as e:
             log.warning("cleanup skipped %s: %s", key, e)
+    if deleted:
+        invalidate_all_clips_cache()
     return {"deleted": deleted, "reclaimed_bytes": reclaimed}
 
 
@@ -429,6 +434,8 @@ def sync_schedule():
                                      yt.build_analytics_service(), cfg, log_data)
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
         raise HTTPException(502, friendly(e, "Scheduling uploads"))
+    if result.get("scheduled"):
+        invalidate_all_clips_cache()
     return result
 
 
@@ -447,8 +454,10 @@ def unschedule(req: UnscheduleRequest):
         raise HTTPException(409, "Connect to YouTube first (one-time).")
     log_data = sched.load_log()
     try:
-        return sched.unschedule(yt.build_service(), req.key, log_data)
+        result = sched.unschedule(yt.build_service(), req.key, log_data)
     except UploadError as e:
         raise HTTPException(409, str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, friendly(e, "Un-scheduling"))
+    invalidate_all_clips_cache()
+    return result

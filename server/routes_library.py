@@ -119,6 +119,7 @@ def delete_clips(req: DeleteClipsRequest):
             continue
         reclaimed += freed
         results.append({"key": key, "status": "deleted", "bytes": freed})
+    invalidate_all_clips_cache()
     return {"results": results, "reclaimed_bytes": reclaimed,
             "deleted": sum(1 for r in results if r["status"] == "deleted")}
 
@@ -193,6 +194,93 @@ def get_job(job_name: str):
         c.update(_clip_extras(job_name, c))
     job["name"] = job_name
     return job
+
+
+_ALL_CLIPS_CACHE: list[dict] | None = None
+
+
+def invalidate_all_clips_cache() -> None:
+    """Every route that changes a clip's status/approval/existence after the
+    All-clips index has been scanned must call this — otherwise the cached
+    list silently disagrees with disk until the user hits Refresh."""
+    global _ALL_CLIPS_CACHE
+    _ALL_CLIPS_CACHE = None
+
+
+def _clip_status(key: str, scheduled_keys: set, uploaded_keys: set,
+                 approval: str, is_sample: bool) -> str:
+    """sample|pending|approved|rejected|scheduled|uploaded. scheduled/uploaded
+    come from upload_scheduler.classify_uploads (log-only, no live API call —
+    that's the same fallback classification the YouTube tab uses when it
+    can't reach the API) so this never disagrees with the log's own ground
+    truth about what actually left the app."""
+    if key in scheduled_keys:
+        return "scheduled"
+    if key in uploaded_keys:
+        return "uploaded"
+    if approval == "rejected":
+        return "rejected"
+    if approval == "approved":
+        return "approved"
+    if is_sample:
+        return "sample"
+    return "pending"
+
+
+def _scan_all_clips() -> list[dict]:
+    """Every clip on disk across every job, newest job first — the source list
+    for the All-clips tab. Reuses the same job.json + metadata.json reads as
+    /api/jobs/{name} (_load_job_record, _clip_extras) rather than a second
+    parsing path."""
+    root = output_root()
+    if not root.exists():
+        return []
+    import upload_scheduler as sched
+    from sample_source import SAMPLE_PATH
+    log_data = sched.load_log()
+    split = sched.classify_uploads(log_data)
+    scheduled_keys = {r["key"] for r in split["scheduled"]}
+    uploaded_keys = {r["key"] for r in split["published"]}
+
+    out = []
+    for jd in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True):
+        try:
+            job = _load_job_record(jd.name)
+        except HTTPException:
+            continue
+        is_sample = job.get("source") == str(SAMPLE_PATH)
+        for c in job.get("clips", []):
+            idx = c.get("index")
+            if idx is None:
+                continue
+            extras = _clip_extras(jd.name, c)
+            nn = f"{idx:02d}"
+            key = f"output/{jd.name}/clip_{nn}"
+            meta = c.get("metadata") or {}
+            out.append({
+                "key": key, "job": jd.name, "index": idx,
+                "title": meta.get("title") or f"Clip {idx + 1}",
+                "duration": c.get("duration"),
+                "bytes": extras["bytes"], "niche": extras["niche"],
+                "score": (c.get("virality") or {}).get("score"),
+                "status": _clip_status(key, scheduled_keys, uploaded_keys,
+                                       extras["approval"], is_sample),
+                "created": job.get("created", ""),
+                "video_url": f"/api/files/{jd.name}/clip_{nn}/final.mp4",
+            })
+    return out
+
+
+@router.get("/api/clips/all")
+def list_all_clips(refresh: bool = False):
+    """Flat index of every clip on disk (all jobs, all statuses) for the
+    All-clips library tab. Cached after the first scan — pass ?refresh=1 (the
+    UI's Refresh button) to force a rescan; every status-changing route
+    (delete, approve/reject, exclude, upload) invalidates it too."""
+    global _ALL_CLIPS_CACHE
+    if _ALL_CLIPS_CACHE is None or refresh:
+        _ALL_CLIPS_CACHE = _scan_all_clips()
+    return {"clips": _ALL_CLIPS_CACHE}
 
 
 @router.get("/api/jobs/{job_name}/zip")

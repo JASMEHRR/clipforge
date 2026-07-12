@@ -13,6 +13,7 @@ import {
   pickSubsMode,
 } from "./pickers.js";
 import { mountUploadQueue } from "./upload_queue.js";
+import { mountLibrary } from "./library.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -26,6 +27,7 @@ const routes = {
   results: renderResults,
   edit: renderEditor,
   queue: renderQueue,
+  library: renderLibrary,
   youtube: renderYouTube,
   analytics: renderAnalytics,
   settings: renderSettings,
@@ -891,6 +893,24 @@ async function renderEditor(jobName, indexStr) {
           el("div", {}, regenBtn))))));
 
   cleanup = () => { if (stopWatch) stopWatch(); if (dm) dm.destroy(); };
+}
+
+// -------------------------------------------------------------- library ----
+
+function renderLibrary() {
+  const body = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Library"),
+        el("h1", { class: "t-display" }, "All clips"),
+        el("p", { class: "t-dim", style: "margin:4px 0 0" },
+          "Every clip on disk, from every run — samples, pending, approved, "
+          + "uploaded, everything."))),
+    body));
+
+  const lib = mountLibrary(body);
+  cleanup = lib.dispose;
 }
 
 // --------------------------------------------------------------- queue ----

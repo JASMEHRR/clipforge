@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from logutil import get_logger
 from server import jobs
 from server.copy import friendly
-from server.routes_library import safe_job_path
+from server.routes_library import invalidate_all_clips_cache, safe_job_path
 
 log = get_logger("server")
 router = APIRouter()
@@ -171,6 +171,7 @@ def set_exclude(job_name: str, index: int, req: ExcludeRequest):
                              encoding="utf-8")
     except (OSError, json.JSONDecodeError) as e:
         raise HTTPException(500, friendly(e, "Saving that choice"))
+    invalidate_all_clips_cache()
     return {"exclude": bool(req.exclude)}
 
 
@@ -196,4 +197,5 @@ def set_approval(job_name: str, index: int, req: ApprovalRequest):
                              encoding="utf-8")
     except (OSError, json.JSONDecodeError) as e:
         raise HTTPException(500, friendly(e, "Saving that decision"))
+    invalidate_all_clips_cache()
     return {"approval": req.approval}

@@ -5,18 +5,8 @@
  * an additional manual trigger into it, not a second selection system. */
 
 import { api } from "./api.js";
-import { clipVideo, confirmDialog, el, fmtBytes, fmtClock, openClipPreview,
+import { confirmDialog, el, fmtBytes, fmtClock, thumbButton,
   toast } from "./ui.js";
-
-/* A compact clip thumbnail that opens a full click-to-play preview. Shared by
- * the queue rows and the confirm dialog so preview behaves the same in both. */
-function thumbButton(src, title, cls) {
-  return el("button", { class: "uq-thumb-btn", type: "button",
-                        "aria-label": `Play preview of ${title}`,
-                        onclick: () => openClipPreview(src, title) },
-    clipVideo(src, { class: cls, controls: null, muted: "" }),
-    el("span", { class: "uq-play", "aria-hidden": "true" }, "▶"));
-}
 
 const STATUS_LABEL = {
   pending: "Waiting", uploading: "Uploading…", done: "Done", failed: "Failed",

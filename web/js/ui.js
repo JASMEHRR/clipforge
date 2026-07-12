@@ -73,6 +73,16 @@ export function clipVideo(src, opts = {}) {
                        ...opts, src });
 }
 
+/* A compact clip thumbnail that opens a full click-to-play preview. Shared by
+ * the upload-queue rows and the library tab so preview behaves the same. */
+export function thumbButton(src, title, cls) {
+  return el("button", { class: "uq-thumb-btn", type: "button",
+                        "aria-label": `Play preview of ${title}`,
+                        onclick: () => openClipPreview(src, title) },
+    clipVideo(src, { class: cls, controls: null, muted: "" }),
+    el("span", { class: "uq-play", "aria-hidden": "true" }, "▶"));
+}
+
 /* Click-to-play preview modal with a large player. Used by the compact
  * upload-queue rows, where a 64px inline video can't actually be watched. */
 export function openClipPreview(src, title = "Preview") {
