@@ -480,6 +480,24 @@ def _render_end_card(src: Path, wm: dict, cfg: dict) -> Path:
 # ============================================================
 # Upload
 # ============================================================
+def _archive_after_upload(video_path, clip: dict, result: dict, snippet: dict,
+                          uploaded_at: str, publish_at: str | None) -> None:
+    """Best-effort permanent copy into archive/uploaded/ — must run while
+    `video_path` still exists (the caller deletes a watermarked temp copy
+    right after upload) and must never raise: archiving failing is never
+    allowed to break an upload or take down the rest of a batch."""
+    try:
+        import archive
+        archive.archive_clip(
+            Path(video_path), clip["dir"], result.get("video_id"),
+            result.get("url"), snippet, niche=clip["meta"].get("niche"),
+            virality_score=clip.get("score"), uploaded_at=uploaded_at,
+            publish_at=publish_at)
+    except Exception as e:  # noqa: BLE001 — archiving must never break an upload
+        log.warning("archiving failed for %s (%s); only the output/ copy "
+                    "exists for now", clip["key"], e)
+
+
 def upload_one(youtube, clip: dict, publish_at: datetime, category_id: str,
                service=None, cfg: dict | None = None) -> dict:
     snippet = build_snippet(clip["meta"])
@@ -488,9 +506,13 @@ def upload_one(youtube, clip: dict, publish_at: datetime, category_id: str,
              publish_at.strftime("%d %b %H:%M IST"))
     video, is_temp = apply_end_watermark(clip["video"], cfg or {})
     try:
-        return youtube_upload.upload_clip(
+        result = youtube_upload.upload_clip(
             video, snippet, privacy="private", service=service or youtube,
             publish_at=publish_at_iso, category_id=category_id)
+        result["uploaded_at"] = datetime.now(IST).isoformat()
+        _archive_after_upload(video, clip, result, snippet,
+                              result["uploaded_at"], publish_at.isoformat())
+        return result
     finally:
         if is_temp:
             Path(video).unlink(missing_ok=True)
@@ -528,7 +550,7 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
             break
         log_data["uploads"][clip["key"]] = {
             "video_id": result["video_id"],
-            "uploaded_at": datetime.now(IST).isoformat(),
+            "uploaded_at": result["uploaded_at"],
             "publish_at": publish_at.isoformat(),
             "title": build_snippet(clip["meta"])["title"],
             "virality_score": clip["score"],
@@ -686,6 +708,12 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
             result = youtube_upload.upload_clip(
                 video, snippet, privacy="public", service=youtube,
                 publish_at=None, category_id=category_id)
+            now_iso = datetime.now(IST).isoformat()
+            # archive while `video` (the watermarked temp copy, if any) still
+            # exists — the finally below deletes it right after this. This is
+            # an immediate publish (publish_at=None above), so the archive
+            # record should say so too, not repeat uploaded_at as a fake slot.
+            _archive_after_upload(video, clip, result, snippet, now_iso, None)
         except UploadError as e:
             log.error("upload now failed for %s: %s", clip["key"], e)
             notify("ClipForge upload FAILED", f"{clip['key']}: {e}", ntfy_topic)
@@ -699,7 +727,6 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
             if is_temp:
                 Path(video).unlink(missing_ok=True)
 
-        now_iso = datetime.now(IST).isoformat()
         log_data["uploads"][clip["key"]] = {
             "video_id": result["video_id"], "uploaded_at": now_iso,
             "publish_at": now_iso, "title": snippet["title"],

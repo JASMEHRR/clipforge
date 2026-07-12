@@ -326,6 +326,7 @@ def _wait_batch(client, batch_id, timeout=5.0):
 
 
 def _isolate_upload_scheduler(monkeypatch, tmp_path):
+    import archive
     import upload_scheduler as sched
     import server.routes_upload as ru
     import server.routes_library as rl
@@ -338,6 +339,11 @@ def _isolate_upload_scheduler(monkeypatch, tmp_path):
     # keep the library's output_root (used by delete/storage/cleanup) pointed at
     # the same isolated tree the scheduler scans, so keys resolve consistently
     monkeypatch.setattr(rl, "output_root", lambda: output_dir.resolve())
+    # a real upload's archive copy must never land under the real repo's
+    # archive/uploaded/ during tests; ROOT too, since ensure_archived resolves
+    # upload_log keys ("output/<job>/<clip>") against it
+    monkeypatch.setattr(archive, "ARCHIVE_DIR", tmp_path / "archive" / "uploaded")
+    monkeypatch.setattr(archive, "ROOT", tmp_path)
     return output_dir
 
 
@@ -668,6 +674,86 @@ def test_cleanup_uploaded_keeps_log_and_dedupe(client, monkeypatch, tmp_path):
     assert up_key in log_data["uploads"]
     assert up_key not in {c["key"] for c in sched.find_candidates(
         {"upload": {"min_virality": 40}}, log_data)}
+
+
+def test_cleanup_uploaded_archives_before_deleting(client, monkeypatch, tmp_path):
+    import archive
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    up = _write_job_with_clip(output_dir, "job1", 0)
+    up_key = "output/job1/clip_00"
+    sched.save_log({"uploads": {up_key: {"video_id": "vArch", "title": "Up",
+                                         "uploaded_at": "2026-07-12T00:00:00"}}})
+
+    r = client.post("/api/youtube/cleanup-uploaded")
+    assert r.json()["deleted"] == 1
+    assert not up.exists()
+    d = archive.find_archive_dir("vArch")
+    assert d is not None and (d / "final.mp4").is_file()
+
+
+def test_cleanup_uploaded_skips_when_it_cant_be_archived(client, monkeypatch, tmp_path):
+    """A log entry with no video_id can never be archived (find_archive_dir
+    has nothing to key on) — cleanup must leave that clip's local files alone
+    rather than delete them with no permanent copy anywhere."""
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    up = _write_job_with_clip(output_dir, "job1", 0)
+    up_key = "output/job1/clip_00"
+    sched.save_log({"uploads": {up_key: {"title": "No video id"}}})
+
+    r = client.post("/api/youtube/cleanup-uploaded")
+    assert r.json()["deleted"] == 0
+    assert up.exists()
+
+
+def test_archive_backfill_endpoint(client, monkeypatch, tmp_path):
+    import archive
+    import upload_scheduler as sched
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_job_with_clip(output_dir, "job1", 0)
+    sched.save_log({"uploads": {"output/job1/clip_00": {
+        "video_id": "vBack", "uploaded_at": "2026-07-12T00:00:00"}}})
+
+    r = client.post("/api/archive/backfill")
+    assert r.json() == {"archived": 1, "skipped": 0}
+    assert archive.find_archive_dir("vBack") is not None
+
+    # already archived -> a second run archives nothing new
+    assert client.post("/api/archive/backfill").json()["archived"] == 0
+
+
+def test_archive_open_folder(client, monkeypatch, tmp_path):
+    import archive
+    _isolate_upload_scheduler(monkeypatch, tmp_path)
+    assert client.post("/api/archive/open/nope").status_code == 404
+
+    d = tmp_path / "somewhere"
+    d.mkdir()
+    monkeypatch.setattr(archive, "find_archive_dir",
+                        lambda video_id: d if video_id == "vid1" else None)
+    opened = []
+    monkeypatch.setattr("os.startfile", lambda p: opened.append(p), raising=False)
+    r = client.post("/api/archive/open/vid1")
+    assert r.status_code == 200 and opened == [str(d)]
+
+
+def test_youtube_queue_exposes_archived_flag_on_published_rows(client, monkeypatch, tmp_path):
+    import archive
+    output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
+    _write_job_with_clip(output_dir, "job1", 0)
+    import upload_scheduler as sched
+    sched.save_log({"uploads": {"output/job1/clip_00": {
+        "video_id": "vQueue", "title": "Up",
+        "uploaded_at": "2026-01-01T00:00:00"}}})
+
+    before = client.get("/api/youtube/queue").json()
+    assert before["published"][0]["archived"] is False
+
+    archive.ensure_archived("output/job1/clip_00",
+                            {"video_id": "vQueue", "uploaded_at": "2026-01-01T00:00:00"})
+    after = client.get("/api/youtube/queue").json()
+    assert after["published"][0]["archived"] is True
 
 
 def test_storage_reports_total_and_cleanable(client, monkeypatch, tmp_path):

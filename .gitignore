@@ -12,6 +12,7 @@ __pycache__/
 *.pyc
 cache/
 output/
+archive/
 inbox/
 jobs.db
 *.log

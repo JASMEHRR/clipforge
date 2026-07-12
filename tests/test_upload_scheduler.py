@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import archive
 import upload_scheduler as sched
 from errors import UploadError
 
@@ -31,6 +32,9 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(sched, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(sched, "LOG_FILE", log_file)
     monkeypatch.setattr(sched, "ROOT", tmp_path)
+    # a real upload's archive copy must never land under the real repo's
+    # archive/uploaded/ during tests
+    monkeypatch.setattr(archive, "ARCHIVE_DIR", tmp_path / "archive" / "uploaded")
     return output_dir
 
 

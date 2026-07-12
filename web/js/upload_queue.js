@@ -43,6 +43,8 @@ export function mountUploadQueue(container) {
   const publishedWrap = el("div", { class: "uq-rows" });
   const cleanupBtn = el("button", { class: "btn btn-danger btn-sm",
                                     type: "button" }, "Clean up uploaded");
+  const archiveBackfillBtn = el("button", { class: "btn btn-ghost btn-sm",
+                                            type: "button" }, "Archive older uploads");
   const approveAllBtn = el("button", { class: "btn", type: "button" },
     "Approve all");
   const approvalsHead = el("div", { class: "uq-controls" },
@@ -72,7 +74,7 @@ export function mountUploadQueue(container) {
     scheduledWrap,
     el("div", { class: "uq-controls", style: "margin-top:8px" },
       el("div", { class: "uq-section-label t-label" }, "Published"),
-      cleanupBtn),
+      el("div", { class: "field-inline" }, archiveBackfillBtn, cleanupBtn)),
     publishedWrap);
 
   countBtn.addEventListener("click", () => openConfirm("top", Number(countIn.value) || 0));
@@ -126,6 +128,17 @@ export function mountUploadQueue(container) {
       await refresh();
     } catch (e) { toast(e.message, "is-error"); }
     cleanupBtn.disabled = false;
+  });
+  archiveBackfillBtn.addEventListener("click", async () => {
+    archiveBackfillBtn.disabled = true;
+    try {
+      const r = await api.post("/api/archive/backfill");
+      toast(r.archived
+        ? `Archived ${r.archived} clip${r.archived === 1 ? "" : "s"}.`
+        : "Everything is already archived.", "is-ok");
+      await refresh();
+    } catch (e) { toast(e.message, "is-error"); }
+    archiveBackfillBtn.disabled = false;
   });
   approveAllBtn.addEventListener("click", async () => {
     approveAllBtn.disabled = true;
@@ -310,6 +323,21 @@ export function mountUploadQueue(container) {
       : null;
   }
 
+  /* Opens this clip's permanent archive/uploaded/ folder in Explorer. Only
+   * shown once it's actually archived (auto on upload, or via the "Archive
+   * older uploads" backfill button above). */
+  function openFolderBtn(u) {
+    if (!(u.archived && u.video_id)) return null;
+    const btn = el("button", { class: "btn btn-ghost btn-sm", type: "button" },
+      "Open folder");
+    btn.addEventListener("click", async () => {
+      try {
+        await api.post(`/api/archive/open/${encodeURIComponent(u.video_id)}`);
+      } catch (e) { toast(e.message, "is-error"); }
+    });
+    return btn;
+  }
+
   /* A published (live-on-YouTube) row. */
   function uploadedRow(u) {
     return el("div", { class: "uq-uploaded-row" },
@@ -318,7 +346,8 @@ export function mountUploadQueue(container) {
         el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
           u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString() : "",
           u.score != null ? ` · score ${u.score}` : "")),
-      el("div", { class: "field-inline" }, ytLink(u), deleteLocalBtn(u)));
+      el("div", { class: "field-inline" },
+        ytLink(u), openFolderBtn(u), deleteLocalBtn(u)));
   }
 
   /* A scheduled row: booked on YouTube, publishes at its slot. Offers

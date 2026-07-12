@@ -5,6 +5,7 @@ queue (upload_scheduler.find_candidates)."""
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -149,6 +150,7 @@ def _candidate_summary(c: dict) -> dict:
 
 @router.get("/api/youtube/queue")
 def youtube_queue():
+    import archive
     import upload_scheduler as sched
     cfg = load_config()
     log_data = sched.load_log()
@@ -180,8 +182,10 @@ def youtube_queue():
             log.info("live video status unavailable: %s", e)
     split = sched.classify_uploads(log_data, live)
     on_disk = {u["key"]: u["on_disk"] for u in uploaded}
+    archived_ids = archive.index_by_video_id()  # one directory walk, not one glob per row
     for row in split["scheduled"] + split["published"]:
         row["on_disk"] = on_disk.get(row["key"], False)
+        row["archived"] = row.get("video_id") in archived_ids
     return {
         "candidates": [_candidate_summary(c) for c in candidates],
         "require_approval": bool(
@@ -390,13 +394,17 @@ def storage():
 
 @router.post("/api/youtube/cleanup-uploaded")
 def cleanup_uploaded():
-    """Delete local files of every clip already uploaded. Keeps the upload log
-    (history + dedupe intact); skips anything mid-upload."""
+    """Delete local files of every clip already uploaded — but only once a
+    permanent archive/uploaded/ copy exists for it (archiving it first if
+    needed). Keeps the upload log (history + dedupe intact); skips anything
+    mid-upload, and skips (with a warning) anything that can't be archived
+    rather than deleting it with no copy anywhere."""
+    import archive
     import upload_scheduler as sched
     from server.routes_library import _clip_dir_from_key, delete_clip_dir
     deleted = 0
     reclaimed = 0
-    for key in sched.load_log().get("uploads", {}):
+    for key, entry in sched.load_log().get("uploads", {}).items():
         if key_is_uploading(key):
             continue
         try:
@@ -404,6 +412,9 @@ def cleanup_uploaded():
         except HTTPException:
             continue
         if not d.is_dir():
+            continue
+        if not archive.ensure_archived(key, entry):
+            log.warning("cleanup skipped %s: couldn't archive it first", key)
             continue
         try:
             reclaimed += delete_clip_dir(d)
@@ -461,3 +472,32 @@ def unschedule(req: UnscheduleRequest):
         raise HTTPException(502, friendly(e, "Un-scheduling"))
     invalidate_all_clips_cache()
     return result
+
+
+# ------------------------------------------------------------- archive --
+
+@router.post("/api/archive/backfill")
+def archive_backfill():
+    """One-time sweep: archive everything already in the upload log that
+    isn't archived yet (best-effort — a clip whose output/ files are already
+    gone can't be recovered)."""
+    import archive
+    import upload_scheduler as sched
+    result = archive.backfill_from_log(sched.load_log())
+    if result["archived"]:
+        invalidate_all_clips_cache()
+    return result
+
+
+@router.post("/api/archive/open/{video_id}")
+def archive_open_folder(video_id: str):
+    """Open this clip's permanent archive folder in Explorer."""
+    import archive
+    d = archive.find_archive_dir(video_id)
+    if not d:
+        raise HTTPException(404, "That clip hasn't been archived yet.")
+    try:
+        os.startfile(str(d))  # Windows-only app (see CLAUDE.md); path came
+    except OSError as e:      # from find_archive_dir, already sandboxed under archive/
+        raise HTTPException(500, friendly(e, "Opening that folder"))
+    return {"opened": str(d)}
