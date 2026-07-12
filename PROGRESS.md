@@ -2,7 +2,13 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: **feature/frontend-rebuild** — Gradio replaced by a custom frontend (FastAPI `server/` + vanilla-JS `web/`), all 5 phases done (see Phase F below). app.py deleted (git history only); `run.bat` → `python -m server.main` on port 7860. Next: merge to main + tag v2.0.0 (bump VERSION so the self-updater offers it). Older items: double-caption fix follow-up (Phase D Known), Docker daemon build, optional YouTube OAuth.
+Current: **main** — Phase M (All-clips library tab + uploaded archive + zip backups), Part 1 of 3 done. Part 2 (archive/uploaded/ folder structure, auto-archive on upload success + backfill) is next, then Part 3 (zip backups at 100 clips). Older items: merge to main + tag v2.0.0 (feature/frontend-rebuild is already on main so this is just the version bump), double-caption fix follow-up (Phase D Known), Docker daemon build, optional YouTube OAuth.
+
+## Phase M — All-clips library tab + uploaded archive + zip backups (on main)
+Three-part task, extends Phase L's delete-from-app work (reused, not duplicated).
+- [x] Part 1 — All-clips tab (d1a6bbb): `GET /api/clips/all` in `routes_library.py` scans every job/clip on disk regardless of status, cached after first scan (`?refresh=1` or any status-changing route forces a rescan — delete/approve/reject/exclude/upload-now/sync-schedule/unschedule/cleanup-uploaded all call `invalidate_all_clips_cache()`, added after code review caught the first pass only invalidating on delete). Status derived from `upload_scheduler.classify_uploads` (same source as the YouTube tab, not a re-derived date check) + per-clip approval. New `web/js/library.js`: sort by date/virality/size, chunked rendering via IntersectionObserver sentinel (no virtual-scroll dependency) for 500+ clips, per-job "select all," multi-select delete reusing `DELETE /api/clips`. `thumbButton` moved from `upload_queue.js` into shared `ui.js`.
+- [ ] Part 2 — Uploaded archive: `archive.py`, `archive/uploaded/<YYYY-MM>/<video_id>__<slug>/` (final.mp4 + info.json + info.txt), auto-archive hook in `upload_scheduler.upload_batch`/`upload_now`, one-time backfill from `upload_log.json`, "Clean up uploaded" requires an archive copy to exist first.
+- [ ] Part 3 — Zip backups: `archive/backups/zip_manifest.json`, 100-clip threshold prompt, manual "Zip archive now" in Settings, streamed zip + member-count verify, opt-in delete-originals.
 
 ## Phase L — Upload center: library mgmt + schedule-ahead + approval (on main)
 Four-part task (task file "Library Management + Schedule-Ahead Uploads + Approval Flow"). All scheduling/upload paths stay single-source in `upload_scheduler.py`; the UI adds states, not logic forks.
