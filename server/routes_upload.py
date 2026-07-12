@@ -118,6 +118,7 @@ def _candidate_summary(c: dict) -> dict:
     return {
         "key": c["key"], "title": meta.get("title", "Untitled"), "score": c["score"],
         "band": vir.get("band"), "source_name": meta.get("source_name", ""),
+        "niche": meta.get("niche"),
         "duration": (end - start) if start is not None and end is not None else None,
         "video_url": f"/api/youtube/queue/video/{c['key']}",
         "duplicates": len(c.get("duplicates", [])),

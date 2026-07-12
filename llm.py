@@ -372,6 +372,11 @@ def _mock_complete(task, schema, prompt, context):
         from virality import rule_based_virality
         return rule_based_virality(context["text"], context.get("hook", ""),
                                    context["duration"])
+    if task == "niche":
+        # classify.py never reaches the LLM under mock; this keeps direct
+        # complete_json("niche", ...) calls deterministic instead of letting
+        # synthesize_from_schema invent a non-taxonomy string.
+        return {"niche": "other"}
     return synthesize_from_schema(schema, seed=task)
 
 

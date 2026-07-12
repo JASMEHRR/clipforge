@@ -43,18 +43,21 @@ def _load_job_record(job_name: str) -> dict:
 
 
 def _clip_extras(job_name: str, clip: dict) -> dict:
-    """Per-clip fields the UI needs beyond job.json: the auto-upload opt-out
-    flag read from clip_NN/metadata.json (where find_candidates reads it)."""
+    """Per-clip fields the UI needs beyond job.json, read from
+    clip_NN/metadata.json (where find_candidates reads them): the auto-upload
+    opt-out flag and the content niche."""
     excluded = False
+    niche = None
     try:
         meta_p = safe_job_path(job_name, f"clip_{clip['index']:02d}",
                                "metadata.json")
         if meta_p.exists():
             meta = json.loads(meta_p.read_text(encoding="utf-8"))
             excluded = bool(meta.get("upload", {}).get("exclude"))
-    except Exception:  # noqa: BLE001 — missing/old metadata → not excluded
+            niche = meta.get("niche")
+    except Exception:  # noqa: BLE001 — missing/old metadata → defaults
         excluded = False
-    return {"upload_excluded": excluded}
+    return {"upload_excluded": excluded, "niche": niche}
 
 
 @router.get("/api/jobs")
@@ -79,7 +82,9 @@ def list_jobs():
                     "source": job.get("source", ""),
                     "status": job.get("status", ""),
                     "clip_count": len(clips),
-                    "kept": sum(1 for c in clips if c.get("kept"))})
+                    "kept": sum(1 for c in clips if c.get("kept")),
+                    "niches": sorted({c["niche"] for c in clips
+                                      if c.get("niche")})})
     return {"jobs": out}
 
 

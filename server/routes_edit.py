@@ -99,6 +99,60 @@ def set_kept(job_name: str, index: int, req: KeptRequest):
     return {"kept": bool(req.kept)}
 
 
+def _srt_text(srt_path) -> str:
+    """Spoken text from an .srt: drop cue numbers, timestamps and blanks."""
+    try:
+        lines = srt_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    return " ".join(ln.strip() for ln in lines
+                    if ln.strip() and "-->" not in ln
+                    and not ln.strip().isdigit())
+
+
+@router.post("/api/classify/backfill")
+def classify_backfill():
+    """Tag older clips that predate niche classification. Keyword-only (no
+    LLM, no keys, no quota) — walks every clip missing a niche, classifies
+    from its metadata + subtitle text, and patches metadata.json plus the
+    matching clip record in job.json. Never overwrites an existing niche."""
+    import classify
+    from server import routes_library  # module attr so tests can monkeypatch output_root
+    classified = skipped = 0
+    for meta_path in routes_library.output_root().glob("*/clip_*/metadata.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("niche"):
+                skipped += 1
+                continue
+            text = _srt_text(meta_path.parent / "final.srt")
+            text += " " + meta.get("description", "")
+            meta["niche"] = classify.rule_based_niche(
+                text, meta.get("title", ""), meta.get("hashtags", []))
+            meta_path.write_text(json.dumps(meta, indent=2,
+                                            ensure_ascii=False),
+                                 encoding="utf-8")
+            classified += 1
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("backfill skip %s: %s", meta_path, e)
+            continue
+        # Mirror the niche onto job.json's clip record (library list reads
+        # job.json only); best-effort — metadata.json stays the authority.
+        try:
+            job_path = meta_path.parent.parent / "job.json"
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            idx = int(meta_path.parent.name.split("_")[-1])
+            for c in job.get("clips", []):
+                if c.get("index") == idx and not c.get("niche"):
+                    c["niche"] = meta["niche"]
+            job_path.write_text(json.dumps(job, indent=2, ensure_ascii=False),
+                                encoding="utf-8")
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            log.warning("backfill job.json patch failed for %s: %s",
+                        meta_path.parent, e)
+    return {"classified": classified, "skipped": skipped}
+
+
 class ExcludeRequest(BaseModel):
     exclude: bool
 

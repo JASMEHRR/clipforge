@@ -619,6 +619,7 @@ function clipCard(jobName, clip, dots) {
       }, band) : null);
     dots.push(miniScore(mini, score));
   }
+  if (clip.niche) scoreRow.append(el("span", { class: "badge" }, clip.niche));
 
   const srcStart = clip.original_source_start_s ?? clip.start;
   const srcEnd = clip.original_source_end_s ?? clip.end;
@@ -1289,6 +1290,9 @@ async function renderSettings() {
   groqIn.value = s.groq_model || "";
   const ollamaIn = el("input", { class: "input", type: "text" });
   ollamaIn.value = s.ollama_model || "";
+  const nichesIn = el("input", { class: "input", type: "text",
+                                 placeholder: "e.g. cooking, travel" });
+  nichesIn.value = s.custom_niches || "";
 
   const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, "Save");
   saveBtn.addEventListener("click", async () => {
@@ -1301,6 +1305,7 @@ async function renderSettings() {
         gemini_model: gemIn.value,
         groq_model: groqIn.value,
         ollama_model: ollamaIn.value,
+        custom_niches: nichesIn.value,
       });
       toast("Saved — takes effect on the next run.", "is-ok");
     } catch (e) { toast(e.message, "is-error"); }
@@ -1358,6 +1363,7 @@ async function renderSettings() {
       field("Ollama model (blank = default)", ollamaIn),
       field("Speed", computeSel),
       field("Speech recognition accuracy", whisperSel),
+      field("Custom niches (comma-separated)", nichesIn),
       el("div", {}, saveBtn)),
     el("div", { class: "card card-flat", style: "display:grid;gap:12px" },
       el("h2", { class: "t-title", style: "margin:0" }, "This computer"),
@@ -1380,29 +1386,24 @@ async function renderHistory() {
   const grid = el("div", { class: "history-grid" },
     ...Array.from({ length: 4 }, () =>
       el("div", { class: "skeleton", style: "height:120px" })));
+  const filterRow = el("div", { class: "field-inline",
+                               style: "flex-wrap:wrap" });
+  const backfillBtn = el("button", { class: "btn btn-ghost", type: "button" },
+    "Tag older clips");
   view.append(el("section", { class: "screen" },
     el("div", { class: "results-head" },
       el("div", {},
         el("div", { class: "t-label" }, "History"),
         el("h1", { class: "t-display" }, "Past runs")),
-      el("a", { class: "btn btn-ghost", href: "#/" }, "Make new clips")),
-    grid));
+      el("div", { class: "field-inline" },
+        backfillBtn,
+        el("a", { class: "btn btn-ghost", href: "#/" }, "Make new clips"))),
+    filterRow, grid));
 
-  let jobs;
-  try {
-    jobs = (await api.get("/api/jobs")).jobs;
-  } catch (e) {
-    grid.replaceChildren(el("div", { class: "card" },
-      el("p", { class: "t-dim", style: "margin:0" }, e.message)));
-    return;
-  }
-  if (!jobs.length) {
-    grid.replaceChildren(el("div", { class: "card" },
-      el("p", { class: "t-dim", style: "margin:0" },
-        "No clips yet — paste a link on the first screen to start.")));
-    return;
-  }
-  grid.replaceChildren(...jobs.map((j) => {
+  let jobs = [];
+  let activeNiche = null;
+
+  const jobCard = (j) => {
     const when = j.name.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
     const date = when
       ? `${when[3]}.${when[2]}.${when[1]} ${when[4]}:${when[5]}` : j.created;
@@ -1414,10 +1415,71 @@ async function renderHistory() {
       el("div", { class: "history-src" }, j.source || j.name),
       el("div", { class: "field-inline" },
         el("span", { class: "badge" }, `${j.kept} of ${j.clip_count} clips kept`),
+        ...(j.niches || []).map((n) => el("span", { class: "badge" }, n)),
         j.status && j.status !== "done"
           ? el("span", { class: "badge badge-warn" }, j.status)
           : null));
-  }));
+  };
+
+  const renderGrid = () => {
+    const shown = activeNiche
+      ? jobs.filter((j) => (j.niches || []).includes(activeNiche)) : jobs;
+    if (!shown.length) {
+      grid.replaceChildren(el("div", { class: "card" },
+        el("p", { class: "t-dim", style: "margin:0" }, activeNiche
+          ? "No runs with clips in that niche."
+          : "No clips yet — paste a link on the first screen to start.")));
+      return;
+    }
+    grid.replaceChildren(...shown.map(jobCard));
+  };
+
+  const renderFilters = () => {
+    const niches = [...new Set(jobs.flatMap((j) => j.niches || []))].sort();
+    if (!niches.length) { filterRow.replaceChildren(); return; }
+    const chip = (label, value) => {
+      const b = el("button", {
+        class: `btn btn-sm ${activeNiche === value ? "btn-primary" : "btn-ghost"}`,
+        type: "button",
+      }, label);
+      b.addEventListener("click", () => {
+        activeNiche = value;
+        renderFilters();
+        renderGrid();
+      });
+      return b;
+    };
+    filterRow.replaceChildren(chip("All", null),
+      ...niches.map((n) => chip(n, n)));
+  };
+
+  const load = async () => {
+    try {
+      jobs = (await api.get("/api/jobs")).jobs;
+    } catch (e) {
+      grid.replaceChildren(el("div", { class: "card" },
+        el("p", { class: "t-dim", style: "margin:0" }, e.message)));
+      return;
+    }
+    renderFilters();
+    renderGrid();
+  };
+
+  backfillBtn.addEventListener("click", async () => {
+    backfillBtn.disabled = true;
+    backfillBtn.textContent = "Tagging…";
+    try {
+      const r = await api.post("/api/classify/backfill");
+      toast(r.classified
+        ? `Tagged ${r.classified} clip${r.classified === 1 ? "" : "s"} by niche.`
+        : "Everything is already tagged.", "is-ok");
+      await load();
+    } catch (e) { toast(e.message, "is-error"); }
+    backfillBtn.disabled = false;
+    backfillBtn.textContent = "Tag older clips";
+  });
+
+  await load();
 }
 
 // ---------------------------------------------------------------- boot ----

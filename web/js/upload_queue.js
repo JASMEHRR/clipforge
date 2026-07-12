@@ -128,6 +128,7 @@ export function mountUploadQueue(container) {
             + `${c.duplicates > 1 ? "s" : ""} collapsed` : "")),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
+        c.niche ? el("span", { class: "badge" }, c.niche) : null,
         c.band ? el("span", {
           class: `badge ${c.band === "Strong" ? "badge-ok"
             : c.band === "Weak" ? "badge-warn" : ""}`,

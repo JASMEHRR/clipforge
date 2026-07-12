@@ -230,6 +230,11 @@ music:
   default_track: ""             # "" = no music unless picked in the UI
   default_volume_db: -18        # gently ducked under speech (audible bed)
 
+classify:
+  enabled: true                 # tag each clip with a content niche (library
+                                # organization); best-effort — never blocks a render
+  custom_niches: []             # extra niche names beyond the built-in taxonomy
+
 upload:
   auto_enabled: true            # off by default; turn on once YouTube is authorized
   max_per_day: 5

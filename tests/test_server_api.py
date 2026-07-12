@@ -431,3 +431,57 @@ def test_upload_size_cap(client, monkeypatch):
     r = client.post("/api/uploads",
                     files={"file": ("big.mp4", b"x" * 2048, "video/mp4")})
     assert r.status_code == 413
+
+
+def test_classify_backfill_tags_untagged_only(client, tmp_path, monkeypatch):
+    import server.routes_library as lib
+    monkeypatch.setattr(lib, "output_root", lambda: tmp_path.resolve())
+    jd = tmp_path / "20260712-000001_demo"
+    for idx, meta in ((0, {"title": "Stock market tips",
+                           "description": "How to invest in stocks.",
+                           "hashtags": ["#invest", "#money"]}),
+                      (1, {"title": "Already tagged",
+                           "hashtags": [], "niche": "comedy"})):
+        cd = jd / f"clip_{idx:02d}"
+        cd.mkdir(parents=True)
+        (cd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (jd / "clip_00" / "final.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\ngrow your portfolio\n",
+        encoding="utf-8")
+    (jd / "job.json").write_text(json.dumps(
+        {"clips": [{"index": 0}, {"index": 1, "niche": "comedy"}]}),
+        encoding="utf-8")
+
+    r = client.post("/api/classify/backfill")
+    assert r.status_code == 200
+    assert r.json() == {"classified": 1, "skipped": 1}
+
+    meta0 = json.loads((jd / "clip_00" / "metadata.json").read_text())
+    assert meta0["niche"] == "finance"
+    # existing niche untouched, job.json clip record patched
+    meta1 = json.loads((jd / "clip_01" / "metadata.json").read_text())
+    assert meta1["niche"] == "comedy"
+    job = json.loads((jd / "job.json").read_text())
+    assert job["clips"][0]["niche"] == "finance"
+    assert job["clips"][1]["niche"] == "comedy"
+
+    # second run: everything already tagged
+    assert client.post("/api/classify/backfill").json()["classified"] == 0
+
+
+def test_jobs_listing_includes_niches(client, tmp_path, monkeypatch):
+    import server.routes_library as lib
+    monkeypatch.setattr(lib, "output_root", lambda: tmp_path.resolve())
+    jd = tmp_path / "20260712-000002_demo"
+    (jd / "clip_00").mkdir(parents=True)
+    (jd / "job.json").write_text(json.dumps(
+        {"clips": [{"index": 0, "niche": "gaming"},
+                   {"index": 1, "niche": "gaming"}, {"index": 2}]}),
+        encoding="utf-8")
+    (jd / "clip_00" / "metadata.json").write_text(
+        json.dumps({"title": "t", "niche": "gaming"}), encoding="utf-8")
+
+    jobs = client.get("/api/jobs").json()["jobs"]
+    assert jobs[0]["niches"] == ["gaming"]
+    detail = client.get(f"/api/jobs/{jd.name}").json()
+    assert detail["clips"][0]["niche"] == "gaming"

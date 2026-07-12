@@ -28,6 +28,8 @@ def get_settings():
         "groq_model": llm.get("groq_model", ""),
         "ollama_model": llm.get("ollama_model", ""),
         "auto_open": cfg.get("ui", {}).get("auto_open", True),
+        "custom_niches": ", ".join(
+            cfg.get("classify", {}).get("custom_niches", []) or []),
     }
 
 
@@ -38,6 +40,7 @@ class SettingsRequest(BaseModel):
     gemini_model: str = ""
     groq_model: str = ""
     ollama_model: str = ""
+    custom_niches: str = ""
 
 
 @router.put("/api/settings")
@@ -52,6 +55,9 @@ def put_settings(req: SettingsRequest):
                     "gemini_model": req.gemini_model.strip(),
                     "groq_model": req.groq_model.strip(),
                     "ollama_model": req.ollama_model.strip()},
+            "classify": {"custom_niches": sorted(
+                {s.strip().lower() for s in req.custom_niches.split(",")
+                 if s.strip()})},
         })
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, friendly(e, "Saving your settings"))

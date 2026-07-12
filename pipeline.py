@@ -529,6 +529,13 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                "original_source_start_s": orig_start,
                "original_source_end_s": orig_end,
                "source_name": source_name}
+    try:
+        import classify as classify_mod
+        payload["niche"] = classify_mod.classify_niche(clip_text, meta, cfg,
+                                                       provider)
+    except Exception as e:  # noqa: BLE001 — niche tagging never blocks a render
+        log.warning("clip %02d: niche classification failed (%s)", i, e)
+        payload["niche"] = "other"
     # viral_v2 audit trail: which detected events fall inside this clip
     clip_events = [e for e in (events or [])
                    if e["t_start_s"] < out_end and e["t_end_s"] > out_start]
@@ -553,6 +560,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "candidate_score": cand.get("score", 0),
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "metadata": meta, "virality": vir, "reframe": metrics,
+            "niche": payload["niche"],
             "events": clip_events,
             "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}

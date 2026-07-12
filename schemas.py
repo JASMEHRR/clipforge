@@ -136,6 +136,18 @@ CLIP_METADATA = {
     "additionalProperties": False,
 }
 
+# LLM output: per-clip niche classification. Deliberately a loose string —
+# user-defined custom niches make a fixed enum impossible; classify.py checks
+# the answer against the allowed list and falls back to its heuristic.
+NICHE = {
+    "type": "object",
+    "properties": {
+        "niche": {"type": "string", "minLength": 1},
+    },
+    "required": ["niche"],
+    "additionalProperties": False,
+}
+
 # LLM output: per-clip virality rating.
 VIRALITY = {
     "type": "object",
@@ -444,6 +456,7 @@ SCHEMAS: dict[str, dict] = {
     "highlight_candidates": HIGHLIGHT_CANDIDATES,
     "clip_score": CLIP_SCORE,
     "clip_metadata": CLIP_METADATA,
+    "niche": NICHE,
     "virality": VIRALITY,
     "job_record": JOB_RECORD,
     "style_profile": STYLE_PROFILE,
