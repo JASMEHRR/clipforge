@@ -407,8 +407,11 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
         out_start, out_end = segments[0][0], segments[-1][1]
         excl = edit_plan["existing_subs"]["bottom_exclusion_ratio"]
         hbias = edit_plan["existing_subs"]["h_bias_center"]
-        multi = len(segments) > 1
+        speed_ramps = edit_plan.get("speed_ramps") or None
+        # ramps need the cut/concat path even for a single kept segment
+        multi = len(segments) > 1 or bool(speed_ramps)
     else:
+        speed_ramps = None
         out_start, out_end = cand["start"], cand["end"]
         excl, hbias, multi, segments = 0.0, -1.0, False, [[out_start, out_end]]
 
@@ -427,7 +430,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     if aspect == "16:9":
         # passthrough: a frame-accurate cut is the clip (captions burn onto it)
         if multi:
-            cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4", cfg)
+            cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4",
+                                            cfg, speed_ramps=speed_ramps)
         else:
             cut_path = cut_mod.cut_clip(source, out_start, out_end,
                                         clip_dir / "cut.mp4", cfg)
@@ -436,7 +440,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     elif multi:
         # cut the multi-segment concat first, then reframe the contiguous file
         # (keeps a single reframe re-encode; scene resets omitted across joins)
-        cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4", cfg)
+        cut_path = cut_mod.cut_segments(source, segments, clip_dir / "cut.mp4",
+                                        cfg, speed_ramps=speed_ramps)
         cut_dur = reframe_mod.probe(cut_path)["duration"]
         metrics = reframe_mod.reframe_clip(
             cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
@@ -459,9 +464,14 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
 
     if edit_plan:
         words = edit_plan["words"]
+        trans = edit_plan.get("transitions") or {}
         cap_kwargs = dict(anchor=edit_plan["caption_anchor"], cta=edit_plan["cta"],
                           captions_enabled=edit_plan["captions_enabled"],
-                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"])
+                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"],
+                          zoom_events=edit_plan.get("zoom_events") or None,
+                          popin_events=edit_plan.get("popin_events") or None,
+                          whip_times=(trans.get("times") or None
+                                      if trans.get("kind") == "whip" else None))
     else:
         words = [{"word": w["word"],
                   "start": round(max(0.0, w["start"] - out_start), 3),
@@ -483,6 +493,19 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                                 sfx_cues=(edit_plan or {}).get("sfx_cues"))
     if mixed is not None:
         tmp.replace(final)
+
+    # intro/outro bumpers (preset style.intro/style.outro): best-effort —
+    # branding never fails a clip
+    scfg_render = cfg.get("style", {})
+    if scfg_render.get("intro") or scfg_render.get("outro"):
+        try:
+            btmp = clip_dir / "final_bumpers.mp4"
+            if cut_mod.concat_bumpers(final, btmp, cfg,
+                                      intro=scfg_render.get("intro"),
+                                      outro=scfg_render.get("outro")):
+                btmp.replace(final)
+        except Exception as e:  # noqa: BLE001 — bumpers are decoration
+            log.warning("clip %02d: bumpers skipped (%s)", i, e)
     _sub(0.85)
 
     dup_caption_warning = None
@@ -505,6 +528,9 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
     if music_attr:  # license requires attribution in the description
         meta = {**meta, "description": f"{meta['description']} {music_attr}"}
+    credit = str(cfg.get("metadata", {}).get("credit_text", "")).strip()
+    if credit:  # channel auto-pull: always credit the original creator
+        meta = {**meta, "description": f"{meta['description']} {credit}"}
 
     import style_refiner as style_mod
     import virality as virality_mod

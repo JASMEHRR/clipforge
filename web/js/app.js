@@ -16,6 +16,7 @@ import { mountUploadQueue } from "./upload_queue.js";
 import { mountLibrary } from "./library.js";
 import { mountPublishTiming } from "./publish_timing_panel.js";
 import { mountPresets } from "./presets_panel.js";
+import { mountChannels } from "./channels_panel.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -33,6 +34,7 @@ const routes = {
   youtube: renderYouTube,
   analytics: renderAnalytics,
   presets: renderPresets,
+  channels: renderChannels,
   settings: renderSettings,
   history: renderHistory,
 };
@@ -1188,6 +1190,17 @@ async function renderPresets() {
         el("h1", { class: "t-display" }, "Your editing styles"))),
     card));
   mountPresets(card);
+}
+
+async function renderChannels() {
+  const card = el("div", { class: "card", style: "display:grid;gap:12px" });
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Channels"),
+        el("h1", { class: "t-display" }, "Approved channels"))),
+    card));
+  mountChannels(card);
 }
 
 async function renderAnalytics() {

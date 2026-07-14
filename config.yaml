@@ -167,6 +167,21 @@ style:
   max_removal_ratio: 0.20          # cap total removed per clip; longest pauses go first
   crossfade_ms: 30                 # audio crossfade at segment joins (no clicks)
 
+  # --- render effects (usually set per-run via editing presets, not here) ---
+  speed_ramps:
+    enabled: false                 # speed up word-free gaps that survived
+    rate: 1.5                      # pause compression (1.0-2.0, atempo limit)
+    min_gap_s: 0.45
+  punch_in:
+    mode: "off"                    # "off" | emphasis | interval (quoted — bare
+    amount_pct: 7                  # off is YAML false)
+    interval_s: 8
+  popins: []                       # [{keyword, asset}] keyword -> PNG overlay
+  transition: cut                  # cut | whip | zoom (at timeline joins)
+  intro: ""                        # bumper video/image path ("" = none)
+  outro: ""
+  bumper_image_s: 2.0              # still-image bumper duration
+
   # --- ending optimizer ---
   tail_ms: 250                     # silence kept after the last word
   min_ending_words: 4              # rule-fallback: final sentence must be >= this
@@ -253,6 +268,13 @@ sfx:
   max_per_clip: 8
   triggers: [cuts, emphasis]    # cuts -> whoosh at segment joins;
                                 # emphasis -> pop on emphasized words
+
+channels:
+  # Approved channels & auto-pull. Channels themselves are managed in the UI
+  # (cache/channels.json) — a channel is NEVER polled without a filled-in
+  # permission_source (clipping program / creator approval) and credit text.
+  poll_interval_s: 3600         # hourly check for new uploads
+  top_n_default: 10             # top performers fetched per channel
 
 classify:
   enabled: true                 # tag each clip with a content niche (library

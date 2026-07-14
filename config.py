@@ -218,6 +218,10 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
         if o.get(key):
             st[key] = o[key]
 
+    if (o.get("credit_text") or "").strip():
+        # creator credit appended to every clip description (channel auto-pull)
+        c.setdefault("metadata", {})["credit_text"] = o["credit_text"].strip()
+
     return c
 
 

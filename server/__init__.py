@@ -37,15 +37,18 @@ def create_app() -> FastAPI:
         updater.check_async()
         import analytics
         analytics.start_background_refresh()
+        import channels
+        channels.start_background_poll()
         yield
 
     app = FastAPI(title="ClipForge", lifespan=lifespan)
 
-    from server import (routes_analytics, routes_edit, routes_library,
-                        routes_presets, routes_run, routes_settings,
-                        routes_upload)
+    from server import (routes_analytics, routes_channels, routes_edit,
+                        routes_library, routes_presets, routes_run,
+                        routes_settings, routes_upload)
     app.include_router(routes_run.router)
     app.include_router(routes_presets.router)
+    app.include_router(routes_channels.router)
     app.include_router(routes_library.router)
     app.include_router(routes_edit.router)
     app.include_router(routes_upload.router)
