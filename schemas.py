@@ -316,6 +316,21 @@ EDIT_PLAN = {
                       "enum": ["weak_hook", "unresolved_ending", "subs_kept"]},
         },
         "zoom_punch": {"type": "boolean"},
+        # Optional SFX cue points in OUTPUT time (whoosh at segment joins,
+        # pop on emphasized words). Absent on plans from before the feature.
+        "sfx_cues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "t": {"type": "number", "minimum": 0},
+                    "kind": {"type": "string",
+                             "enum": ["whoosh", "pop", "ding", "riser"]},
+                },
+                "required": ["t", "kind"],
+                "additionalProperties": False,
+            },
+        },
         "fades": {
             "type": "object",
             "properties": {

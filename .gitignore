@@ -37,3 +37,4 @@ refs/
 CLAUDE.md
 
 .env
+assets/sfx/*/*.wav

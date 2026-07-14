@@ -472,10 +472,14 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                                       preset_name=preset, **cap_kwargs)
     _sub(0.75)
 
-    if music_path:
-        import music as music_mod
-        tmp = clip_dir / "final_music.mp4"
-        music_mod.add_music(final, music_path, tmp, cfg, music_volume_db)
+    # final audio mixdown: SFX cues → ducked music bed → loudness normalize.
+    # Runs even without music so every clip lands at platform loudness.
+    import music as music_mod
+    tmp = clip_dir / "final_music.mp4"
+    mixed = music_mod.mix_audio(final, tmp, cfg, music_path=music_path,
+                                volume_db=music_volume_db,
+                                sfx_cues=(edit_plan or {}).get("sfx_cues"))
+    if mixed is not None:
         tmp.replace(final)
     _sub(0.85)
 

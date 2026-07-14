@@ -2,7 +2,15 @@
 
 Next task: **see "Current" below.** Legend: [x] done · [~] in progress · [ ] pending · [!] see Known Issues
 
-Current: **main** — Phase M (All-clips library tab + uploaded archive + zip backups) complete, all 3 parts. Next: merge/tag v2.0.0 (feature/frontend-rebuild is already on main so this is just the version bump), double-caption fix follow-up (Phase D Known), Docker daemon build, optional YouTube OAuth.
+Current: **main** — Phase X (clipping-automation upgrade: audio mixdown, editing presets, render effects, approved channels auto-pull, multi-account posting queue, dashboard) in progress; Part 1 (audio mixdown) done. Also still open: tag v2.0.0, double-caption follow-up (Phase D Known), Docker daemon build.
+
+## Phase X — Clipping-automation upgrade (on main) [~]
+- [x] Part 1 — Audio mixdown fix: `music.mix_audio` single filter_complex, fixed order voice → SFX overlays (adelay per cue) → sidechain-ducked music bed → `loudnorm I=-14:TP=-1:LRA=11` (+aresample 48k; single-pass, two-pass is the upgrade path). Runs on EVERY clip (loudnorm even without music) — fixes "music drowns voice" + "quiet on platform". Duck params now config `music.duck.*` (defaults unchanged); `music.loudnorm.*`; royalty-free guard `music.check_library` (warns, non-fatal, `music.library_dir`). SFX: `sfx.*` config (default OFF), packs at `assets/sfx/<pack>/manifest.json`, default pack synthesized locally via ffmpeg lavfi (keyless, wavs gitignored); EDIT_PLAN gains optional `sfx_cues [{t,kind}]` emitted by `style_refiner.sfx_cues_for` (whoosh at segment joins, pop on !/?/ALL-CAPS words, 1.5s spacing, `sfx.max_per_clip` cap). `add_music` kept as back-compat wrapper. Tests: `tests/test_mixdown.py` (pure) + existing real-ffmpeg `test_music.py` still green through the new chain.
+- [ ] Part 2 — Editing presets (presets.py + PRESET schema + routes + UI + preview)
+- [ ] Part 3 — Render effects (speed ramps, punch-in zooms, keyword pop-ins, transitions, intro/outro)
+- [ ] Part 4 — Approved channels & auto-pull (channels.py, permission gate, hourly poll, pool dedupe)
+- [ ] Part 5 — Multi-account posting quota + queue + calendar
+- [ ] Part 6 — Dashboard (per-channel stats, per-preset usage)
 
 ## Phase M — All-clips library tab + uploaded archive + zip backups (on main) [x]
 Three-part task, extends Phase L's delete-from-app work (reused, not duplicated). All 3 parts done.

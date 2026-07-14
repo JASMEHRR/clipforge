@@ -287,6 +287,46 @@ def decide_existing_subs(subs: dict, cfg: dict, mode: str | None):
     return keep_block(f"band {band_h:.2f} > {max_band}; cannot exclude, keep source subs")
 
 
+def sfx_cues_for(segments: list[list[float]], out_words: list[dict],
+                 cfg: dict) -> list[dict]:
+    """SFX cue points in OUTPUT time, pure and deterministic.
+
+    'cuts' trigger → whoosh at each segment join (where pause removal spliced
+    the timeline); 'emphasis' trigger → pop on emphasized words (trailing !/?
+    or an ALL-CAPS word). Cues are spaced >= 1.5 s apart and capped by
+    sfx.max_per_clip; joins take priority over emphasis. Empty when sfx is
+    disabled, so pre-feature plans and renders are unchanged."""
+    sfx_cfg = cfg.get("sfx", {})
+    if not sfx_cfg.get("enabled", False):
+        return []
+    triggers = set(sfx_cfg.get("triggers", ["cuts", "emphasis"]))
+    cap = int(sfx_cfg.get("max_per_clip", 8))
+
+    candidates: list[dict] = []
+    if "cuts" in triggers:
+        t = 0.0
+        for seg in segments[:-1]:
+            t += seg[1] - seg[0]
+            candidates.append({"t": round(t, 3), "kind": "whoosh"})
+    if "emphasis" in triggers:
+        for w in out_words:
+            word = w["word"].strip()
+            if word.rstrip(".\"'") .endswith(("!", "?")) or \
+                    (len(re.sub(r"[^A-Za-z]", "", word)) >= 3 and
+                     word.upper() == word and word.lower() != word):
+                candidates.append({"t": round(w["start"], 3), "kind": "pop"})
+
+    # joins first (index order preserves priority), then enforce spacing + cap
+    cues: list[dict] = []
+    for cue in candidates:
+        if len(cues) >= cap:
+            break
+        if all(abs(cue["t"] - c["t"]) >= 1.5 for c in cues):
+            cues.append(cue)
+    cues.sort(key=lambda c: c["t"])
+    return cues
+
+
 # --- main entry -------------------------------------------------------------
 
 def load_profile(cfg: dict) -> dict | None:
@@ -400,6 +440,9 @@ def refine_clip(candidate: dict, transcript: dict, scenes: dict, subs: dict,
     segments, out_words, output_duration, total_removed = compress_pauses(
         words, s0, e0, cfg)
 
+    # --- SFX CUES ---
+    sfx_cues = sfx_cues_for(segments, out_words, cfg)
+
     # --- EXISTING SUBS ---
     subs_block, subs_kept, captions_enabled = decide_existing_subs(subs, cfg, subs_mode)
     if subs_kept:
@@ -418,6 +461,7 @@ def refine_clip(candidate: dict, transcript: dict, scenes: dict, subs: dict,
         "total_ms_removed": round(total_removed * 1000.0, 1),
         "flags": flags,
         "zoom_punch": zoom_punch,
+        "sfx_cues": sfx_cues,
         "fades": {
             "audio_in_ms": float(scfg["audio_fade_in_ms"]),
             "audio_out_ms": float(max(scfg["audio_fade_out_ms"],

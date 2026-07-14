@@ -229,6 +229,30 @@ music:
   # the defaults used when the UI leaves them unset.
   default_track: ""             # "" = no music unless picked in the UI
   default_volume_db: -18        # gently ducked under speech (audible bed)
+  library_dir: assets/music     # designated royalty-free library; tracks
+                                # outside it raise a license warning (non-fatal)
+  duck:                         # sidechaincompress keyed by the voice track
+    threshold: 0.05             # ~-26 dB: only real speech triggers the duck
+    ratio: 3
+    attack: 15                  # ms
+    release: 200                # ms — recovers between words
+  loudnorm:                     # final-mix normalization (platform standard);
+    enabled: true               # runs on every clip, music or not
+    i: -14                      # integrated loudness target (LUFS)
+    tp: -1                      # true-peak ceiling (dBTP)
+    lra: 11
+
+sfx:
+  # Sound effects layered onto the voice track at cut points and emphasis
+  # words, before the music bed. Off by default; editing presets turn it on.
+  enabled: false
+  pack: default                 # assets/sfx/<pack>/manifest.json (kind -> file);
+                                # the default pack is synthesized locally on
+                                # first use — no bundled audio files
+  volume_db: -10
+  max_per_clip: 8
+  triggers: [cuts, emphasis]    # cuts -> whoosh at segment joins;
+                                # emphasis -> pop on emphasized words
 
 classify:
   enabled: true                 # tag each clip with a content niche (library
