@@ -96,14 +96,12 @@ def test_resolve_sfx_skips_unresolvable(monkeypatch):
 # --- cue emission (style_refiner.sfx_cues_for) ----------------------------------
 
 def test_cues_disabled_by_default():
-    assert style_refiner.sfx_cues_for([[0, 10]], [], load_config()) == []
+    assert style_refiner.sfx_cues_for([], [], load_config()) == []
 
 
 def test_cues_whoosh_at_joins_in_output_time():
     cfg = _cfg(triggers=["cuts"])
-    # two joins: after 4 s and after 4+3=7 s of output
-    segs = [[10.0, 14.0], [20.0, 23.0], [30.0, 35.0]]
-    cues = style_refiner.sfx_cues_for(segs, [], cfg)
+    cues = style_refiner.sfx_cues_for([4.0, 7.0], [], cfg)
     assert cues == [{"t": 4.0, "kind": "whoosh"}, {"t": 7.0, "kind": "whoosh"}]
 
 
@@ -113,7 +111,7 @@ def test_cues_emphasis_words():
              {"word": "WOW", "start": 3.0, "end": 3.4},
              {"word": "really?", "start": 6.0, "end": 6.5},
              {"word": "I", "start": 8.0, "end": 8.1}]  # short caps: no cue
-    cues = style_refiner.sfx_cues_for([[0, 10]], words, cfg)
+    cues = style_refiner.sfx_cues_for([], words, cfg)
     assert cues == [{"t": 3.0, "kind": "pop"}, {"t": 6.0, "kind": "pop"}]
 
 
@@ -121,7 +119,7 @@ def test_cues_spacing_and_cap():
     cfg = _cfg(triggers=["emphasis"], max_per_clip=2)
     words = [{"word": f"WORD{i}!", "start": float(i), "end": i + 0.4}
              for i in range(6)]  # 1 s apart — closer than the 1.5 s floor
-    cues = style_refiner.sfx_cues_for([[0, 10]], words, cfg)
+    cues = style_refiner.sfx_cues_for([], words, cfg)
     assert len(cues) == 2
     assert cues[1]["t"] - cues[0]["t"] >= 1.5
 

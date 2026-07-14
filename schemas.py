@@ -316,8 +316,60 @@ EDIT_PLAN = {
                       "enum": ["weak_hook", "unresolved_ending", "subs_kept"]},
         },
         "zoom_punch": {"type": "boolean"},
-        # Optional SFX cue points in OUTPUT time (whoosh at segment joins,
-        # pop on emphasized words). Absent on plans from before the feature.
+        # Optional render effects (absent on plans from before the feature).
+        # speed_ramps: word-free gaps sped up, SOURCE time (cut.py applies).
+        "speed_ramps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "number", "minimum": 0},
+                    "end": {"type": "number", "minimum": 0},
+                    "rate": {"type": "number", "minimum": 1.0, "maximum": 2.0},
+                },
+                "required": ["start", "end", "rate"],
+                "additionalProperties": False,
+            },
+        },
+        # zoom_events / popin_events / transitions: OUTPUT time (captions.py).
+        "zoom_events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "t": {"type": "number", "minimum": 0},
+                    "dur": {"type": "number", "minimum": 0},
+                    "amount": {"type": "number", "minimum": 0, "maximum": 0.3},
+                },
+                "required": ["t", "dur", "amount"],
+                "additionalProperties": False,
+            },
+        },
+        "popin_events": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "t": {"type": "number", "minimum": 0},
+                    "dur": {"type": "number", "minimum": 0},
+                    "asset": {"type": "string"},
+                },
+                "required": ["t", "dur", "asset"],
+                "additionalProperties": False,
+            },
+        },
+        "transitions": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["cut", "whip", "zoom"]},
+                "times": {"type": "array",
+                          "items": {"type": "number", "minimum": 0}},
+            },
+            "required": ["kind", "times"],
+            "additionalProperties": False,
+        },
+        # SFX cue points in OUTPUT time (whoosh at segment joins,
+        # pop on emphasized words).
         "sfx_cues": {
             "type": "array",
             "items": {

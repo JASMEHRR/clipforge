@@ -57,18 +57,44 @@ def cut_clip(video_path: str | Path, start: float, end: float,
     return out_path
 
 
+def expand_ramps(segments: list, speed_ramps: list[dict] | None) -> list[tuple]:
+    """Split segments at speed-ramp boundaries → ordered (start, end, rate)
+    subsegments (rate 1.0 = normal). Pure; ramps outside any segment are
+    ignored, zero-length slivers dropped."""
+    ramps = sorted(speed_ramps or [], key=lambda r: r["start"])
+    out: list[tuple] = []
+    for s, e in segments:
+        pos = s
+        for rp in ramps:
+            rs, re_ = max(rp["start"], s), min(rp["end"], e)
+            if re_ - rs < 0.01 or rs < pos - 1e-6:
+                continue
+            if rs - pos > 0.01:
+                out.append((pos, rs, 1.0))
+            out.append((rs, re_, float(rp["rate"])))
+            pos = re_
+        if e - pos > 0.01:
+            out.append((pos, e, 1.0))
+    return out
+
+
 def cut_segments(video_path: str | Path, segments: list[list[float]],
-                 out_path: str | Path, cfg: dict | None = None) -> Path:
+                 out_path: str | Path, cfg: dict | None = None,
+                 speed_ramps: list[dict] | None = None) -> Path:
     """Extract an ordered list of source spans and concat them into ONE clip
     (single re-encode via the concat filter). A short audio fade at every
     internal join removes the click of a hard cut WITHOUT overlapping audio, so
     the EditPlan's word-timeline remap stays exact. Single-segment lists take
-    the cut_clip fast path unchanged."""
+    the cut_clip fast path unchanged.
+
+    `speed_ramps` ({start, end, rate} in source time, word-free gaps only)
+    play those sub-spans faster: video setpts/rate + audio atempo. The
+    EditPlan's word remap already accounts for the time saved."""
     cfg = cfg or load_config()
     video_path, out_path = Path(video_path), Path(out_path)
     if not segments:
         raise CutError("no segments to cut")
-    if len(segments) == 1:
+    if len(segments) == 1 and not speed_ramps:
         return cut_clip(video_path, segments[0][0], segments[0][1], out_path, cfg)
     if not video_path.exists():
         raise CutError(f"video not found: {video_path}")
@@ -83,27 +109,35 @@ def cut_segments(video_path: str | Path, segments: list[list[float]],
     if not clamped:
         raise CutError("all segments out of source bounds "
                        f"(source duration {duration:.2f}s)")
-    segments = clamped
+
+    subs = expand_ramps(clamped, speed_ramps)
+    if not subs:
+        raise CutError("no renderable subsegments")
 
     r = cfg["render"]
     cf = max(0.0, float(cfg["style"].get("crossfade_ms", 30)) / 1000.0)
     parts, labels = [], []
     total = 0.0
-    for i, (s, e) in enumerate(segments):
+    for i, (s, e, rate) in enumerate(subs):
         if e <= s:
             raise CutError(f"invalid segment {i}: start={s} end={e}")
-        d = e - s
+        d = (e - s) / rate
         total += d
-        parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]")
+        vf = f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS"
+        if rate != 1.0:
+            vf += f",setpts=PTS/{rate:.3f}"
+        parts.append(vf + f"[v{i}]")
         af = f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS"
+        if rate != 1.0:
+            af += f",atempo={rate:.3f}"
         if cf > 0 and i > 0:                       # fade in at internal joins
             af += f",afade=t=in:st=0:d={cf:.3f}"
-        if cf > 0 and i < len(segments) - 1:       # fade out into internal joins
+        if cf > 0 and i < len(subs) - 1:           # fade out into internal joins
             af += f",afade=t=out:st={max(0.0, d - cf):.3f}:d={cf:.3f}"
         af += f"[a{i}]"
         parts.append(af)
         labels.append(f"[v{i}][a{i}]")            # concat wants v,a interleaved
-    n = len(segments)
+    n = len(subs)
     parts.append("".join(labels) + f"concat=n={n}:v=1:a=1[vout][aout]")
     filtergraph = ";".join(parts)
 
@@ -119,6 +153,79 @@ def cut_segments(video_path: str | Path, segments: list[list[float]],
     if abs(got - total) > 1.5:
         raise CutError(f"segment concat off: wanted {total:.2f}s got {got:.2f}s")
     log.info("cut %d segments (%.1fs) -> %s", n, got, out_path.name)
+    return out_path
+
+
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def concat_bumpers(clip_path: str | Path, out_path: str | Path,
+                   cfg: dict | None = None, intro: str | Path | None = None,
+                   outro: str | Path | None = None) -> Path | None:
+    """Concat an intro and/or outro bumper (video or still image) around a
+    finished clip, matched to its resolution/fps. Returns None when neither
+    bumper resolves — bumpers are branding, so a missing file logs a warning
+    and is skipped rather than failing the clip."""
+    cfg = cfg or load_config()
+    clip_path, out_path = Path(clip_path), Path(out_path)
+    image_s = float(cfg.get("style", {}).get("bumper_image_s", 2.0))
+
+    def _resolve(p) -> Path | None:
+        if not p:
+            return None
+        path = Path(p)
+        if not path.is_absolute():
+            from config import ROOT
+            path = ROOT / path
+        if not path.is_file():
+            log.warning("bumper missing, skipped: %s", p)
+            return None
+        return path
+
+    bumpers = [("intro", _resolve(intro)), ("outro", _resolve(outro))]
+    bumpers = [(k, p) for k, p in bumpers if p is not None]
+    if not bumpers:
+        return None
+
+    info = probe(clip_path)
+    w, h, fps = info["width"], info["height"], max(1.0, info["fps"])
+    inputs: list = ["-i", clip_path]
+    parts: list[str] = [
+        f"[0:v]scale={w}:{h},setsar=1,fps={fps:.3f},format=yuv420p[clipv]",
+        "[0:a]aresample=44100,"
+        "aformat=sample_fmts=fltp:channel_layouts=stereo[clipa]"]
+    seq: dict[str, str] = {}
+    n_inputs = 1
+    for k, p in bumpers:
+        idx = n_inputs
+        n_inputs += 1
+        is_img = p.suffix.lower() in _IMAGE_EXTS
+        if is_img:
+            inputs += ["-loop", "1", "-t", f"{image_s:.3f}", "-i", p]
+        else:
+            inputs += ["-i", p]
+        dur = image_s if is_img else probe(p)["duration"]
+        parts.append(f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio="
+                     f"decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                     f"fps={fps:.3f},format=yuv420p[{k}v]")
+        if not is_img and probe(p)["has_audio"]:
+            parts.append(f"[{idx}:a]aresample=44100,aformat=sample_fmts=fltp:"
+                         f"channel_layouts=stereo[{k}a]")
+        else:
+            parts.append(f"anullsrc=r=44100:cl=stereo,atrim=0:{dur:.3f},"
+                         "aformat=sample_fmts=fltp:"
+                         f"channel_layouts=stereo[{k}a]")
+        seq[k] = k
+    order = (["[introv][introa]"] if "intro" in seq else []) + \
+        ["[clipv][clipa]"] + (["[outrov][outroa]"] if "outro" in seq else [])
+    parts.append("".join(order) + f"concat=n={len(order)}:v=1:a=1[vout][aout]")
+
+    run_ffmpeg([*inputs, "-filter_complex", ";".join(parts),
+                "-map", "[vout]", "-map", "[aout]"]
+               + video_encode_args(cfg, final=True)
+               + ["-c:a", "aac", "-b:a", cfg["render"]["audio_bitrate"],
+                  "-movflags", "+faststart", out_path])
+    log.info("bumpers %s -> %s", "+".join(k for k, _ in bumpers), out_path.name)
     return out_path
 
 

@@ -287,15 +287,23 @@ def decide_existing_subs(subs: dict, cfg: dict, mode: str | None):
     return keep_block(f"band {band_h:.2f} > {max_band}; cannot exclude, keep source subs")
 
 
-def sfx_cues_for(segments: list[list[float]], out_words: list[dict],
+def _is_emphasis(word: str) -> bool:
+    """Deterministic emphasis heuristic: trailing !/? or an ALL-CAPS word."""
+    w = word.strip()
+    return w.rstrip(".\"'").endswith(("!", "?")) or \
+        (len(re.sub(r"[^A-Za-z]", "", w)) >= 3 and
+         w.upper() == w and w.lower() != w)
+
+
+def sfx_cues_for(join_times: list[float], out_words: list[dict],
                  cfg: dict) -> list[dict]:
     """SFX cue points in OUTPUT time, pure and deterministic.
 
-    'cuts' trigger → whoosh at each segment join (where pause removal spliced
-    the timeline); 'emphasis' trigger → pop on emphasized words (trailing !/?
-    or an ALL-CAPS word). Cues are spaced >= 1.5 s apart and capped by
-    sfx.max_per_clip; joins take priority over emphasis. Empty when sfx is
-    disabled, so pre-feature plans and renders are unchanged."""
+    'cuts' trigger → whoosh at each timeline join (where pause removal spliced
+    the clip); 'emphasis' trigger → pop on emphasized words. Cues are spaced
+    >= 1.5 s apart and capped by sfx.max_per_clip; joins take priority over
+    emphasis. Empty when sfx is disabled, so pre-feature renders are
+    unchanged."""
     sfx_cfg = cfg.get("sfx", {})
     if not sfx_cfg.get("enabled", False):
         return []
@@ -304,17 +312,10 @@ def sfx_cues_for(segments: list[list[float]], out_words: list[dict],
 
     candidates: list[dict] = []
     if "cuts" in triggers:
-        t = 0.0
-        for seg in segments[:-1]:
-            t += seg[1] - seg[0]
-            candidates.append({"t": round(t, 3), "kind": "whoosh"})
+        candidates += [{"t": round(t, 3), "kind": "whoosh"} for t in join_times]
     if "emphasis" in triggers:
-        for w in out_words:
-            word = w["word"].strip()
-            if word.rstrip(".\"'") .endswith(("!", "?")) or \
-                    (len(re.sub(r"[^A-Za-z]", "", word)) >= 3 and
-                     word.upper() == word and word.lower() != word):
-                candidates.append({"t": round(w["start"], 3), "kind": "pop"})
+        candidates += [{"t": round(w["start"], 3), "kind": "pop"}
+                       for w in out_words if _is_emphasis(w["word"])]
 
     # joins first (index order preserves priority), then enforce spacing + cap
     cues: list[dict] = []
@@ -325,6 +326,110 @@ def sfx_cues_for(segments: list[list[float]], out_words: list[dict],
             cues.append(cue)
     cues.sort(key=lambda c: c["t"])
     return cues
+
+
+# --- render effects (speed ramps / zooms / pop-ins / transitions) ------------
+
+def _src_to_out(t: float, segments: list[list[float]]) -> float:
+    """Map a source time inside a kept segment to pre-ramp OUTPUT time."""
+    cum = 0.0
+    for s, e in segments:
+        if s - 1e-6 <= t <= e + 1e-6:
+            return cum + (t - s)
+        cum += e - s
+    raise ValueError(f"time {t} not inside any kept segment")
+
+
+def _shrunk(t_out: float, ramp_outs: list[tuple[float, float, float]]) -> float:
+    """Shift a pre-ramp output time left by the time saved by every ramp that
+    ends at/before it. Callers guarantee no mapped point lies INSIDE a ramp
+    (ramps cover word-free gaps only)."""
+    return t_out - sum(sv for _, b, sv in ramp_outs if b <= t_out + 1e-6)
+
+
+def plan_speed_ramps(segments: list[list[float]], src_words: list[dict],
+                     cfg: dict) -> list[dict]:
+    """Speed-ramp spans in SOURCE time ({start, end, rate}), pure.
+
+    Only word-free gaps between consecutive words inside one kept segment are
+    ramped, so speech (and punchlines) always plays at normal speed. Gaps
+    bigger than style.max_pause_s were already removed by compress_pauses —
+    ramps sweep up the medium pauses that survived it."""
+    sr = cfg.get("style", {}).get("speed_ramps", {})
+    if not sr.get("enabled", False):
+        return []
+    rate = max(1.0, min(2.0, float(sr.get("rate", 1.5))))  # atempo ceiling 2.0
+    if rate <= 1.01:
+        return []
+    min_gap = float(sr.get("min_gap_s", 0.45))
+    pad = 0.1                       # keep a natural beat on both sides
+    ramps = []
+    for s, e in segments:
+        inside = [w for w in src_words if w["start"] >= s - 1e-6 and
+                  w["end"] <= e + 1e-6]
+        for a, b in zip(inside, inside[1:]):
+            rs, re_ = a["end"] + pad, b["start"] - pad
+            if re_ - rs >= min_gap:
+                ramps.append({"start": round(rs, 3), "end": round(re_, 3),
+                              "rate": rate})
+    return ramps
+
+
+def zoom_events_for(out_words: list[dict], output_duration: float,
+                    join_times: list[float], cfg: dict) -> list[dict]:
+    """Punch-in zoom events in OUTPUT time ({t, dur, amount}), pure.
+
+    style.punch_in.mode: emphasis → zoom on emphasized words; interval →
+    every interval_s for pacing. A 'zoom' transition additionally punches at
+    every timeline join. Spaced >= 1.5 s, capped at 12."""
+    scfg = cfg.get("style", {})
+    pz = scfg.get("punch_in", {})
+    mode = str(pz.get("mode", "off"))
+    amount = max(0.01, min(0.25, float(pz.get("amount_pct", 7)) / 100.0))
+    events: list[dict] = []
+    if mode == "emphasis":
+        events += [{"t": round(w["start"], 3), "dur": 0.8, "amount": amount}
+                   for w in out_words if _is_emphasis(w["word"])]
+    elif mode == "interval":
+        step = max(2.0, float(pz.get("interval_s", 8)))
+        t = step
+        while t < output_duration - 1.0:
+            events.append({"t": round(t, 3), "dur": 0.8, "amount": amount})
+            t += step
+    if str(scfg.get("transition", "cut")) == "zoom":
+        events += [{"t": round(t, 3), "dur": 0.5, "amount": 0.08}
+                   for t in join_times]
+    events.sort(key=lambda e: e["t"])
+    kept: list[dict] = []
+    for ev in events:
+        if len(kept) >= 12:
+            break
+        if all(ev["t"] - k["t"] >= 1.5 for k in kept):
+            kept.append(ev)
+    return kept
+
+
+def popin_events_for(out_words: list[dict], cfg: dict) -> list[dict]:
+    """Keyword→graphic pop-in events in OUTPUT time ({t, dur, asset}), pure.
+    First match per keyword only; spaced >= 2 s; capped at 6. Asset existence
+    is checked at render time (a missing PNG skips the overlay, never fails)."""
+    popins = cfg.get("style", {}).get("popins", []) or []
+    if not popins:
+        return []
+    events: list[dict] = []
+    seen: set[str] = set()
+    for w in out_words:
+        norm = re.sub(r"[^a-z0-9]", "", w["word"].lower())
+        for p in popins:
+            kw = str(p.get("keyword", "")).lower()
+            if not kw or kw in seen or norm != re.sub(r"[^a-z0-9]", "", kw):
+                continue
+            if len(events) >= 6 or any(w["start"] - e["t"] < 2.0 for e in events):
+                continue
+            seen.add(kw)
+            events.append({"t": round(w["start"], 3), "dur": 1.2,
+                           "asset": str(p.get("asset", ""))})
+    return events
 
 
 # --- main entry -------------------------------------------------------------
@@ -440,8 +545,33 @@ def refine_clip(candidate: dict, transcript: dict, scenes: dict, subs: dict,
     segments, out_words, output_duration, total_removed = compress_pauses(
         words, s0, e0, cfg)
 
-    # --- SFX CUES ---
-    sfx_cues = sfx_cues_for(segments, out_words, cfg)
+    # --- SPEED RAMPS (word-free gaps only; remap words/joins into the
+    # post-ramp output timeline so captions and cues stay frame-exact) ---
+    ramps = plan_speed_ramps(segments, _words_in(words, s0, e0), cfg)
+    ramp_outs = [(o := _src_to_out(rp["start"], segments),
+                  o + (rp["end"] - rp["start"]),
+                  (rp["end"] - rp["start"]) * (1 - 1 / rp["rate"]))
+                 for rp in ramps]
+    join_times = []
+    cum = 0.0
+    for seg in segments[:-1]:
+        cum += seg[1] - seg[0]
+        join_times.append(round(_shrunk(cum, ramp_outs), 3))
+    if ramp_outs:
+        out_words = [{**w, "start": round(_shrunk(w["start"], ramp_outs), 3),
+                      "end": round(_shrunk(w["end"], ramp_outs), 3)}
+                     for w in out_words]
+        output_duration = round(
+            output_duration - sum(sv for _, _, sv in ramp_outs), 3)
+
+    # --- RENDER EFFECTS (all in post-ramp OUTPUT time) ---
+    sfx_cues = sfx_cues_for(join_times, out_words, cfg)
+    zoom_events = zoom_events_for(out_words, output_duration, join_times, cfg)
+    popin_events = popin_events_for(out_words, cfg)
+    transition = str(cfg.get("style", {}).get("transition", "cut"))
+    transitions = ({"kind": transition, "times": join_times}
+                   if transition != "cut" and join_times else
+                   {"kind": "cut", "times": []})
 
     # --- EXISTING SUBS ---
     subs_block, subs_kept, captions_enabled = decide_existing_subs(subs, cfg, subs_mode)
@@ -462,6 +592,10 @@ def refine_clip(candidate: dict, transcript: dict, scenes: dict, subs: dict,
         "flags": flags,
         "zoom_punch": zoom_punch,
         "sfx_cues": sfx_cues,
+        "speed_ramps": ramps,
+        "zoom_events": zoom_events,
+        "popin_events": popin_events,
+        "transitions": transitions,
         "fades": {
             "audio_in_ms": float(scfg["audio_fade_in_ms"]),
             "audio_out_ms": float(max(scfg["audio_fade_out_ms"],

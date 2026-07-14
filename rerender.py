@@ -117,19 +117,23 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
         out_start, out_end = segments[0][0], segments[-1][1]
         excl = edit_plan["existing_subs"]["bottom_exclusion_ratio"]
         hbias = edit_plan["existing_subs"]["h_bias_center"]
-        multi = len(segments) > 1
+        speed_ramps = edit_plan.get("speed_ramps") or None
+        multi = len(segments) > 1 or bool(speed_ramps)
     else:
         out_start, out_end, excl, hbias, multi = start, end, 0.0, -1.0, False
         segments = [[start, end]]
+        speed_ramps = None
 
     _prog(0.3, "cutting / reframing")
     if aspect == "16:9":
-        cut_path = (cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4", cfg)
+        cut_path = (cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4",
+                                         cfg, speed_ramps=speed_ramps)
                     if multi else
                     cut_mod.cut_clip(info["video_path"], out_start, out_end, clip_dir / "cut.mp4", cfg))
         src, metrics = cut_path, {"aspect": "16:9", "passthrough": True}
     elif multi:
-        cut_path = cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4", cfg)
+        cut_path = cut_mod.cut_segments(info["video_path"], segments, clip_dir / "cut.mp4",
+                                        cfg, speed_ramps=speed_ramps)
         cut_dur = reframe_mod.probe(cut_path)["duration"]
         metrics = reframe_mod.reframe_clip(
             cut_path, 0.0, cut_dur, clip_dir / "reframed.mp4", [], cfg,
@@ -147,9 +151,14 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
 
     if edit_plan:
         words = edit_plan["words"]
+        trans = edit_plan.get("transitions") or {}
         cap_kwargs = dict(anchor=edit_plan["caption_anchor"], cta=edit_plan["cta"],
                           captions_enabled=edit_plan["captions_enabled"],
-                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"])
+                          fades=edit_plan["fades"], zoom_punch=edit_plan["zoom_punch"],
+                          zoom_events=edit_plan.get("zoom_events") or None,
+                          popin_events=edit_plan.get("popin_events") or None,
+                          whip_times=(trans.get("times") or None
+                                      if trans.get("kind") == "whip" else None))
     else:
         words = [{"word": w["word"],
                   "start": round(max(0.0, w["start"] - out_start), 3),

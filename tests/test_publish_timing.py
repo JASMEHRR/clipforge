@@ -214,8 +214,20 @@ def test_get_peak_hours_returns_none_without_cfg():
     assert sched.get_peak_hours(None, {"uploads": {}}, 1) is None
 
 
-def test_next_publish_times_falls_back_to_config_slots_below_gate():
+def test_next_publish_times_falls_back_to_config_slots_below_gate(monkeypatch):
+    import datetime as real_dt
+
     import upload_scheduler as sched
+
+    class _FrozenDateTime(real_dt.datetime):
+        # freeze "now" at 09:00 IST so the 17:00 slot is always in the future —
+        # without this the test goes red every day after ~16:30 IST, when
+        # today's 17:00 has passed and slot packing picks a later hour
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 14, 9, 0, 0, tzinfo=tz or sched.IST)
+
+    monkeypatch.setattr(sched, "datetime", _FrozenDateTime)
     cfg = _cfg(enabled=True, min_total_uploads=15)
     log_data = {"uploads": {}}
     times = sched.next_publish_times(1, None, log_data, [17], cfg=cfg)

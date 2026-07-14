@@ -116,6 +116,48 @@ def _wm_mode(wm: dict) -> str:
     return "text" if wm.get("enabled") else "off"
 
 
+def zoom_crop_vf(events: list[dict], w: int, h: int, fps: float) -> str:
+    """Per-frame punch-in zoom via zoompan (crop w/h can't vary over time):
+    zoom rises by each event's amount with a 0.12 s ease-in and 0.15 s
+    ease-out, centered. `it` is zoompan's input timestamp, so one expression
+    handles every event without conflicts."""
+    terms = []
+    for ev in events:
+        t0, t1 = float(ev["t"]), float(ev["t"]) + float(ev["dur"])
+        terms.append(f"{float(ev['amount']):.4f}"
+                     f"*min(1,max(0,(it-{t0:.3f})/0.12))"
+                     f"*min(1,max(0,({t1:.3f}-it)/0.15))")
+    z = "1+" + "+".join(terms)
+    return (f"zoompan=z='{z}':d=1"
+            f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":s={w}x{h}:fps={fps:g}")
+
+
+def whip_blur_vf(times: list[float], dur: float = 0.12) -> str:
+    """'Whip' transition: a hard blur burst over each timeline join. Duration-
+    neutral (no frames added/removed), so word timing stays exact."""
+    windows = "+".join(f"between(t\\,{max(0.0, t - dur / 2):.3f}\\,"
+                       f"{t + dur / 2:.3f})" for t in times)
+    return f"boxblur=luma_radius=12:luma_power=1:enable='{windows}'"
+
+
+def _popin_chain(start_label: str, popins: list[dict], input_offset: int,
+                 png_w: int) -> tuple[list[str], str]:
+    """Overlay chain for keyword pop-in PNGs (each an extra ffmpeg input,
+    scaled to png_w and shown centered in the upper third for its event
+    window). Returns the graph parts and the final label."""
+    parts, prev = [], start_label
+    for k, ev in enumerate(popins):
+        idx = input_offset + k
+        t0, t1 = float(ev["t"]), float(ev["t"]) + float(ev["dur"])
+        parts.append(f"[{idx}:v]format=rgba,scale={png_w}:-1[pi{k}]")
+        parts.append(
+            f"[{prev}][pi{k}]overlay=(W-w)/2:H*0.28-h/2"
+            f":enable='between(t,{t0:.3f},{t1:.3f})'[po{k}]")
+        prev = f"po{k}"
+    return parts, prev
+
+
 def _logo_graph(vf_parts: list[str], wm: dict) -> str:
     """One-pass video filtergraph for an alpha logo overlay. Applies the caption/
     fade chain to the source, scales the logo (ffmpeg input 1) to a fraction of
@@ -249,7 +291,10 @@ def caption_clip(video_path: str | Path, words: list[dict],
                  preset_name: str | None = None,
                  anchor: float | None = None, cta: dict | None = None,
                  captions_enabled: bool = True, fades: dict | None = None,
-                 zoom_punch: bool = False) -> Path:
+                 zoom_punch: bool = False,
+                 zoom_events: list[dict] | None = None,
+                 popin_events: list[dict] | None = None,
+                 whip_times: list[float] | None = None) -> Path:
     """Burn animated captions onto a clip; also writes .ass and .srt next to
     the output. `words` must already be clip-relative. Empty words → video is
     passed through re-encoded (mechanical runs) and an empty .srt is written.
@@ -262,7 +307,12 @@ def caption_clip(video_path: str | Path, words: list[dict],
         clip already carries its own subtitles).
       fades — {audio_in_ms,audio_out_ms,video_out_ms} envelope (no hard edges).
       zoom_punch — subtle 1.0->scale punch-in over the first zoom_seconds
-        (weak-hook enhancement)."""
+        (weak-hook enhancement).
+      zoom_events — punch-in zooms [{t,dur,amount}] in clip time (preset
+        punch_in / zoom transitions).
+      popin_events — keyword graphics [{t,dur,asset}]; missing PNGs are
+        skipped with a warning, never fail the burn.
+      whip_times — 'whip' transition blur bursts at these clip times."""
     cfg = cfg or load_config()
     preset_name = preset_name or cfg["captions"]["preset"]
     if preset_name not in cfg["captions"]["presets"]:
@@ -291,6 +341,10 @@ def caption_clip(video_path: str | Path, words: list[dict],
             f"zoompan=z='min(zoom+{inc:.6f},{z})':d=1"
             f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":s={info['width']}x{info['height']}:fps={fps:g}")
+    if zoom_events:
+        vf_parts.append(zoom_crop_vf(zoom_events, info["width"],
+                                     info["height"],
+                                     float(info.get("fps", 30.0)) or 30.0))
     if burn:
         write_ass(words, ass_path, cfg, preset_name,
                   play_w=info["width"], play_h=info["height"],
@@ -311,9 +365,22 @@ def caption_clip(video_path: str | Path, words: list[dict],
             log.warning("watermark image mode but image_path missing (%r); "
                         "rendering without logo", ip)
             logo = None
+    if whip_times:
+        vf_parts.append(whip_blur_vf(whip_times))
     if fades and float(fades.get("video_out_ms", 0)) > 0:
         vo = float(fades["video_out_ms"]) / 1000.0
         vf_parts.append(f"fade=t=out:st={max(0.0, dur - vo):.3f}:d={vo:.3f}")
+
+    # pop-in graphics: extra PNG inputs (after the logo when present)
+    popins = []
+    for ev in (popin_events or []):
+        p = Path(ev["asset"])
+        if not p.is_absolute():
+            p = ROOT / p
+        if p.is_file():
+            popins.append({**ev, "asset": p})
+        else:
+            log.warning("pop-in asset missing, skipped: %s", ev["asset"])
 
     # audio fade chain (shared: -af on the plain path, filtergraph on the logo path)
     af = []
@@ -326,12 +393,27 @@ def caption_clip(video_path: str | Path, words: list[dict],
             af.append(f"afade=t=out:st={max(0.0, dur - aout):.3f}:d={aout:.3f}")
 
     args = ["-i", video_path]
-    if logo:
-        # Alpha logo overlaid in the same encode. -filter_complex cannot coexist
-        # with -af for the same file, so route the audio fade through the graph.
-        args += ["-i", logo]
-        graph = _logo_graph(vf_parts, wm)
-        maps = ["-map", "[vout]"]
+    if logo or popins:
+        # Overlays (alpha logo and/or pop-in PNGs) in the same encode.
+        # -filter_complex cannot coexist with -af for the same file, so route
+        # the audio fade through the graph.
+        if logo:
+            args += ["-i", logo]
+            graph = _logo_graph(vf_parts, wm)   # ends at [vout]
+        else:
+            base = ",".join(vf_parts) if vf_parts else "null"
+            graph = f"[0:v]{base}[vout]"
+        if popins:
+            for ev in popins:
+                args += ["-i", ev["asset"]]
+            png_w = max(64, (int(info["width"] * 0.18) // 2) * 2)
+            chain, out_label = _popin_chain("vout", popins,
+                                            input_offset=2 if logo else 1,
+                                            png_w=png_w)
+            graph = ";".join([graph] + chain)
+        else:
+            out_label = "vout"
+        maps = ["-map", f"[{out_label}]"]
         if af:
             graph += f";[0:a]{','.join(af)}[aout]"
             maps += ["-map", "[aout]"]
