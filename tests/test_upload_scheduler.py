@@ -31,6 +31,7 @@ def _isolate(tmp_path, monkeypatch):
     log_file = tmp_path / "cache" / "upload_log.json"
     monkeypatch.setattr(sched, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(sched, "LOG_FILE", log_file)
+    monkeypatch.setattr(sched, "QUEUE_FILE", tmp_path / "cache" / "post_queue.json")
     monkeypatch.setattr(sched, "ROOT", tmp_path)
     # a real upload's archive copy must never land under the real repo's
     # archive/uploaded/ during tests
