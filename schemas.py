@@ -464,6 +464,94 @@ EVENT_TIMELINE = {
     "additionalProperties": False,
 }
 
+# Named editing preset (presets/<slug>.json): a saved bundle of per-run options
+# expanded by presets.expand() into config.apply_run_options keys + run args.
+# Everything except `name` is optional — absent fields leave defaults untouched.
+EDIT_PRESET = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "caption": {
+            "type": "object",
+            "properties": {
+                "preset": {"type": "string"},        # captions.presets key
+                "font_family": {"type": "string"},
+                "font_size": {"type": "number", "minimum": 8, "maximum": 200},
+                "highlight_hex": {"type": "string"},
+                "primary_hex": {"type": "string"},
+                "anchor": {"type": "number", "minimum": 0.52, "maximum": 0.66},
+                # word-by-word highlight animation on/off
+                "animation": {"type": "string",
+                              "enum": ["karaoke", "fade", "box"]},
+            },
+            "additionalProperties": False,
+        },
+        "aspect": {"type": "string", "enum": ["9:16", "1:1", "16:9"]},
+        "cta_text": {"type": "string"},
+        "sfx": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "pack": {"type": "string"},
+                "volume_db": {"type": "number", "minimum": -60, "maximum": 6},
+            },
+            "additionalProperties": False,
+        },
+        "music": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string"},         # "", "auto", or track id
+                "volume_db": {"type": "number", "minimum": -60, "maximum": 6},
+            },
+            "additionalProperties": False,
+        },
+        "speed_ramps": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "rate": {"type": "number", "minimum": 1.0, "maximum": 2.0},
+            },
+            "additionalProperties": False,
+        },
+        "punch_in": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["off", "emphasis", "interval"]},
+                "amount_pct": {"type": "number", "minimum": 1, "maximum": 25},
+                "interval_s": {"type": "number", "minimum": 2, "maximum": 60},
+            },
+            "additionalProperties": False,
+        },
+        "popins": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "minLength": 1},
+                    "asset": {"type": "string", "minLength": 1},  # png path
+                },
+                "required": ["keyword", "asset"],
+                "additionalProperties": False,
+            },
+        },
+        "transition": {"type": "string", "enum": ["cut", "whip", "zoom"]},
+        "intro": {"type": "string"},                  # video/image path or ""
+        "outro": {"type": "string"},
+        "watermark": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["off", "text", "image"]},
+                "text": {"type": "string"},
+                "image": {"type": "string"},
+                "position": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -481,6 +569,7 @@ SCHEMAS: dict[str, dict] = {
     "ending_classify": ENDING_CLASSIFY,
     "viral_events": VIRAL_EVENTS,
     "event_timeline": EVENT_TIMELINE,
+    "edit_preset": EDIT_PRESET,
 }
 
 

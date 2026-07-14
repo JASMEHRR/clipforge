@@ -132,6 +132,12 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
     clip_min, clip_max, watermark_mode (off|text|image), watermark_text,
     watermark_image (logo path), watermark_position, font_family (per-preset
     caption font override).
+
+    Editing-preset keys (presets.expand): caption_primary_hex,
+    caption_font_size, caption_anchor, caption_animation (karaoke|fade|box),
+    sfx_enabled, sfx_pack, sfx_volume_db, speed_ramps, punch_in, popins,
+    transition, intro, outro — the last six land under style.* as render-time
+    config for cut/reframe/captions.
     """
     c = copy.deepcopy(cfg)
     o = opts or {}
@@ -183,6 +189,34 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
             wm["image_path"] = wm_image
         if o.get("watermark_position"):
             wm["position"] = o["watermark_position"]
+
+    # --- editing-preset keys (presets.expand) ---
+    presets = c.get("captions", {}).get("presets", {})
+    if preset and preset in presets:
+        cap = presets[preset]
+        if o.get("caption_primary_hex"):
+            cap["primary_color"] = hex_to_ass(o["caption_primary_hex"])
+        if o.get("caption_font_size"):
+            cap["font_size"] = int(o["caption_font_size"])
+        if o.get("caption_animation"):
+            cap["style"] = str(o["caption_animation"])
+    if o.get("caption_anchor"):
+        c.setdefault("style", {}).setdefault("captions", {})[
+            "vertical_anchor"] = float(o["caption_anchor"])
+
+    if o.get("sfx_enabled") is not None:
+        sfx = c.setdefault("sfx", {})
+        sfx["enabled"] = bool(o["sfx_enabled"])
+        if o.get("sfx_pack"):
+            sfx["pack"] = str(o["sfx_pack"])
+        if o.get("sfx_volume_db") is not None:
+            sfx["volume_db"] = float(o["sfx_volume_db"])
+
+    st = c.setdefault("style", {})
+    for key in ("speed_ramps", "punch_in", "popins", "transition",
+                "intro", "outro"):
+        if o.get(key):
+            st[key] = o[key]
 
     return c
 

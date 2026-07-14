@@ -42,8 +42,10 @@ def create_app() -> FastAPI:
     app = FastAPI(title="ClipForge", lifespan=lifespan)
 
     from server import (routes_analytics, routes_edit, routes_library,
-                        routes_run, routes_settings, routes_upload)
+                        routes_presets, routes_run, routes_settings,
+                        routes_upload)
     app.include_router(routes_run.router)
+    app.include_router(routes_presets.router)
     app.include_router(routes_library.router)
     app.include_router(routes_edit.router)
     app.include_router(routes_upload.router)

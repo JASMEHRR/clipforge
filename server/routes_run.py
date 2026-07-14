@@ -97,6 +97,8 @@ def upload_font(file: UploadFile):
 class RunRequest(BaseModel):
     source: str                       # URL or a path returned by /api/uploads
     preset: str | None = None
+    edit_preset: str | None = None    # saved editing preset (presets/*.json);
+                                      # its values win over per-field defaults
     aspect: str = "9:16"
     target_count: int | None = None   # None/0 = automatic
     provider: str | None = None
@@ -135,8 +137,20 @@ def _resolve_music_choice(choice: str | None) -> str:
     return choice or ""
 
 
-def _build_cfg(req: RunRequest) -> dict:
-    cfg = apply_run_options(load_config(), {
+def _preset_opts(req: RunRequest) -> dict:
+    """Expanded options from the request's saved editing preset ({} if none).
+    Raises HTTPException on an unknown/invalid preset."""
+    if not req.edit_preset:
+        return {}
+    import presets
+    try:
+        return presets.expand(presets.load_preset(req.edit_preset))
+    except presets.PresetError as e:
+        raise HTTPException(422, friendly(e, "Loading that preset"))
+
+
+def _build_cfg(req: RunRequest, preset_opts: dict | None = None) -> dict:
+    opts = {
         "cta_text": req.cta_text, "highlight_hex": req.highlight_hex,
         "preset": req.preset or None, "pacing": req.pacing,
         "clip_min": req.clip_min, "clip_max": req.clip_max,
@@ -144,7 +158,12 @@ def _build_cfg(req: RunRequest) -> dict:
         "watermark_position": req.watermark_position,
         "watermark_mode": req.watermark_mode,
         "watermark_image": req.watermark_image,
-        "font_family": req.font_family})
+        "font_family": req.font_family}
+    # a chosen editing preset wins over the request's per-field defaults —
+    # the form fields all carry defaults, so "request wins" would silently
+    # discard the preset the user explicitly picked
+    opts.update(preset_opts or {})
+    cfg = apply_run_options(load_config(), opts)
     if req.style_profile:
         cfg["style"]["profile"] = f"profiles/{req.style_profile}.json"
     cfg.setdefault("viral_v2", {})["enabled"] = bool(req.viral)
@@ -164,11 +183,18 @@ def start_run(req: RunRequest):
     if not source.startswith("http") and not Path(source).exists():
         raise HTTPException(422, "That video file can't be found — "
                                  "please choose it again.")
+    preset_opts = _preset_opts(req)
     try:
-        cfg = _build_cfg(req)
+        cfg = _build_cfg(req, preset_opts)
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001 — bad option must not 500 opaquely
         raise HTTPException(422, friendly(e, "Checking your options"))
-    music = _resolve_music_choice(req.music)
+    music = _resolve_music_choice(preset_opts.get("music", req.music))
+    aspect = preset_opts.get("aspect") or req.aspect or "9:16"
+    caption_preset = preset_opts.get("preset") or req.preset or None
+    music_volume = float(preset_opts.get("music_volume_db",
+                                         req.music_volume_db))
     try:
         job_dir = pipeline.new_job_dir(cfg, source)
     except OSError as e:
@@ -179,13 +205,14 @@ def start_run(req: RunRequest):
         try:
             job = pipeline.run_job(
                 source, cfg, provider=req.provider or None,
-                job_dir=job_dir, preset=req.preset or None,
-                aspect=req.aspect or "9:16",
+                job_dir=job_dir, preset=caption_preset,
+                aspect=aspect,
                 target_count=int(req.target_count or 0) or None,
                 music=music or None,
-                music_volume_db=float(req.music_volume_db),
+                music_volume_db=music_volume,
                 tracker=h.tracker, style_refine=bool(req.style_refine),
-                subs_mode=req.subs_mode or None, cancel=h.cancel_event)
+                subs_mode=req.subs_mode or None, cancel=h.cancel_event,
+                edit_preset=req.edit_preset or None)
             h.finish("done", result=job)
         except JobCancelled:
             h.finish("cancelled")

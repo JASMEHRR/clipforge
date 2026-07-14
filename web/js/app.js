@@ -15,6 +15,7 @@ import {
 import { mountUploadQueue } from "./upload_queue.js";
 import { mountLibrary } from "./library.js";
 import { mountPublishTiming } from "./publish_timing_panel.js";
+import { mountPresets } from "./presets_panel.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -31,6 +32,7 @@ const routes = {
   library: renderLibrary,
   youtube: renderYouTube,
   analytics: renderAnalytics,
+  presets: renderPresets,
   settings: renderSettings,
   history: renderHistory,
 };
@@ -1175,6 +1177,17 @@ function analyticsVideoRow(v) {
     el("div", {}, `${v.avg_view_pct}%`),
     el("div", {}, v.likes),
     el("div", {}, v.subs_gained));
+}
+
+async function renderPresets() {
+  const card = el("div", { class: "card", style: "display:grid;gap:12px" });
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Presets"),
+        el("h1", { class: "t-display" }, "Your editing styles"))),
+    card));
+  mountPresets(card);
 }
 
 async function renderAnalytics() {

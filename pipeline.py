@@ -65,7 +65,8 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
             full_transcribe: bool = False, music: str | None = None,
             music_volume_db: float = -18.0, progress_cb=None,
             tracker=None, style_refine: bool | None = None,
-            subs_mode: str | None = None, cancel=None) -> dict:
+            subs_mode: str | None = None, cancel=None,
+            edit_preset: str | None = None) -> dict:
     import captions as captions_mod
     import cut as cut_mod
     import highlights as hl
@@ -133,6 +134,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
         "status": "running",
         "settings": {"provider": resolved, "aspect": aspect,
                      "preset": preset or cfg["captions"]["preset"],
+                     "edit_preset": edit_preset or "",
                      "debug": bool(debug)},
         "stages": {}, "clips": [], "notes": notes,
     }
@@ -612,6 +614,9 @@ def main(argv=None):
     ap.add_argument("--debug", action="store_true",
                     help="persist all intermediate artifacts")
     ap.add_argument("--preset", default=None, help="caption preset name")
+    ap.add_argument("--edit-preset", default=None,
+                    help="named editing preset (presets/*.json) — bundles "
+                         "caption style, aspect, sfx, music, effects")
     ap.add_argument("--aspect", default="9:16",
                     choices=["9:16", "1:1", "16:9"])
     ap.add_argument("--full-transcribe", action="store_true",
@@ -642,13 +647,27 @@ def main(argv=None):
     else:
         ap.error("provide a source or --sample")
 
+    # a saved editing preset expands into run options; explicit CLI flags win
+    preset, aspect, music, music_vol = (a.preset, a.aspect, a.music,
+                                        a.music_volume)
+    if a.edit_preset:
+        import presets as presets_mod
+        from config import apply_run_options
+        opts = presets_mod.expand(presets_mod.load_preset(a.edit_preset))
+        cfg = apply_run_options(cfg, opts)
+        preset = a.preset or opts.get("preset")
+        aspect = opts.get("aspect", aspect) if a.aspect == "9:16" else aspect
+        music = a.music or opts.get("music")
+        music_vol = (opts.get("music_volume_db", music_vol)
+                     if a.music_volume == -18.0 else music_vol)
+
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
-                  force=a.force, preset=a.preset, aspect=a.aspect,
+                  force=a.force, preset=preset, aspect=aspect,
                   debug=a.debug or None, target_count=a.clips,
-                  full_transcribe=a.full_transcribe, music=a.music,
-                  music_volume_db=a.music_volume,
+                  full_transcribe=a.full_transcribe, music=music,
+                  music_volume_db=music_vol,
                   style_refine=False if a.no_style else None,
-                  subs_mode=a.subs_mode)
+                  subs_mode=a.subs_mode, edit_preset=a.edit_preset)
     kept = [c for c in job["clips"] if c.get("kept")]
     print(f"job {job['job_id']}: {len(kept)} clips kept of "
           f"{len(job['clips'])} rendered -> {job['job_dir']}")

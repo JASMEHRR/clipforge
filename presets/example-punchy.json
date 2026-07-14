@@ -1,0 +1,26 @@
+{
+  "name": "Example Punchy",
+  "caption": {
+    "preset": "karaoke-pop",
+    "animation": "karaoke"
+  },
+  "aspect": "9:16",
+  "sfx": {
+    "enabled": true,
+    "pack": "default",
+    "volume_db": -10
+  },
+  "music": {
+    "track": "auto",
+    "volume_db": -18
+  },
+  "speed_ramps": {
+    "enabled": true,
+    "rate": 1.4
+  },
+  "punch_in": {
+    "mode": "emphasis",
+    "amount_pct": 7
+  },
+  "transition": "cut"
+}
