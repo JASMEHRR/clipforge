@@ -67,6 +67,25 @@ def list_jobs(cfg: dict | None = None, limit: int = 100) -> list[dict]:
     return out
 
 
+def preset_usage(cfg: dict | None = None) -> dict[str, int]:
+    """How many jobs each editing preset has run (settings.edit_preset),
+    for the dashboard. Jobs without a preset are counted under ''."""
+    try:
+        with _db(cfg) as conn:
+            rows = conn.execute("SELECT settings FROM jobs").fetchall()
+    except Exception as e:  # noqa: BLE001
+        log.error("history read failed: %s", e)
+        return {}
+    counts: dict[str, int] = {}
+    for (settings,) in rows:
+        try:
+            name = json.loads(settings).get("edit_preset", "") or ""
+        except json.JSONDecodeError:
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def render_rate_history(cfg: dict | None = None, limit: int = 10) -> list[float]:
     """Past render throughput as output-seconds rendered per wall-clock second,
     oldest→newest, for ETA estimation. Prefers per-clip ``render_s`` when present,

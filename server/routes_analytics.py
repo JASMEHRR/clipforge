@@ -121,3 +121,53 @@ def reset_publish_timing():
     import publish_timing
     publish_timing.reset_stats()
     return {"reset": True}
+
+
+# ============================================================
+# Operation dashboard (Phase X Part 6)
+# ============================================================
+@router.get("/api/analytics/channels")
+def channel_dashboard():
+    """Per-channel operation stats: videos pulled, clips made, clips posted,
+    plus per-account quota used today. Local files only — no YouTube auth."""
+    from pathlib import Path
+
+    import channels
+    from config import ROOT
+    from upload_scheduler import list_accounts, load_log, quota_status
+
+    store = channels.load_store()
+    log_data = load_log()
+    cfg = load_config()
+    rows = []
+    for s in channels.channel_stats(store):
+        job_dirs = [e.get("job_dir") for e in store["pool"].values()
+                    if e["channel_id"] == s["id"] and e.get("job_dir")]
+        clips_made = 0
+        clips_posted = 0
+        for jd in job_dirs:
+            p = Path(jd)
+            if p.exists():
+                clips_made += sum(1 for d in p.glob("clip_*") if d.is_dir())
+            try:
+                rel = str(p.resolve().relative_to(ROOT)).replace("\\", "/")
+            except ValueError:
+                rel = str(p).replace("\\", "/")
+            clips_posted += sum(1 for k in log_data["uploads"]
+                                if k.startswith(rel + "/"))
+        rows.append({**s, "clips_made": clips_made,
+                     "clips_posted": clips_posted})
+    return {"channels": rows,
+            "accounts": [quota_status(cfg, log_data, a)
+                         for a in list_accounts(cfg)]}
+
+
+@router.get("/api/analytics/presets")
+def preset_dashboard():
+    """Per-preset usage counts from job history."""
+    import history
+    usage = history.preset_usage()
+    named = sorted(((k, v) for k, v in usage.items() if k),
+                   key=lambda x: -x[1])
+    return {"presets": [{"name": k, "jobs": v} for k, v in named],
+            "no_preset_jobs": usage.get("", 0)}

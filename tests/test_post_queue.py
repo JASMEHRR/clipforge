@@ -203,3 +203,21 @@ def test_trigger_disabled_noop():
     sched.trigger_after_render(sched.ROOT / "output/x/clip_00",
                                _cfg(auto_enabled=False))
     assert sched.load_queue()["queue"] == []
+
+
+# --- dashboard endpoints (Phase 6) ---------------------------------------------
+
+def test_dashboard_endpoints(monkeypatch, tmp_path):
+    import channels
+    from fastapi.testclient import TestClient
+    from server import create_app
+    monkeypatch.setattr(channels, "STORE_PATH", tmp_path / "channels.json")
+    ch = channels.add_channel("https://youtube.com/@x", "program", "credit")
+    client = TestClient(create_app())
+    r = client.get("/api/analytics/channels").json()
+    assert r["channels"][0]["name"] == "@x"
+    assert {"clips_made", "clips_posted", "videos_pulled",
+            "pending"} <= set(r["channels"][0])
+    assert r["accounts"][0]["account"] == "default"
+    p = client.get("/api/analytics/presets").json()
+    assert "presets" in p and "no_preset_jobs" in p

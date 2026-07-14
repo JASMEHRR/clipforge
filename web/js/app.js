@@ -1227,18 +1227,56 @@ async function renderAnalytics() {
   const scheduleCard = el("div", { class: "card uq-span", style: "display:grid;gap:12px" });
   mountPublishTiming(scheduleCard);
 
+  // Operation dashboard: per-channel pull/clip/post counts + preset usage.
+  // Local files only; renders regardless of YouTube connection state.
+  const opsCard = el("div", { class: "card uq-span", style: "display:grid;gap:12px" });
+  (async () => {
+    try {
+      const [ch, pr] = await Promise.all([
+        api.get("/api/analytics/channels"),
+        api.get("/api/analytics/presets"),
+      ]);
+      opsCard.append(el("h2", { class: "t-title", style: "margin:0" }, "Operation"));
+      opsCard.append(el("div", { class: "an-table" },
+        el("div", { class: "an-row an-row-head" },
+          el("div", {}, "Channel"), el("div", {}, "Pulled"),
+          el("div", {}, "Clips made"), el("div", {}, "Posted"),
+          el("div", {}, "Queued")),
+        ...(ch.channels.length
+          ? ch.channels.map((c) => el("div", { class: "an-row" },
+              el("div", {}, c.name), el("div", {}, String(c.videos_pulled)),
+              el("div", {}, String(c.clips_made)),
+              el("div", {}, String(c.clips_posted)),
+              el("div", {}, String(c.pending))))
+          : [el("p", { class: "t-dim", style: "margin:8px 0" },
+              "No approved channels yet.")])));
+      opsCard.append(el("p", { class: "t-dim", style: "margin:0" },
+        ch.accounts.map((a) =>
+          `${a.account}: ${a.uploads_today}/${a.max_per_day} posted today`)
+          .join(" · ")));
+      if (pr.presets.length) {
+        opsCard.append(el("h3", { class: "t-label", style: "margin:8px 0 0" },
+          "Preset usage"));
+        opsCard.append(barsSVG(pr.presets.map((p) =>
+          ({ label: p.name, value: p.jobs }))));
+      }
+    } catch (e) {
+      opsCard.append(el("p", { class: "t-dim", style: "margin:0" }, e.message));
+    }
+  })();
+
   let st;
   try {
     st = await api.get("/api/analytics/state");
   } catch (e) {
-    body.replaceChildren(scheduleCard,
+    body.replaceChildren(opsCard, scheduleCard,
       el("div", { class: "card" }, el("p", { class: "t-dim", style: "margin:0" }, e.message)));
     return;
   }
 
   const left = el("div", { class: "card", style: "display:grid;gap:16px" });
   const right = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
-  body.replaceChildren(scheduleCard, left, right);
+  body.replaceChildren(opsCard, scheduleCard, left, right);
 
   if (!st.configured) {
     left.append(
