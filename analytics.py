@@ -13,9 +13,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import analytics_insights
+import publish_timing
 import upload_scheduler
 import youtube_upload
-from config import ROOT
+from config import ROOT, load_config
 from errors import UploadError
 from logutil import get_logger
 
@@ -117,6 +118,15 @@ def refresh(force: bool = False) -> dict:
                 log.warning("analytics refresh failed (%s); serving stale cache", e)
                 return cached
             raise UploadError(f"could not fetch analytics: {e}") from e
+        # Piggyback the publish-time learning collection + daily tweak loop on
+        # this same daily/on-open refresh cycle (Parts 1 & 3's "daily job") —
+        # best-effort and isolated from the main refresh above: a failure here
+        # must never turn a successful analytics fetch into a stale response.
+        try:
+            publish_timing.refresh_stats(analytics)
+            publish_timing.recompute_ranking(load_config(), log_data)
+        except Exception as e:  # noqa: BLE001 — never let this block analytics
+            log.warning("publish-timing refresh/recompute failed (%s); continuing", e)
         data = {"fetched_at": datetime.now(IST).isoformat(),
                "fetched_at_epoch": time.time(),
                "overview": overview, "videos": videos}

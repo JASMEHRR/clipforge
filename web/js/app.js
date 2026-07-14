@@ -14,6 +14,7 @@ import {
 } from "./pickers.js";
 import { mountUploadQueue } from "./upload_queue.js";
 import { mountLibrary } from "./library.js";
+import { mountPublishTiming } from "./publish_timing_panel.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -1189,18 +1190,24 @@ async function renderAnalytics() {
           "Numbers and suggestions come only from your own uploaded clips."))),
     body));
 
+  // Reads only local files (upload_log.json, config, its own stats store) —
+  // mounted independently so it shows real gate status even before YouTube
+  // is connected or if the main analytics fetch below fails.
+  const scheduleCard = el("div", { class: "card uq-span", style: "display:grid;gap:12px" });
+  mountPublishTiming(scheduleCard);
+
   let st;
   try {
     st = await api.get("/api/analytics/state");
   } catch (e) {
-    body.replaceChildren(el("div", { class: "card" },
-      el("p", { class: "t-dim", style: "margin:0" }, e.message)));
+    body.replaceChildren(scheduleCard,
+      el("div", { class: "card" }, el("p", { class: "t-dim", style: "margin:0" }, e.message)));
     return;
   }
 
   const left = el("div", { class: "card", style: "display:grid;gap:16px" });
   const right = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
-  body.replaceChildren(left, right);
+  body.replaceChildren(scheduleCard, left, right);
 
   if (!st.configured) {
     left.append(

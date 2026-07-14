@@ -236,7 +236,7 @@ def youtube_approvals():
     slots = sched.next_publish_times(
         len(pending), None, log_data,
         upload_cfg.get("publish_slots_ist", [12, 19]),
-        upload_cfg.get("slot_spacing_minutes", 60))
+        upload_cfg.get("slot_spacing_minutes", 60), cfg=cfg)
     items = []
     for c, when in zip(pending, slots):
         item = _candidate_summary(c)

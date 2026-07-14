@@ -246,10 +246,30 @@ upload:
                                 # laptop needn't be on at publish time (capped
                                 # by API quota ~6 uploads/day)
   min_virality: 40
-  publish_slots_ist: [17]    # fallback publish hours while the channel is young
+  publish_slots_ist: [17]    # fallback/floor publish hours — always used until
+                                # publish_timing's gates pass (below), and again
+                                # any time it's disabled or has nothing learned yet
   slot_spacing_minutes: 60      # min gap between uploads; extra slots pack after the
                                 # last configured hour so max_per_day is reachable
                                 # even with fewer configured hours than uploads/day
+  publish_timing:                # self-learning publish hours (publish_timing.py) —
+                                # learns from ClipForge's OWN upload history/views,
+                                # NOT YouTube's audience-online chart (the API doesn't
+                                # expose that). See publish_timing.py's module docstring.
+    enabled: true                 # learn once the gates below pass; false pins to
+                                  # publish_slots_ist regardless of data
+    min_total_uploads: 15         # system-wide gate: this many uploads before learned
+                                  # hours override publish_slots_ist at all
+    min_hour_samples: 3           # per-hour gate: an hour needs this many videos
+                                  # before its score is trusted (else exploration-only)
+    recency_half_life_days: 30    # hour scores decay by half every this many days
+    explore_window_start: 8       # IST hours eligible for exploration
+    explore_window_end: 23
+    explore_epsilon_start: 0.3    # exploration fraction while data is thin
+    explore_epsilon_floor: 0.05   # never fully stops checking under-sampled hours
+    explore_epsilon_decay_per_upload: 0.01
+    pinned_hours: []               # owner-pinned hours: always in the active set
+    banned_hours: []               # owner-banned hours: never picked, exploit or explore
   ntfy_topic: ""                 # ntfy.sh topic for phone notifications; "" = disabled
   category_id: "22"              # matches youtube_upload.py's default (People & Blogs)
   watch_interval_s: 60           # poll interval for `python upload.py watch`

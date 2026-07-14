@@ -52,3 +52,72 @@ def apply_publish_slot(req: ApplySlotRequest):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, friendly(e, "Saving that setting"))
     return {"publish_slots_ist": cfg["upload"]["publish_slots_ist"]}
+
+
+# ------------------------------------------------------- schedule intelligence --
+# "Self-learning" publish hours (publish_timing.py). Reads only local files
+# (upload_log.json, its own stats store, config) — no YouTube auth required,
+# so the panel shows real state (gates, sample counts) even before the
+# channel is connected.
+
+@router.get("/api/analytics/publish-timing")
+def publish_timing_panel():
+    import publish_timing
+    import upload_scheduler as sched
+    return publish_timing.publish_timing_state(load_config(), sched.load_log())
+
+
+@router.post("/api/analytics/publish-timing/recompute")
+def publish_timing_recompute():
+    """The daily tweak loop, on demand — recomputes the active hour ranking
+    and logs a changelog entry when it changes."""
+    import publish_timing
+    import upload_scheduler as sched
+    return publish_timing.recompute_ranking(load_config(), sched.load_log())
+
+
+class PublishTimingEnabledRequest(BaseModel):
+    enabled: bool
+
+
+@router.put("/api/analytics/publish-timing/enabled")
+def set_publish_timing_enabled(req: PublishTimingEnabledRequest):
+    import publish_timing
+    try:
+        publish_timing.set_enabled(bool(req.enabled))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, friendly(e, "Saving that setting"))
+    return {"enabled": bool(req.enabled)}
+
+
+class PublishTimingHourRequest(BaseModel):
+    hour: int
+
+
+@router.post("/api/analytics/publish-timing/pin")
+def pin_publish_hour(req: PublishTimingHourRequest):
+    import publish_timing
+    try:
+        pinned = publish_timing.toggle_pin(load_config(), req.hour)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"pinned_hours": pinned}
+
+
+@router.post("/api/analytics/publish-timing/ban")
+def ban_publish_hour(req: PublishTimingHourRequest):
+    import publish_timing
+    try:
+        banned = publish_timing.toggle_ban(load_config(), req.hour)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"banned_hours": banned}
+
+
+@router.post("/api/analytics/publish-timing/reset")
+def reset_publish_timing():
+    """Owner control: forget every learned score (config — enabled state,
+    pins/bans, gates — is untouched)."""
+    import publish_timing
+    publish_timing.reset_stats()
+    return {"reset": True}

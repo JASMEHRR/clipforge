@@ -117,12 +117,40 @@ day — no manual clicking.
    - `min_virality` (0-100) — clips scoring below this are skipped.
    - `max_per_day` / `max_per_run` — caps so you don't flood your channel or
      hit YouTube's daily quota.
-   - `publish_slots_ist` — hours of the day (IST) videos go live.
+   - `publish_slots_ist` — hours of the day (IST) videos go live. This stays
+     the fallback/floor at all times; see below for when learned hours can
+     override it.
    - `ntfy_topic` — set this to get a free phone notification every time a
      clip is scheduled or an upload fails (install the [ntfy](https://ntfy.sh)
      app, pick a unique topic name, subscribe to it, put the same name here).
 3. Clips beyond the daily cap simply wait — nothing is lost, they upload the
    next day.
+
+### Self-learning publish times (`upload.publish_timing`)
+
+Once you have enough upload history, ClipForge can pick better publish hours
+on its own — but **this learns only from your own channel's numbers, not
+from YouTube's "when your audience is online" chart**. That data isn't
+exposed by the public Analytics API at all, so ClipForge never fakes it:
+instead it looks at the hours *you've actually published at* and scores them
+by how those videos performed (early-window views, normalized against your
+channel's own rolling median so one viral clip can't skew every hour's
+score), weighted so the last 30-60 days matter most. While there isn't much
+data yet, a decaying fraction of publish slots go to hours you haven't tried
+much, so the system keeps learning instead of freezing on day-one guesses.
+
+Two honesty gates keep this out of your way until it has something real to
+say: the whole system needs `min_total_uploads` (default 15) ClipForge
+uploads before it overrides `publish_slots_ist` at all, and any individual
+hour needs `min_hour_samples` (default 3) videos before its score is
+trusted. Below either gate, `publish_slots_ist` is exactly what gets used —
+nothing changes silently.
+
+See the **Schedule intelligence** panel on the Analytics tab for the current
+ranking, sample counts, gate status, and a plain-English log of what changed
+and why. You can pin an hour (always used), ban one (never used), turn
+learning off entirely (`upload.publish_timing.enabled: false`), or reset it
+to start over — all from that panel.
 
 Command-line alternative (same logic, useful for checking status or catching
 up on clips from before auto-upload was enabled):
@@ -165,8 +193,13 @@ python upload.py report     # 28-day performance report + recommendations
 | `upload.auto_enabled` | schedule qualifying clips to YouTube automatically as they render | `false` |
 | `upload.min_virality` | skip auto-upload for clips scoring below this (0-100) | 40 |
 | `upload.max_per_day` / `max_per_run` | daily cap (persists across restarts) / per-batch cap | 3 / 2 |
-| `upload.publish_slots_ist` | hours of day (IST) videos are scheduled to go live | `[12, 19]` |
+| `upload.publish_slots_ist` | hours of day (IST) videos are scheduled to go live — the fallback/floor, always used below the `publish_timing` gates | `[12, 19]` |
 | `upload.slot_spacing_minutes` | min gap between uploads; extra slots pack after the last configured hour so `max_per_day` is reachable even with fewer configured hours than uploads/day | 60 |
+| `upload.publish_timing.enabled` | learn publish hours from your own upload history once the gates below pass — see "Self-learning publish times" above | `true` |
+| `upload.publish_timing.min_total_uploads` / `min_hour_samples` | honesty gates: total uploads before learned hours override `publish_slots_ist` at all / videos-per-hour before that hour's score is trusted | 15 / 3 |
+| `upload.publish_timing.recency_half_life_days` | an hour's score decays by half every this many days | 30 |
+| `upload.publish_timing.explore_window_start` / `explore_window_end` | IST hours eligible for exploring under-sampled slots | 8 / 23 |
+| `upload.publish_timing.pinned_hours` / `banned_hours` | owner overrides: always-used / never-used hours | `[]` / `[]` |
 | `upload.ntfy_topic` | ntfy.sh topic for phone push notifications; `""` disables | "" |
 | `llm.openrouter_model` | OpenRouter vision model for viral_v2's frame fallback (free ids rotate — update here) | `qwen/qwen2.5-vl-72b-instruct:free` |
 | `viral_v2.enabled` | multimodal event detection (`false` = transcript-only, pre-feature output) | `true` |

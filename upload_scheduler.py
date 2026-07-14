@@ -289,34 +289,29 @@ def build_snippet(meta: dict) -> dict:
 # ============================================================
 # Publish-time selection
 # ============================================================
-def get_peak_hours(analytics) -> list[int] | None:
-    """Ask YouTube Analytics for total views; if the channel has enough
-    data, this would derive peak hours, but the Analytics API doesn't expose
-    hour-of-day, so it just gates the fallback on whether there's enough
-    data to bother trying later. Returns None (use default slots) today."""
-    try:
-        end = datetime.now(IST).date()
-        start = end - timedelta(days=28)
-        totals = analytics.reports().query(
-            ids="channel==MINE",
-            startDate=str(start), endDate=str(end),
-            metrics="views",
-        ).execute()
-        rows = totals.get("rows") or []
-        total_views = int(rows[0][0]) if rows else 0
-        if total_views < MIN_VIEWS_FOR_ANALYTICS:
-            log.info("channel has %d views in last 28 days (< %d); using default slots",
-                     total_views, MIN_VIEWS_FOR_ANALYTICS)
+def get_peak_hours(cfg: dict | None, log_data: dict, count: int) -> list[int] | None:
+    """Self-learning publish hours (publish_timing.pick_hours), replacing the
+    old always-None stub. Returns None (use publish_slots_ist) whenever
+    `cfg` is absent, learning is disabled, or the honesty gates in
+    publish_timing haven't been met yet — the same "stay out of the way
+    below the gates" contract this function has always had. Never raises
+    into scheduling: any failure in the learning layer just falls back to
+    configured slots, same as a real Analytics-API failure always has."""
+    if cfg is None:
         return None
-    except Exception as e:  # noqa: BLE001 — analytics is optional context
-        log.info("analytics unavailable (%s); using default slots", e)
+    try:
+        import publish_timing
+        return publish_timing.pick_hours(cfg, log_data, count)
+    except Exception as e:  # noqa: BLE001 — learning must never block scheduling
+        log.info("publish-time learning unavailable (%s); using default slots", e)
         return None
 
 
 def next_publish_times(count: int, analytics, log_data: dict,
                        default_slots: list[int],
                        slot_spacing_minutes: int = 60,
-                       slots_per_day: int | None = None) -> list[datetime]:
+                       slots_per_day: int | None = None,
+                       cfg: dict | None = None) -> list[datetime]:
     """Pick the next `count` free publish slots, never in the past, never
     within slot_spacing_minutes of an already-scheduled video.
 
@@ -329,8 +324,15 @@ def next_publish_times(count: int, analytics, log_data: dict,
     Slots land exactly on their computed minute (no jitter): jitter would
     let adjacent slots' effective gap shrink below slot_spacing_minutes,
     occasionally rejecting a legitimate same-day slot and spilling into
-    the next day for no real reason."""
-    hours = sorted(set(get_peak_hours(analytics) or default_slots)) or [12]
+    the next day for no real reason.
+
+    `cfg`, when given, lets self-learned hours (get_peak_hours) substitute
+    for `default_slots` once its own gates pass; `analytics` is unused today
+    (learning reads its own cached stats, not a live API call at scheduling
+    time) but kept in the signature — every existing call site already
+    passes it, and a live-API path may want it again later."""
+    learned = get_peak_hours(cfg, log_data, len(default_slots) or 1)
+    hours = sorted(set(learned or default_slots)) or [12]
     gap = timedelta(minutes=max(1, int(slot_spacing_minutes)))
 
     taken: list[datetime] = []
@@ -381,12 +383,12 @@ def panel_state(cfg: dict, log_data: dict, authorized: bool) -> dict:
     its arguments (no I/O); the caller supplies config, log and auth state."""
     upload_cfg = cfg.get("upload", {})
     today = uploads_today(log_data)
-    max_day = upload_cfg.get("max_per_day", 3)
+    max_day = upload_cfg.get("max_per_day", 25)
     next_slot = None
     if authorized and upload_cfg.get("auto_enabled") and today < max_day:
         slots = next_publish_times(
             1, None, log_data, upload_cfg.get("publish_slots_ist", [12, 19]),
-            upload_cfg.get("slot_spacing_minutes", 60))
+            upload_cfg.get("slot_spacing_minutes", 60), cfg=cfg)
         next_slot = slots[0].isoformat() if slots else None
     recent = sorted(log_data["uploads"].values(),
                     key=lambda e: e.get("uploaded_at", ""), reverse=True)[:5]
@@ -535,7 +537,7 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
     times = next_publish_times(len(batch), analytics, log_data,
                                upload_cfg.get("publish_slots_ist", [12, 19]),
                                upload_cfg.get("slot_spacing_minutes", 60),
-                               slots_per_day=slots_per_day)
+                               slots_per_day=slots_per_day, cfg=cfg)
     category_id = upload_cfg.get("category_id", "22")
     ntfy_topic = upload_cfg.get("ntfy_topic", "")
 
@@ -572,7 +574,7 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
 def _slots_per_day(cfg: dict) -> int:
     up = cfg.get("upload", {})
     return max(1, min(len(up.get("publish_slots_ist", [12, 19])) or 1,
-                      up.get("max_per_day", 5)))
+                      up.get("max_per_day", 20)))
 
 
 def quota_status(cfg: dict, log_data: dict) -> dict:
@@ -583,7 +585,7 @@ def quota_status(cfg: dict, log_data: dict) -> dict:
     up = cfg.get("upload", {})
     today = uploads_today(log_data)
     by_quota = QUOTA_DAILY_UNITS // QUOTA_PER_UPLOAD
-    max_day = up.get("max_per_day", 5)
+    max_day = up.get("max_per_day", 20)
     can_now = max(0, min(by_quota, max_day) - today)
     return {"uploads_today": today, "uploads_per_day_by_quota": by_quota,
             "max_per_day": max_day, "can_schedule_now": can_now,
@@ -759,7 +761,7 @@ def trigger_after_render(clip_dir: Path, cfg: dict) -> None:
         return
     try:
         log_data = load_log()
-        remaining = upload_cfg.get("max_per_day", 3) - uploads_today(log_data)
+        remaining = upload_cfg.get("max_per_day", 20) - uploads_today(log_data)
         if remaining <= 0:
             log.info("daily upload cap reached; %s waits for tomorrow", clip_dir.name)
             return
@@ -826,7 +828,7 @@ def watch(cfg: dict) -> None:
     while ClipForge wasn't running."""
     upload_cfg = cfg.get("upload", {})
     interval = upload_cfg.get("watch_interval_s", 60)
-    max_per_day = upload_cfg.get("max_per_day", 3)
+    max_per_day = upload_cfg.get("max_per_day", 20)
     ntfy_topic = upload_cfg.get("ntfy_topic", "")
 
     youtube = youtube_upload.build_service()
