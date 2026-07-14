@@ -17,6 +17,7 @@ import { mountLibrary } from "./library.js";
 import { mountPublishTiming } from "./publish_timing_panel.js";
 import { mountPresets } from "./presets_panel.js";
 import { mountChannels } from "./channels_panel.js";
+import { mountPostQueue } from "./post_queue_panel.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -1038,7 +1039,11 @@ async function renderYouTube() {
 
   const left = el("div", { class: "card", style: "display:grid;gap:16px" });
   const right = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
-  body.replaceChildren(left, right);
+  const postQueueCard = el("div", {
+    class: "card uq-span", style: "display:grid;gap:12px",
+  });
+  body.replaceChildren(left, right, postQueueCard);
+  mountPostQueue(postQueueCard);
 
   if (!st.configured) {
     left.append(

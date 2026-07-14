@@ -287,6 +287,14 @@ upload:
                                 # upload; false = fully automatic (pre-approval behavior)
   max_per_day: 5
   max_per_run: 5
+  accounts:                     # destination accounts for the posting queue.
+    # Per-account settings win over the flat keys above (which remain the
+    # fallback for anything unset). Additional accounts each need their own
+    # one-time OAuth (token cached as cache/youtube_token_<name>.json);
+    # 'default' uses the original cache/youtube_token.json.
+    default:
+      max_per_day: 5
+      publish_slots_ist: [12, 17, 19]
   schedule_ahead_days: 3        # "Sync schedule" pre-books this many days of
                                 # slots as private+publishAt uploads, so the
                                 # laptop needn't be on at publish time (capped

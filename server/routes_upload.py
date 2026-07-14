@@ -571,3 +571,108 @@ def zip_backup_status(job_id: str):
         if job is None:
             raise HTTPException(404, "That backup job isn't active anymore.")
         return dict(job)
+
+
+# ============================================================
+# Posting queue + per-account quota + calendar (Phase X Part 5)
+# ============================================================
+class QueueReorder(BaseModel):
+    clip_keys: list[str]
+
+
+class QueueAdd(BaseModel):
+    clip_key: str
+    account: str = "default"
+
+
+class QuotaPatch(BaseModel):
+    max_per_day: int
+
+
+@router.get("/api/queue/posting")
+def posting_queue():
+    """The posting queue plus per-account quota — the dashboard's 'how many
+    go out today' view."""
+    from upload_scheduler import (list_accounts, load_log, load_queue,
+                                  quota_status)
+    import youtube_upload as yt
+    cfg = load_config()
+    log_data = load_log()
+    return {
+        "queue": load_queue()["queue"],
+        "accounts": [{**quota_status(cfg, log_data, a),
+                      "authorized": yt.authorized(a)}
+                     for a in list_accounts(cfg)],
+    }
+
+
+@router.post("/api/queue/posting")
+def posting_queue_add(body: QueueAdd):
+    from upload_scheduler import queue_add
+    queue_add(body.clip_key, account=body.account, source="manual")
+    return {"queued": body.clip_key}
+
+
+@router.post("/api/queue/posting/reorder")
+def posting_queue_reorder(body: QueueReorder):
+    from upload_scheduler import queue_reorder
+    return queue_reorder(body.clip_keys)
+
+
+@router.delete("/api/queue/posting/{clip_key:path}")
+def posting_queue_remove(clip_key: str):
+    from upload_scheduler import queue_remove
+    queue_remove(clip_key)
+    return {"removed": clip_key}
+
+
+@router.post("/api/queue/posting/drain")
+def posting_queue_drain():
+    """Manual 'send what's due now' — the same drain the render hook runs."""
+    from upload_scheduler import drain_queue
+    try:
+        n = drain_queue(load_config())
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, friendly(e, "Sending queued clips"))
+    return {"uploaded": n}
+
+
+@router.patch("/api/accounts/{account}/quota")
+def patch_account_quota(account: str, body: QuotaPatch):
+    """The quick 'how many do I want to go out today' control. Takes effect
+    on the next slot computation; no restart needed."""
+    from upload_scheduler import list_accounts
+    cfg = load_config()
+    if account not in list_accounts(cfg):
+        raise HTTPException(404, "That account isn't configured.")
+    n = max(0, min(50, int(body.max_per_day)))
+    try:
+        save_config({"upload": {"accounts": {account: {"max_per_day": n}}}})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, friendly(e, "Saving that setting"))
+    return {"account": account, "max_per_day": n}
+
+
+@router.post("/api/accounts/{account}/authorize")
+def authorize_account(account: str):
+    """One-time OAuth for an additional destination account (explicit button
+    press only — same rule as the main authorize endpoint)."""
+    import youtube_upload as yt
+    from upload_scheduler import list_accounts
+    if account not in list_accounts(load_config()):
+        raise HTTPException(404, "That account isn't configured.")
+    if not yt.credentials_available():
+        raise HTTPException(409, "YouTube isn't set up yet — add the Google "
+                                 "credentials file first (see Settings).")
+    try:
+        yt.authorize(account)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, friendly(e, "Connecting to YouTube"))
+    return {"account": account, "authorized": yt.authorized(account)}
+
+
+@router.get("/api/queue/calendar")
+def queue_calendar(account: str | None = None, days: int = 7):
+    from upload_scheduler import calendar_view, load_log
+    return calendar_view(load_config(), load_log(), account=account,
+                         days=max(1, min(31, days)))

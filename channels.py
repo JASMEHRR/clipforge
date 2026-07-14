@@ -123,7 +123,7 @@ def update_channel(ch_id: str, fields: dict) -> dict:
     """Patch editable fields. Blanking permission_source or credit_text is
     refused — the gate can be paused but not silently removed."""
     editable = {"name", "permission_source", "credit_text", "paused",
-                "default_preset", "top_n"}
+                "default_preset", "top_n", "account"}
     with _store_lock:
         store = load_store()
         ch = store["channels"].get(ch_id)
@@ -137,6 +137,7 @@ def update_channel(ch_id: str, fields: dict) -> dict:
                 raise ChannelError(f"{k} cannot be blank")
             ch[k] = int(v) if k == "top_n" else (
                 bool(v) if k == "paused" else str(v).strip())
+        ch.setdefault("account", "default")
         save_store(store)
     return ch
 
@@ -303,6 +304,11 @@ def process_next(cfg: dict | None = None) -> bool:
                             "defaults", ch.get("name"), preset_name, e)
         opts["credit_text"] = ch.get("credit_text", "")
         run_cfg = apply_run_options(cfg, opts)
+        # rendered clips enter the posting queue as channel content, at the
+        # channel's destination account, with new uploads ahead of top hits
+        run_cfg.setdefault("upload", {})["queue_source"] = \
+            "channel_new" if entry.get("source") == "new" else "channel_top"
+        run_cfg["upload"]["queue_account"] = ch.get("account", "default")
         log.info("auto-pull processing %s (%s) from %s", vid,
                  entry.get("title", "")[:60], ch.get("name"))
         job = pipeline.run_job(

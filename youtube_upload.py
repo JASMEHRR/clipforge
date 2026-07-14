@@ -17,6 +17,17 @@ from logutil import get_logger
 log = get_logger("upload")
 
 TOKEN_PATH = ROOT / "cache" / "youtube_token.json"
+
+
+def token_path(account: str = "default") -> Path:
+    """Per-account OAuth token cache. The 'default' account keeps the legacy
+    path so existing single-account installs stay authorized untouched."""
+    if not account or account == "default":
+        return TOKEN_PATH
+    safe = "".join(c for c in account if c.isalnum() or c in "-_").lower()
+    if not safe:
+        raise UploadError(f"invalid account name: {account!r}")
+    return ROOT / "cache" / f"youtube_token_{safe}.json"
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -53,47 +64,52 @@ def credentials_available() -> bool:
     return bool(p) and Path(p).exists()
 
 
-def has_cached_token() -> bool:
-    return TOKEN_PATH.exists()
+def has_cached_token(account: str = "default") -> bool:
+    return token_path(account).exists()
 
 
-def authorized() -> bool:
+def authorized(account: str = "default") -> bool:
     """True if the app can talk to the channel right now (credentials
     configured AND a token has been granted). Any probe failure counts as
     not connected — shared by every route that gates on YouTube access."""
     try:
-        return bool(credentials_available() and has_cached_token())
+        return bool(credentials_available() and has_cached_token(account))
     except Exception:  # noqa: BLE001
         return False
 
 
-def authorize() -> None:
-    """Run the OAuth browser flow. ONLY called from an explicit user action
-    (UI button / CLI flag). Never runs during the automated build."""
+def authorize(account: str = "default") -> None:
+    """Run the OAuth browser flow for one destination account. ONLY called
+    from an explicit user action (UI button / CLI flag). Never runs during
+    the automated build."""
     if not credentials_available():
         raise UploadError("no client secrets configured", detail=SETUP_INSTRUCTIONS)
     from google_auth_oauthlib.flow import InstalledAppFlow
     flow = InstalledAppFlow.from_client_secrets_file(
         os.environ["YOUTUBE_CLIENT_SECRETS"], SCOPES)
     creds = flow.run_local_server(port=0, open_browser=True)
-    TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
-    log.info("YouTube authorization complete; token cached")
+    path = token_path(account)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(creds.to_json(), encoding="utf-8")
+    log.info("YouTube authorization complete for account '%s'; token cached",
+             account)
 
 
-def _load_credentials():
+def _load_credentials(account: str = "default"):
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
-    if not TOKEN_PATH.exists():
-        raise UploadError("not authorized yet", detail=SETUP_INSTRUCTIONS)
-    creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+    path = token_path(account)
+    if not path.exists():
+        raise UploadError(f"account '{account}' not authorized yet",
+                          detail=SETUP_INSTRUCTIONS)
+    creds = Credentials.from_authorized_user_file(str(path), SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-        TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+        path.write_text(creds.to_json(), encoding="utf-8")
     return creds
 
 
-def build_service(service=None):
+def build_service(service=None, account: str = "default"):
     """Build the YouTube API client. Tests inject a mocked `service`."""
     if service is not None:
         return service
@@ -101,18 +117,19 @@ def build_service(service=None):
         log.warning("[DRY RUN] not building a real YouTube client")
         return _DRY_SERVICE
     from googleapiclient.discovery import build
-    return build("youtube", "v3", credentials=_load_credentials(),
+    return build("youtube", "v3", credentials=_load_credentials(account),
                  cache_discovery=False)
 
 
-def build_analytics_service(service=None):
+def build_analytics_service(service=None, account: str = "default"):
     """Build the YouTube Analytics API client. Tests inject a mocked `service`."""
     if service is not None:
         return service
     if dry_run():
         return _DRY_SERVICE
     from googleapiclient.discovery import build
-    return build("youtubeAnalytics", "v2", credentials=_load_credentials(),
+    return build("youtubeAnalytics", "v2",
+                 credentials=_load_credentials(account),
                  cache_discovery=False)
 
 

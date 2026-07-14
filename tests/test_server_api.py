@@ -335,6 +335,7 @@ def _isolate_upload_scheduler(monkeypatch, tmp_path):
     monkeypatch.setattr(sched, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(sched, "ROOT", tmp_path)
     monkeypatch.setattr(sched, "LOG_FILE", tmp_path / "cache" / "upload_log.json")
+    monkeypatch.setattr(sched, "QUEUE_FILE", tmp_path / "cache" / "post_queue.json")
     monkeypatch.setattr(ru, "ROOT", tmp_path)
     # keep the library's output_root (used by delete/storage/cleanup) pointed at
     # the same isolated tree the scheduler scans, so keys resolve consistently
@@ -425,7 +426,7 @@ def test_youtube_queue_upload_confirm_then_submit_flow(client, monkeypatch, tmp_
     _write_candidate_clip(output_dir, "job1", "clip_01", score=80, title="Bad clip")
 
     monkeypatch.setattr("youtube_upload.credentials_available", lambda: True)
-    monkeypatch.setattr("youtube_upload.has_cached_token", lambda: True)
+    monkeypatch.setattr("youtube_upload.has_cached_token", lambda account="default": True)
     monkeypatch.setattr("youtube_upload.build_service", lambda service=None: object())
 
     def fake_upload_clip(video, snippet, privacy="private", service=None,
@@ -893,7 +894,7 @@ def test_sync_schedule_and_unschedule_flow(client, monkeypatch, tmp_path):
         _write_candidate_clip(output_dir, "job1", f"clip_{i:02d}", score=90,
                               title=f"Clip {i}")
     monkeypatch.setattr(yt, "credentials_available", lambda: True)
-    monkeypatch.setattr(yt, "has_cached_token", lambda: True)
+    monkeypatch.setattr(yt, "has_cached_token", lambda account="default": True)
     monkeypatch.setattr(yt, "build_service", lambda service=None: object())
     monkeypatch.setattr(yt, "build_analytics_service", lambda service=None: None)
     n = {"i": 0}
@@ -935,7 +936,7 @@ def test_dry_run_sync_schedule_never_hits_api(client, monkeypatch, tmp_path):
     # authorized on this machine, but dry-run must still block every real call
     monkeypatch.setenv("CLIPFORGE_DRY_RUN", "1")
     monkeypatch.setattr(yt, "credentials_available", lambda: True)
-    monkeypatch.setattr(yt, "has_cached_token", lambda: True)
+    monkeypatch.setattr(yt, "has_cached_token", lambda account="default": True)
     monkeypatch.setattr(yt, "_load_credentials",
                         lambda: pytest.fail("reached real credentials in dry-run"))
 

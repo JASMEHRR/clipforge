@@ -25,6 +25,11 @@ log = get_logger("upload")
 
 OUTPUT_DIR = ROOT / "output"
 LOG_FILE = ROOT / "cache" / "upload_log.json"
+QUEUE_FILE = ROOT / "cache" / "post_queue.json"
+
+# posting-queue priority: newest uploads from approved channels first, then
+# their top performers, then manually queued clips
+_SOURCE_RANK = {"channel_new": 0, "channel_top": 1, "manual": 2}
 
 IST = timezone(timedelta(hours=5, minutes=30))
 MIN_VIEWS_FOR_ANALYTICS = 500
@@ -69,12 +74,43 @@ def save_log(log_data: dict) -> None:
     tmp.replace(path)  # atomic on same drive; no half-written logs
 
 
-def uploads_today(log_data: dict) -> int:
+def uploads_today(log_data: dict, account: str | None = None) -> int:
+    """Uploads that went out today, optionally for one destination account
+    (log entries without an `account` field are legacy = 'default')."""
     today = datetime.now(IST).date().isoformat()
     return sum(
         1 for v in log_data["uploads"].values()
         if (v.get("uploaded_at") or "").startswith(today)
+        and (account is None or v.get("account", "default") == account)
     )
+
+
+# ============================================================
+# Destination accounts (multi-account posting)
+# ============================================================
+def list_accounts(cfg: dict) -> list[str]:
+    """Configured destination accounts; a config without an accounts block is
+    the legacy single-account setup ('default')."""
+    accounts = cfg.get("upload", {}).get("accounts") or {}
+    return sorted(accounts.keys()) if accounts else ["default"]
+
+
+def account_cfg(cfg: dict, account: str = "default") -> dict:
+    """Effective per-account settings with back-compat: account-level values
+    win, flat upload.* keys are the fallback (so pre-multi-account configs
+    behave identically)."""
+    up = cfg.get("upload", {})
+    acc = (up.get("accounts") or {}).get(account) or {}
+    return {
+        "max_per_day": int(acc.get("max_per_day",
+                                   up.get("max_per_day", 20))),
+        "publish_slots_ist": list(acc.get("publish_slots_ist",
+                                          up.get("publish_slots_ist",
+                                                 [12, 19]))),
+        "slot_spacing_minutes": int(acc.get("slot_spacing_minutes",
+                                            up.get("slot_spacing_minutes",
+                                                   60))),
+    }
 
 
 # ============================================================
@@ -577,17 +613,20 @@ def _slots_per_day(cfg: dict) -> int:
                       up.get("max_per_day", 20)))
 
 
-def quota_status(cfg: dict, log_data: dict) -> dict:
-    """Honest quota math for the UI. Each upload spends QUOTA_PER_UPLOAD units
-    against a QUOTA_DAILY_UNITS/day ceiling, so only so many clips can be
-    *pushed to YouTube* per day; `can_schedule_now` is how many more today,
-    counting what's already gone out (survives restarts via the log)."""
-    up = cfg.get("upload", {})
-    today = uploads_today(log_data)
+def quota_status(cfg: dict, log_data: dict,
+                 account: str = "default") -> dict:
+    """Honest quota math for the UI, per destination account. Each upload
+    spends QUOTA_PER_UPLOAD units against a QUOTA_DAILY_UNITS/day ceiling, so
+    only so many clips can be *pushed to YouTube* per day;
+    `can_schedule_now` is how many more today, counting what's already gone
+    out (survives restarts via the log)."""
+    acc = account_cfg(cfg, account)
+    today = uploads_today(log_data, account)
     by_quota = QUOTA_DAILY_UNITS // QUOTA_PER_UPLOAD
-    max_day = up.get("max_per_day", 20)
+    max_day = acc["max_per_day"]
     can_now = max(0, min(by_quota, max_day) - today)
-    return {"uploads_today": today, "uploads_per_day_by_quota": by_quota,
+    return {"account": account, "uploads_today": today,
+            "uploads_per_day_by_quota": by_quota,
             "max_per_day": max_day, "can_schedule_now": can_now,
             "quota_per_upload": QUOTA_PER_UPLOAD,
             "quota_daily": QUOTA_DAILY_UNITS}
@@ -747,27 +786,202 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
 
 
 # ============================================================
+# Posting queue (per-account, priority-ordered, drag-reorderable)
+# ============================================================
+def load_queue() -> dict:
+    if QUEUE_FILE.exists():
+        try:
+            data = json.loads(QUEUE_FILE.read_text(encoding="utf-8"))
+            data.setdefault("queue", [])
+            return data
+        except json.JSONDecodeError:
+            backup = QUEUE_FILE.with_suffix(".json.corrupt")
+            QUEUE_FILE.replace(backup)
+            log.warning("%s was corrupt; moved to %s, starting fresh",
+                        QUEUE_FILE.name, backup.name)
+    return {"queue": []}
+
+
+def save_queue(data: dict) -> None:
+    QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = QUEUE_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(QUEUE_FILE)
+
+
+def queue_add(clip_key: str, account: str = "default",
+              source: str = "manual", qdata: dict | None = None) -> dict:
+    """Insert a clip into the posting queue at its priority position
+    (channel_new > channel_top > manual; FIFO within a rank). Re-adding an
+    already-queued clip is a no-op. Manual drag order is respected: insertion
+    only skips past lower-priority entries, never reorders existing ones."""
+    data = qdata if qdata is not None else load_queue()
+    if any(e["clip_key"] == clip_key for e in data["queue"]):
+        return data
+    entry = {"clip_key": clip_key, "account": account or "default",
+             "source": source if source in _SOURCE_RANK else "manual",
+             "added_at": datetime.now(IST).isoformat()}
+    rank = _SOURCE_RANK[entry["source"]]
+    pos = len(data["queue"])
+    for i, e in enumerate(data["queue"]):
+        if _SOURCE_RANK.get(e.get("source", "manual"), 2) > rank:
+            pos = i
+            break
+    data["queue"].insert(pos, entry)
+    if qdata is None:
+        save_queue(data)
+    return data
+
+
+def queue_reorder(clip_keys: list[str]) -> dict:
+    """Persist a manual drag order: listed keys first (in the given order),
+    any unlisted entries keep their relative order after them."""
+    data = load_queue()
+    by_key = {e["clip_key"]: e for e in data["queue"]}
+    ordered = [by_key[k] for k in clip_keys if k in by_key]
+    rest = [e for e in data["queue"] if e["clip_key"] not in set(clip_keys)]
+    data["queue"] = ordered + rest
+    save_queue(data)
+    return data
+
+
+def queue_remove(clip_key: str) -> dict:
+    data = load_queue()
+    data["queue"] = [e for e in data["queue"] if e["clip_key"] != clip_key]
+    save_queue(data)
+    return data
+
+
+def drain_queue(cfg: dict, service=None) -> int:
+    """Upload queued clips in queue order, per account, respecting each
+    account's daily cap and publish slots. Entries whose clip no longer
+    qualifies (deleted, already uploaded, rejected, below virality) are
+    dropped. Returns how many uploads went out. Never raises."""
+    done = 0
+    try:
+        data = load_queue()
+        if not data["queue"]:
+            return 0
+        log_data = load_log()
+        candidates = {c["key"]: c for c in find_candidates(cfg, log_data)}
+        for account in list_accounts(cfg):
+            mine = [e for e in data["queue"] if
+                    e.get("account", "default") == account]
+            if not mine:
+                continue
+            if not youtube_upload.authorized(account) and service is None:
+                log.info("queue: account '%s' not authorized; %d clip(s) wait",
+                         account, len(mine))
+                continue
+            remaining = quota_status(cfg, log_data, account)["can_schedule_now"]
+            acc = account_cfg(cfg, account)
+            batch = []
+            for e in mine:
+                if len(batch) >= remaining:
+                    break
+                c = candidates.get(e["clip_key"])
+                if c is None:
+                    # gone for good (uploaded/deleted) → drop; merely
+                    # ineligible right now (e.g. awaiting approval) → wait
+                    if e["clip_key"] in log_data["uploads"] or \
+                            not (ROOT / e["clip_key"] / "final.mp4").exists():
+                        data["queue"].remove(e)
+                    continue
+                batch.append((e, c))
+            if not batch:
+                continue
+            youtube = youtube_upload.build_service(service, account=account)
+            times = next_publish_times(
+                len(batch), None, log_data, acc["publish_slots_ist"],
+                acc["slot_spacing_minutes"], cfg=cfg)
+            category_id = cfg.get("upload", {}).get("category_id", "22")
+            ntfy = cfg.get("upload", {}).get("ntfy_topic", "")
+            for (entry, clip), publish_at in zip(batch, times):
+                try:
+                    result = upload_one(youtube, clip, publish_at,
+                                        category_id, cfg=cfg)
+                except UploadError as e:
+                    log.error("queue upload failed for %s: %s",
+                              clip["key"], e)
+                    notify("ClipForge upload FAILED",
+                           f"{clip['key']}: {e}\nStays queued.", ntfy)
+                    break
+                log_data["uploads"][clip["key"]] = {
+                    "video_id": result["video_id"],
+                    "uploaded_at": result["uploaded_at"],
+                    "publish_at": publish_at.isoformat(),
+                    "title": build_snippet(clip["meta"])["title"],
+                    "virality_score": clip["score"],
+                    "account": account,
+                }
+                save_log(log_data)
+                data["queue"].remove(entry)
+                done += 1
+                notify("Short scheduled",
+                       f"'{build_snippet(clip['meta'])['title']}' → "
+                       f"{account}, publishes "
+                       f"{publish_at.strftime('%d %b, %I:%M %p IST')}",
+                       ntfy)
+        save_queue(data)
+    except Exception as e:  # noqa: BLE001 — queue drain must never kill a caller
+        log.warning("queue drain failed: %s", e)
+    return done
+
+
+def calendar_view(cfg: dict, log_data: dict, account: str | None = None,
+                  days: int = 7) -> dict:
+    """What's going out when: scheduled publishes grouped by date (today
+    onward, `days` ahead) plus the still-unscheduled queue. Pure given its
+    arguments."""
+    start = datetime.now(IST).date()
+    day_map: dict[str, list] = {
+        (start + timedelta(days=i)).isoformat(): [] for i in range(days)}
+    for key, e in log_data["uploads"].items():
+        if account and e.get("account", "default") != account:
+            continue
+        pa = e.get("publish_at")
+        try:
+            t = datetime.fromisoformat(pa) if pa else None
+        except ValueError:
+            continue
+        if t is None:
+            continue
+        d = t.date().isoformat()
+        if d in day_map:
+            day_map[d].append({"key": key, "title": e.get("title", ""),
+                               "time": t.strftime("%H:%M"),
+                               "account": e.get("account", "default"),
+                               "video_id": e.get("video_id", "")})
+    for entries in day_map.values():
+        entries.sort(key=lambda x: x["time"])
+    queued = [e for e in load_queue()["queue"]
+              if not account or e.get("account", "default") == account]
+    return {"days": [{"date": d, "posts": v} for d, v in day_map.items()],
+            "queued": queued}
+
+
+# ============================================================
 # Pipeline hook — the primary, event-driven path
 # ============================================================
 def trigger_after_render(clip_dir: Path, cfg: dict) -> None:
     """Called right after a clip's final.mp4 + metadata.json are finalized.
-    No-ops unless upload.auto_enabled and YouTube is authorized. Never raises
-    into the caller — a failed/unqualified upload must never fail a clip."""
+    Routes the clip INTO the posting queue (single code path for pacing and
+    quota), then drains the queue. No-ops unless upload.auto_enabled. Never
+    raises into the caller — a failed/unqualified upload must never fail a
+    clip."""
     upload_cfg = cfg.get("upload", {})
     if not upload_cfg.get("auto_enabled", False):
         return
-    if not youtube_upload.credentials_available() or not youtube_upload.has_cached_token():
-        log.info("auto-upload enabled but not authorized yet; skipping %s", clip_dir.name)
-        return
     try:
-        log_data = load_log()
-        remaining = upload_cfg.get("max_per_day", 20) - uploads_today(log_data)
-        if remaining <= 0:
-            log.info("daily upload cap reached; %s waits for tomorrow", clip_dir.name)
+        key = str(Path(clip_dir).resolve().relative_to(ROOT)).replace("\\", "/")
+        queue_add(key,
+                  account=upload_cfg.get("queue_account", "default"),
+                  source=upload_cfg.get("queue_source", "manual"))
+        if not youtube_upload.credentials_available():
+            log.info("auto-upload enabled but not configured; %s queued",
+                     clip_dir.name)
             return
-        youtube = youtube_upload.build_service()
-        analytics = youtube_upload.build_analytics_service()
-        upload_batch(youtube, analytics, cfg, log_data, limit=1)
+        drain_queue(cfg)
     except Exception as e:  # noqa: BLE001 — upload is never allowed to kill a render
         log.warning("auto-upload trigger failed for %s: %s", clip_dir.name, e)
 
