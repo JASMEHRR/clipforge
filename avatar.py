@@ -268,6 +268,286 @@ def synthesize_batch(jobs: list[dict], cfg: dict | None = None) -> list[dict]:
     return results
 
 
+# ------------------------------------------------------- stage + composite
+
+def segment_durations(tts_s: float, kind: str, cfg: dict) -> float:
+    """Freeze-segment duration for a TTS line: wav length + pad, clamped to
+    the configured [min, max] for `kind` ('intro' | 'outro')."""
+    t = cfg.get("avatar", {}).get("timing", {})
+    pad = float(t.get("pad_s", 0.4))
+    lo = float(t.get(f"{kind}_min_s", 4.0 if kind == "intro" else 3.0))
+    hi = float(t.get(f"{kind}_max_s", 12.0 if kind == "intro" else 10.0))
+    return round(min(max(float(tts_s) + pad, lo), hi), 3)
+
+
+def prepare_avatar(candidates: list[dict], transcript: dict, job_dir: Path,
+                   cfg: dict, provider: str | None = None) -> list[dict]:
+    """The `avatar` pipeline stage: per candidate, generate the intro/outro
+    scripts, then synthesize EVERY line in one tts_worker.py run (the model
+    loads once — never inside the parallel render workers). Returns one
+    JSON-serializable item per candidate (the stage marker payload):
+      {intro_script, outro_script, intro_wav, outro_wav, intro_s, outro_s}
+    Raises AvatarError when TTS fails — an avatar job without a voice is
+    wrong content, so the stage fails loudly rather than shipping silent
+    intros."""
+    avatar_dir = job_dir / "avatar"
+    avatar_dir.mkdir(exist_ok=True)
+    items: list[dict] = []
+    jobs: list[dict] = []
+    for i, cand in enumerate(candidates):
+        words = [w["word"] for w in transcript["words"]
+                 if w["start"] >= cand["start"] - 0.05
+                 and w["end"] <= cand["end"] + 0.05]
+        clip_text = " ".join(words)
+        script = generate_script(clip_text, cand.get("hook", ""), cfg,
+                                 provider=provider)
+        item = {"intro_script": script["intro"],
+                "outro_script": script["outro"],
+                "intro_wav": str(avatar_dir / f"clip_{i:02d}_intro.wav"),
+                "outro_wav": str(avatar_dir / f"clip_{i:02d}_outro.wav")}
+        jobs.append({"text": script["intro"], "out_path": item["intro_wav"]})
+        jobs.append({"text": script["outro"], "out_path": item["outro_wav"]})
+        items.append(item)
+        log.info("clip %02d scripts: intro=%d words, outro=%d words", i,
+                 len(script["intro"].split()), len(script["outro"].split()))
+    results = synthesize_batch(jobs, cfg)
+    for i, item in enumerate(items):
+        item["intro_s"] = float(results[2 * i]["duration_s"])
+        item["outro_s"] = float(results[2 * i + 1]["duration_s"])
+
+    # Word timings for the avatar karaoke captions: Whisper each short wav
+    # HERE (serial stage — the parallel render workers must never load a
+    # model). Best-effort: a timing failure only drops captions for that
+    # line, never the clip. transcribe() caches per wav hash, so resumes
+    # are instant.
+    if cfg.get("avatar", {}).get("captions", {}).get("enabled", True):
+        import copy
+        import transcribe as transcribe_mod
+        wcfg = copy.deepcopy(cfg)
+        wcfg.setdefault("whisper", {})["model_override"] = str(
+            cfg.get("avatar", {}).get("captions", {}).get("whisper_model",
+                                                          "small"))
+        for i, item in enumerate(items):
+            for kind in ("intro", "outro"):
+                try:
+                    t = transcribe_mod.transcribe(item[f"{kind}_wav"], wcfg)
+                    item[f"{kind}_words"] = t["words"]
+                except Exception as e:  # noqa: BLE001 — captions are an extra
+                    log.warning("clip %02d %s caption timing failed (%s) — "
+                                "avatar captions skipped for that line",
+                                i, kind, e)
+    return items
+
+
+def build_composite_graph(w: int, h: int, layout: dict, intro_dur: float,
+                          outro_dur: float, fps: float,
+                          ass_path: Path | None = None,
+                          fontsdir: Path | None = None) -> str:
+    """Pure filter_complex builder for the 3-segment composite. Input order is
+    fixed: [0] finished clip, [1] first-frame PNG (looped), [2] last-frame PNG
+    (looped), [3] avatar PNG, [4] intro TTS wav, [5] outro TTS wav. Emits
+    [vout] + [acat]. TTS longer than its segment is trimmed with a short fade;
+    shorter is padded with silence, so A/V stays in sync by construction."""
+    cw = int(w * float(layout.get("clip_scale", 0.62))) // 2 * 2
+    aw = int(w * float(layout.get("avatar_scale", 0.42))) // 2 * 2
+    cy = int(h * float(layout.get("clip_y", 0.07)))
+    m = int(layout.get("margin_px", 48))
+    canvas = str(layout.get("canvas_color", "0x101014"))
+    left, right = f"{m}", f"W-w-{m}"
+    ix = left if layout.get("intro_side", "left") != "right" else right
+    ox = right if layout.get("outro_side", "right") != "left" else left
+
+    def _seg(tag: str, src: int, av: str, x: str, dur: float) -> list[str]:
+        fade = max(0.0, dur - 0.15)
+        return [
+            f"color=c={canvas}:s={w}x{h}:d={dur:.3f}:r={fps:.3f}[{tag}bg]",
+            f"[{src}:v]scale={cw}:-2,setsar=1[{tag}fr]",
+            f"[{tag}bg][{tag}fr]overlay=(W-w)/2:{cy}[{tag}b1]",
+            f"[{tag}b1][{av}]overlay={x}:H-h-{m}[{tag}b2]",
+            f"[{tag}b2]fps={fps:.3f},format=yuv420p[{tag}v]",
+            f"[{4 if tag == 'intro' else 5}:a]aresample=44100,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"atrim=0:{dur:.3f},afade=t=out:st={fade:.3f}:d=0.15,"
+            f"apad=whole_dur={dur:.3f}[{tag}a]",
+        ]
+
+    parts = [f"[3:v]format=rgba,scale={aw}:-1,split[avI][avO]"]
+    parts += _seg("intro", 1, "avI", ix, intro_dur)
+    parts += _seg("outro", 2, "avO", ox, outro_dur)
+    parts += [
+        f"[0:v]setsar=1,fps={fps:.3f},format=yuv420p[mainv]",
+        "[0:a]aresample=44100,"
+        "aformat=sample_fmts=fltp:channel_layouts=stereo[maina]",
+        "[introv][introa][mainv][maina][outrov][outroa]"
+        "concat=n=3:v=1:a=1[vcat][acat]",
+    ]
+    if ass_path is not None:
+        import ffutil
+        sub = f"subtitles=filename='{ffutil.filter_path(ass_path)}'"
+        if fontsdir is not None:
+            sub += f":fontsdir='{ffutil.filter_path(fontsdir)}'"
+        parts.append(f"[vcat]{sub}[vout]")
+    else:
+        parts.append("[vcat]null[vout]")
+    return ";".join(parts)
+
+
+def write_avatar_ass(intro_words: list[dict], outro_words: list[dict],
+                     ass_path: Path, cfg: dict, intro_dur: float,
+                     outro_dur: float, main_dur: float,
+                     play_w: int = 1080, play_h: int = 1920) -> None:
+    """Karaoke ASS for the avatar's speech, in COMPOSITE time: intro events
+    start at 0, outro events are offset by intro_dur + main_dur. One Avatar
+    style derived from the active caption preset (smaller, positioned in the
+    avatar zone via avatar.captions.*_anchor — deliberately outside the main
+    captions' 0.52-0.66 law; the frozen background guarantees clean space)."""
+    import captions
+    ccfg = cfg["captions"]
+    preset = ccfg["presets"][ccfg["preset"]]
+    family, bold = captions._font(preset["font"])
+    size = max(36, int(preset["font_size"] * 0.7))
+    acfg = cfg.get("avatar", {}).get("captions", {})
+    scale = int(preset.get("highlight_scale", 100))
+    max_words = int(ccfg["max_words_per_line"])
+    cx = play_w // 2
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {play_w}
+PlayResY: {play_h}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Avatar,{family},{size},{preset['primary_color']},{preset['highlight_color']},{preset['outline_color']},&H80000000,{bold},0,0,0,100,100,0,0,1,{preset['outline']},{preset['shadow']},5,90,90,0,1
+"""
+    header += ("\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, "
+               "MarginR, MarginV, Effect, Text\n")
+
+    def _events(words, offset, limit, anchor):
+        pos = rf"{{\an5\pos({cx},{int(float(anchor) * play_h)})}}"
+        kept = [w for w in words if w["start"] < limit - 0.05]
+        out = []
+        for line in captions.build_caption_lines(kept, max_words):
+            tokens = [captions._esc(w["word"]) for w in line["words"]]
+            for k, w in enumerate(line["words"]):
+                start = line["start"] if k == 0 else w["start"]
+                end = (line["words"][k + 1]["start"]
+                       if k + 1 < len(line["words"]) else line["end"])
+                end = min(end, limit)
+                if end - start < 0.01:
+                    continue
+                parts = []
+                for j, tok in enumerate(tokens):
+                    if j != k:
+                        parts.append(tok)
+                    else:
+                        parts.append(r"{\c" + preset["highlight_color"] + "&"
+                                     + rf"\fscx{scale}\fscy{scale}" + "}"
+                                     + tok + r"{\r}")
+                out.append((offset + start, offset + end,
+                            pos + " ".join(parts)))
+        return out
+
+    events = _events(intro_words or [], 0.0, intro_dur,
+                     acfg.get("intro_anchor", 0.80))
+    events += _events(outro_words or [], intro_dur + main_dur, outro_dur,
+                      acfg.get("outro_anchor", 0.80))
+    with open(ass_path, "w", encoding="utf-8-sig") as f:
+        f.write(header)
+        for start, end, text in events:
+            f.write(f"Dialogue: 0,{captions._ts(start)},{captions._ts(end)},"
+                    f"Avatar,,0,0,0,,{text}\n")
+
+
+def _resolve_avatar_image(cfg: dict) -> Path:
+    img = str(cfg.get("avatar", {}).get("image", "")).strip()
+    if not img:
+        raise AvatarError("avatar.image is not set — point it at an avatar "
+                          "PNG (alpha), e.g. assets/user_branding/avatar.png")
+    p = Path(img)
+    p = p if p.is_absolute() else ROOT / p
+    if not p.is_file():
+        raise AvatarError(f"avatar image not found: {p}")
+    return p
+
+
+def apply_avatar(final: Path, clip_dir: Path, item: dict,
+                 cfg: dict) -> dict:
+    """Wrap the finished clip in the avatar intro/outro segments (in place:
+    `final` is replaced). Freeze frames come from the pre-caption reframed.mp4
+    when present so no burned caption fragment freezes on screen. Raises
+    AvatarError on any failure — an avatar clip without its avatar is wrong,
+    so this is NOT best-effort like bumpers."""
+    import ffutil
+    final = Path(final)
+    avatar_png = _resolve_avatar_image(cfg)
+    info = ffutil.probe(final)
+    if not info["has_audio"]:
+        raise AvatarError(f"{final.name} has no audio stream")
+    w, h, fps, main_dur = (info["width"], info["height"], info["fps"],
+                           info["duration"])
+    intro_dur = segment_durations(item["intro_s"], "intro", cfg)
+    outro_dur = segment_durations(item["outro_s"], "outro", cfg)
+
+    # freeze frames from the pre-caption render when available (its duration
+    # can differ from final's once bumpers are appended — use its own probe)
+    freeze_src = clip_dir / "reframed.mp4"
+    if not freeze_src.is_file():
+        freeze_src = final
+    src_dur = ffutil.probe(freeze_src)["duration"]
+    first_png = clip_dir / "avatar_first.png"
+    last_png = clip_dir / "avatar_last.png"
+    ffutil.run_ffmpeg(["-i", freeze_src, "-frames:v", "1", "-update", "1",
+                       first_png])
+    ffutil.run_ffmpeg(["-ss", f"{max(0.0, src_dur - 0.15):.3f}",
+                       "-i", freeze_src, "-frames:v", "1", "-update", "1",
+                       last_png])
+
+    # avatar karaoke captions (intro/outro only): burned by the composite pass
+    ass_path, fontsdir = None, None
+    if cfg.get("avatar", {}).get("captions", {}).get("enabled", True) and \
+            (item.get("intro_words") or item.get("outro_words")):
+        import fontreg
+        ass_path = clip_dir / "avatar.ass"
+        write_avatar_ass(item.get("intro_words") or [],
+                         item.get("outro_words") or [],
+                         ass_path, cfg, intro_dur, outro_dur, main_dur,
+                         play_w=w, play_h=h)
+        fontsdir = fontreg.fonts_dir(cfg)
+
+    layout = cfg.get("avatar", {}).get("layout", {})
+    graph = build_composite_graph(w, h, layout, intro_dur, outro_dur, fps,
+                                  ass_path=ass_path, fontsdir=fontsdir)
+    out = clip_dir / "final_avatar.mp4"
+    args = ["-i", final,
+            "-loop", "1", "-t", f"{intro_dur:.3f}", "-i", first_png,
+            "-loop", "1", "-t", f"{outro_dur:.3f}", "-i", last_png,
+            "-i", avatar_png,
+            "-i", item["intro_wav"], "-i", item["outro_wav"],
+            "-filter_complex", graph, "-map", "[vout]", "-map", "[acat]"]
+    args += ffutil.video_encode_args(cfg, final=True)
+    args += ["-c:a", "aac", "-b:a", cfg["render"]["audio_bitrate"],
+             "-movflags", "+faststart", out]
+    ffutil.run_ffmpeg(args, progress_label=f"avatar {clip_dir.name}")
+
+    total = intro_dur + main_dur + outro_dur
+    got = ffutil.probe(out)["duration"]
+    if abs(got - total) > 1.5:   # same tolerance as cut.cut_segments
+        raise AvatarError(
+            f"avatar composite duration {got:.2f}s != expected {total:.2f}s")
+    try:
+        out.replace(final)
+    except OSError as e:
+        raise AvatarError(f"could not replace {final.name}: {e}")
+    log.info("%s: avatar composite applied (intro %.1fs + clip %.1fs + "
+             "outro %.1fs)", clip_dir.name, intro_dur, main_dur, outro_dur)
+    return {"intro_s": intro_dur, "outro_s": outro_dur,
+            "intro_script": item["intro_script"],
+            "outro_script": item["outro_script"]}
+
+
 # ---------------------------------------------------------- one-time setup
 
 def _run_step(args: list, label: str) -> None:

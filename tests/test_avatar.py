@@ -233,6 +233,136 @@ def test_synthesize_batch_output_missing_on_disk(tmp_path, monkeypatch):
         avatar.synthesize_batch(jobs, cfg)
 
 
+# ----------------------------------------------------- composite (pure fns)
+
+TIMING_CFG = {"avatar": {"timing": {"pad_s": 0.4, "intro_min_s": 4.0,
+                                    "intro_max_s": 12.0, "outro_min_s": 3.0,
+                                    "outro_max_s": 10.0}}}
+
+
+def test_segment_durations_pads_and_clamps():
+    assert avatar.segment_durations(7.0, "intro", TIMING_CFG) == 7.4
+    assert avatar.segment_durations(1.0, "intro", TIMING_CFG) == 4.0   # min
+    assert avatar.segment_durations(60.0, "intro", TIMING_CFG) == 12.0  # max
+    assert avatar.segment_durations(1.0, "outro", TIMING_CFG) == 3.0
+    assert avatar.segment_durations(60.0, "outro", TIMING_CFG) == 10.0
+
+
+LAYOUT = {"clip_scale": 0.62, "clip_y": 0.07, "avatar_scale": 0.42,
+          "intro_side": "left", "outro_side": "right", "margin_px": 48}
+
+
+def test_composite_graph_structure():
+    g = avatar.build_composite_graph(1080, 1920, LAYOUT, 8.0, 6.0, 30.0)
+    assert "concat=n=3:v=1:a=1[vcat][acat]" in g
+    assert "[vcat]null[vout]" in g
+    # intro avatar left, outro avatar right
+    assert "[introb1][avI]overlay=48:H-h-48" in g
+    assert "[outrob1][avO]overlay=W-w-48:H-h-48" in g
+    # even-width scales
+    assert "scale=668:-2" in g          # 1080*0.62=669.6 -> 668 (even)
+    assert "scale=452:-1" in g          # 1080*0.42=453.6 -> 452 (even)
+    # TTS trimmed/padded to the exact segment lengths
+    assert "atrim=0:8.000" in g and "apad=whole_dur=8.000" in g
+    assert "atrim=0:6.000" in g and "apad=whole_dur=6.000" in g
+
+
+def test_composite_graph_side_swap():
+    layout = {**LAYOUT, "intro_side": "right", "outro_side": "left"}
+    g = avatar.build_composite_graph(1080, 1920, layout, 8.0, 6.0, 30.0)
+    assert "[introb1][avI]overlay=W-w-48:H-h-48" in g
+    assert "[outrob1][avO]overlay=48:H-h-48" in g
+
+
+def test_composite_graph_with_subtitles(tmp_path):
+    ass = tmp_path / "avatar.ass"
+    g = avatar.build_composite_graph(1080, 1920, LAYOUT, 8.0, 6.0, 30.0,
+                                     ass_path=ass, fontsdir=tmp_path)
+    assert "[vcat]subtitles=filename=" in g and "[vout]" in g
+    assert "fontsdir=" in g
+    assert "null" not in g
+
+
+# ----------------------------------------------------------- avatar captions
+
+CAP_CFG = {
+    "captions": {
+        "preset": "karaoke-pop", "max_words_per_line": 3,
+        "presets": {"karaoke-pop": {
+            "font": "Montserrat ExtraBold", "font_size": 88,
+            "primary_color": "&H00FFFFFF", "highlight_color": "&H0000D7FF",
+            "outline_color": "&H00000000", "outline": 5, "shadow": 1,
+            "highlight_scale": 108}}},
+    "avatar": {"captions": {"intro_anchor": 0.80, "outro_anchor": 0.80}},
+}
+
+
+def test_write_avatar_ass_positions_and_offsets(tmp_path):
+    intro_words = [{"word": "Hello", "start": 0.2, "end": 0.6},
+                   {"word": "viewers", "start": 0.7, "end": 1.2}]
+    outro_words = [{"word": "Goodbye", "start": 1.0, "end": 1.5}]
+    ass = tmp_path / "avatar.ass"
+    avatar.write_avatar_ass(intro_words, outro_words, ass, CAP_CFG,
+                            intro_dur=8.0, outro_dur=6.0, main_dur=30.0)
+    text = ass.read_text(encoding="utf-8-sig")
+    # style derived from the active preset, alignment 5, avatar-zone position
+    assert "Style: Avatar,Montserrat ExtraBold,61" in text
+    assert r"\pos(540,1536)" in text                # 0.80 * 1920
+    # intro events start at composite t=0; outro offset by intro+main = 38s
+    assert "Dialogue: 0,0:00:00.20," in text
+    assert "0:00:39.00" in text                     # outro word at 38 + 1.0
+    # karaoke pop present
+    assert r"\fscx108\fscy108" in text
+
+
+def test_write_avatar_ass_drops_words_past_segment(tmp_path):
+    intro_words = [{"word": "kept", "start": 0.5, "end": 1.0},
+                   {"word": "dropped", "start": 11.9, "end": 12.4}]
+    ass = tmp_path / "a.ass"
+    avatar.write_avatar_ass(intro_words, [], ass, CAP_CFG,
+                            intro_dur=8.0, outro_dur=6.0, main_dur=30.0)
+    text = ass.read_text(encoding="utf-8-sig")
+    assert "kept" in text
+    assert "dropped" not in text
+
+
+# ------------------------------------------------------------ prepare_avatar
+
+def test_prepare_avatar_batches_all_clips(tmp_path, monkeypatch):
+    transcript = {"words": [
+        {"word": "quantum", "start": 1.0, "end": 1.4},
+        {"word": "entanglement", "start": 1.5, "end": 2.0},
+        {"word": "experiment", "start": 11.0, "end": 11.5},
+        {"word": "telescope", "start": 12.0, "end": 12.6}]}
+    candidates = [{"start": 0.0, "end": 5.0, "hook": "Quantum breakthrough"},
+                  {"start": 10.0, "end": 15.0, "hook": "Telescope result"}]
+    cfg = {"llm": {"provider": "mock", "max_retries": 0,
+                   "backoff_base_seconds": 0.0},
+           "avatar": {"script": {"intro_max_words": 30,
+                                 "outro_max_words": 25},
+                      # off: the offline test must not touch Whisper
+                      "captions": {"enabled": False}}}
+    batches = []
+
+    def _fake_batch(jobs, c):
+        batches.append(jobs)
+        return [{"out_path": j["out_path"], "duration_s": 5.5} for j in jobs]
+
+    monkeypatch.setattr(avatar, "synthesize_batch", _fake_batch)
+    items = avatar.prepare_avatar(candidates, transcript, tmp_path, cfg,
+                                  provider="mock")
+    assert len(batches) == 1 and len(batches[0]) == 4   # ONE worker run
+    assert len(items) == 2
+    for i, item in enumerate(items):
+        assert item["intro_s"] == 5.5 and item["outro_s"] == 5.5
+        assert f"clip_{i:02d}_intro.wav" in item["intro_wav"]
+        json.dumps(items)                                # marker-serializable
+    # scripts grounded in each clip's own transcript window
+    assert "quantum" in items[0]["intro_script"].lower()
+    assert "experiment" in items[1]["intro_script"].lower() or \
+        "telescope" in items[1]["intro_script"].lower()
+
+
 # --------------------------------------------------------------- setup-voice
 
 def test_setup_voice_rejects_bad_duration(tmp_path, monkeypatch):
