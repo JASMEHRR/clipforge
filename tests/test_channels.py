@@ -1,6 +1,6 @@
-"""Approved channels & auto-pull: the permission gate, pool dedupe, top/new
-merge, sequential claim priority, and credit-text threading. yt-dlp is mocked
-via the _fetch_entries seam — fully offline."""
+"""Approved channels & auto-pull: optional permission fields, pause gate,
+pool dedupe, top/new merge, sequential claim priority, and credit-text
+threading. yt-dlp is mocked via the _fetch_entries seam — fully offline."""
 import copy
 
 import pytest
@@ -30,15 +30,18 @@ def _entries(n, views=True):
             for i in range(n)]
 
 
-# --- permission gate -------------------------------------------------------
+# --- optional permission fields (hard gate removed 2026-07-15) --------------
 
-def test_add_requires_permission_and_credit():
-    with pytest.raises(channels.ChannelError):
-        _add(permission="")
-    with pytest.raises(channels.ChannelError):
-        _add(credit="  ")
+def test_add_without_permission_or_credit_succeeds():
+    ch = _add(permission="", credit="  ")
+    assert ch["permission_source"] == "" and ch["credit_text"] == ""
+    assert channels.can_auto_pull(ch)          # only paused blocks pulling
+
+
+def test_add_keeps_fields_when_provided():
     ch = _add()
     assert ch["permission_source"] == "Whop program"
+    assert ch["credit_text"] == "clips: @creator"
 
 
 def test_gate_blocks_poll(monkeypatch):
@@ -54,12 +57,12 @@ def test_gate_blocks_poll(monkeypatch):
     assert len(called) == 1
 
 
-def test_permission_cannot_be_blanked():
+def test_permission_can_be_blanked():
     ch = _add()
-    with pytest.raises(channels.ChannelError):
-        channels.update_channel(ch["id"], {"permission_source": ""})
-    with pytest.raises(channels.ChannelError):
-        channels.update_channel(ch["id"], {"credit_text": " "})
+    ch = channels.update_channel(ch["id"], {"permission_source": ""})
+    assert ch["permission_source"] == ""
+    ch = channels.update_channel(ch["id"], {"credit_text": " "})
+    assert ch["credit_text"] == ""
 
 
 def test_duplicate_url_rejected():

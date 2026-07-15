@@ -1,10 +1,10 @@
 """Approved channels & auto-pull.
 
-A channel may only be auto-pulled once its REQUIRED `permission_source` is
-filled in (e.g. "Whop clipping program", "creator DM 2026-07-01", a program
-page link) — the poll hard-skips channels without one. Each channel also
-carries a required `credit_text` ("clips: @creator") appended to every clip
-description made from it.
+`permission_source` (e.g. "clipping program", "creator DM 2026-07-01", a
+program page link) and `credit_text` ("clips: @creator") are OPTIONAL but
+recommended — both still work when filled (credit is appended to every clip
+description). The old hard requirement was removed at PJ's request
+(2026-07-15); only `paused` blocks auto-pull now.
 
 Store: cache/channels.json (atomic tmp+replace, corrupt-file quarantine —
 same conventions as upload_log.json):
@@ -72,27 +72,19 @@ def save_store(data: dict) -> None:
 # Channel CRUD
 # ============================================================
 def can_auto_pull(ch: dict) -> bool:
-    """The permission gate: no documented permission source → never pulled."""
-    return bool(str(ch.get("permission_source", "")).strip()) \
-        and not ch.get("paused", False)
+    """Only `paused` blocks auto-pull (permission_source is optional now)."""
+    return not ch.get("paused", False)
 
 
-def add_channel(url: str, permission_source: str, credit_text: str,
+def add_channel(url: str, permission_source: str = "", credit_text: str = "",
                 name: str = "", default_preset: str = "",
                 top_n: int | None = None) -> dict:
-    """Register a channel. `permission_source` and `credit_text` are REQUIRED —
-    ClipForge only auto-pulls creators who run clipping programs or gave
-    permission, and every clip must credit them."""
+    """Register a channel. `permission_source` and `credit_text` are optional
+    but recommended; when set, credit_text is appended to every clip
+    description made from this channel."""
     url = (url or "").strip().rstrip("/")
     if not url.startswith("http"):
         raise ChannelError("channel URL must be a link (https://...)")
-    if not (permission_source or "").strip():
-        raise ChannelError(
-            "permission source is required — where does your permission to "
-            "clip this channel come from? (program page, DM, contract)")
-    if not (credit_text or "").strip():
-        raise ChannelError("credit text is required — how should the creator "
-                           "be credited in each clip's description?")
     cfg = load_config()
     with _store_lock:
         store = load_store()
@@ -104,8 +96,8 @@ def add_channel(url: str, permission_source: str, credit_text: str,
             "id": ch_id,
             "url": url,
             "name": (name or "").strip() or url.rsplit("/", 1)[-1],
-            "permission_source": permission_source.strip(),
-            "credit_text": credit_text.strip(),
+            "permission_source": (permission_source or "").strip(),
+            "credit_text": (credit_text or "").strip(),
             "paused": False,
             "default_preset": (default_preset or "").strip(),
             "top_n": int(top_n or cfg.get("channels", {}).get(
@@ -120,8 +112,8 @@ def add_channel(url: str, permission_source: str, credit_text: str,
 
 
 def update_channel(ch_id: str, fields: dict) -> dict:
-    """Patch editable fields. Blanking permission_source or credit_text is
-    refused — the gate can be paused but not silently removed."""
+    """Patch editable fields (permission_source/credit_text may be blanked —
+    they are optional)."""
     editable = {"name", "permission_source", "credit_text", "paused",
                 "default_preset", "top_n", "account"}
     with _store_lock:
@@ -132,9 +124,6 @@ def update_channel(ch_id: str, fields: dict) -> dict:
         for k, v in fields.items():
             if k not in editable:
                 continue
-            if k in ("permission_source", "credit_text") and \
-                    not str(v or "").strip():
-                raise ChannelError(f"{k} cannot be blank")
             ch[k] = int(v) if k == "top_n" else (
                 bool(v) if k == "paused" else str(v).strip())
         ch.setdefault("account", "default")

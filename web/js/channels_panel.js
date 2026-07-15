@@ -1,6 +1,6 @@
 /* Approved channels & auto-pull: add/edit channels (permission source and
- * creator credit are REQUIRED — the server refuses without them), pause/
- * resume, manual "check now", per-channel source pool. */
+ * creator credit are optional but recommended), pause/resume, manual
+ * "check now", per-channel source pool. */
 
 import { api } from "./api.js";
 import { confirmDialog, el, field, toast } from "./ui.js";
@@ -87,9 +87,9 @@ export function mountChannels(container) {
     const url = input("", { placeholder: "https://www.youtube.com/@creator" });
     const name = input("", { placeholder: "Creator name (optional)" });
     const permission = input("", {
-      placeholder: "e.g. Whop clipping program — link or note (required)",
+      placeholder: "e.g. clipping program or creator DM — link or note (optional)",
     });
-    const credit = input("", { placeholder: "e.g. clips from @creator (required)" });
+    const credit = input("", { placeholder: "e.g. clips from @creator (optional)" });
     const preset = el("select", {},
       el("option", { value: "" }, "No preset (run defaults)"),
       ...state.presets.map((p) => el("option", { value: p.name }, p.name)));
@@ -99,10 +99,6 @@ export function mountChannels(container) {
     cancelBtn.addEventListener("click", () => formWrap.replaceChildren());
 
     saveBtn.addEventListener("click", async () => {
-      if (!permission.value.trim() || !credit.value.trim()) {
-        toast("Permission source and creator credit are both required.", "is-error");
-        return;
-      }
       saveBtn.disabled = true;
       try {
         await api.post("/api/channels", {
@@ -124,8 +120,8 @@ export function mountChannels(container) {
       el("h3", { class: "t-label", style: "margin:0" }, "Add approved channel"),
       field("Channel link", url),
       field("Name", name),
-      field("Permission source (required)", permission),
-      field("Creator credit for descriptions (required)", credit),
+      field("Permission source (optional)", permission),
+      field("Creator credit for descriptions (optional)", credit),
       el("div", { class: "field-inline" },
         field("Default preset", preset),
         field("Top videos to pull", topN)),

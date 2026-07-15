@@ -1,6 +1,6 @@
 """Approved channels & auto-pull: CRUD, pause/resume, manual poll, pool view.
-Thin layer over channels.py — the permission gate lives there, enforced
-server-side regardless of what the form sends."""
+Thin layer over channels.py. permission_source/credit_text are optional
+(recommended); credit still threads into descriptions when set."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -15,8 +15,8 @@ router = APIRouter()
 
 class ChannelCreate(BaseModel):
     url: str
-    permission_source: str
-    credit_text: str
+    permission_source: str = ""   # optional but recommended
+    credit_text: str = ""
     name: str = ""
     default_preset: str = ""
     top_n: int | None = None
