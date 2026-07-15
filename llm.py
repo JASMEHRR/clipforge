@@ -380,11 +380,9 @@ def _mock_complete(task, schema, prompt, context):
     if task == "avatar_script" and context.get("text") is not None:
         # Deterministic scripts grounded in a real transcript content word so
         # avatar.script_is_specific passes and keyless runs exercise the full
-        # avatar path. FILLER_WORDS imported lazily (same as clip_metadata).
-        from metadata import FILLER_WORDS
-        words = [w for w in re.findall(r"[a-z']{4,}",
-                                       str(context["text"]).lower())
-                 if w not in FILLER_WORDS]
+        # avatar path. Lazy import (same as clip_metadata) — one word policy.
+        from avatar import _content_words
+        words = _content_words(str(context["text"]))
         topic = words[0] if words else "this clip"
         hook = re.sub(r"\s+", " ", str(context.get("hook", ""))).strip()
         hook = hook.rstrip(".!?")

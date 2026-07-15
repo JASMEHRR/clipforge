@@ -564,7 +564,8 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     avatar_meta = None
     if avatar_item:
         import avatar as avatar_mod
-        avatar_meta = avatar_mod.apply_avatar(final, clip_dir, avatar_item, cfg)
+        avatar_meta = avatar_mod.apply_avatar(final, clip_dir, avatar_item,
+                                              cfg, preset_name=preset)
         _sub(0.95)
 
     # content duration (drives virality/rescore); avatar intro/outro seconds

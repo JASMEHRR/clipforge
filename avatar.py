@@ -395,7 +395,8 @@ def build_composite_graph(w: int, h: int, layout: dict, intro_dur: float,
 def write_avatar_ass(intro_words: list[dict], outro_words: list[dict],
                      ass_path: Path, cfg: dict, intro_dur: float,
                      outro_dur: float, main_dur: float,
-                     play_w: int = 1080, play_h: int = 1920) -> None:
+                     play_w: int = 1080, play_h: int = 1920,
+                     preset_name: str | None = None) -> None:
     """Karaoke ASS for the avatar's speech, in COMPOSITE time: intro events
     start at 0, outro events are offset by intro_dur + main_dur. One Avatar
     style derived from the active caption preset (smaller, positioned in the
@@ -403,7 +404,7 @@ def write_avatar_ass(intro_words: list[dict], outro_words: list[dict],
     captions' 0.52-0.66 law; the frozen background guarantees clean space)."""
     import captions
     ccfg = cfg["captions"]
-    preset = ccfg["presets"][ccfg["preset"]]
+    preset = ccfg["presets"][preset_name or ccfg["preset"]]
     family, bold = captions._font(preset["font"])
     size = max(36, int(preset["font_size"] * 0.7))
     acfg = cfg.get("avatar", {}).get("captions", {})
@@ -473,8 +474,8 @@ def _resolve_avatar_image(cfg: dict) -> Path:
     return p
 
 
-def apply_avatar(final: Path, clip_dir: Path, item: dict,
-                 cfg: dict) -> dict:
+def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
+                 preset_name: str | None = None) -> dict:
     """Wrap the finished clip in the avatar intro/outro segments (in place:
     `final` is replaced). Freeze frames come from the pre-caption reframed.mp4
     when present so no burned caption fragment freezes on screen. Raises
@@ -514,7 +515,7 @@ def apply_avatar(final: Path, clip_dir: Path, item: dict,
         write_avatar_ass(item.get("intro_words") or [],
                          item.get("outro_words") or [],
                          ass_path, cfg, intro_dur, outro_dur, main_dur,
-                         play_w=w, play_h=h)
+                         play_w=w, play_h=h, preset_name=preset_name)
         fontsdir = fontreg.fonts_dir(cfg)
 
     layout = cfg.get("avatar", {}).get("layout", {})
