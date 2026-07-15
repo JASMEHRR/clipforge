@@ -22,12 +22,21 @@ samples/*.mp4
 samples/*.wav
 assets/music/*.mp3
 assets/music/*.part
-assets/user_branding/          # user-uploaded logos — never commit
-assets/user_fonts/             # user-uploaded fonts (often licensed) — never commit
-assets/user_voice/             # voice reference for TTS cloning — never commit
-cache/font_previews/           # generated preview thumbnails
+# User-uploaded content — never commit. NOTE: trailing inline comments on a
+# gitignore pattern line do NOT work with this git version — the whole line
+# (pattern + comment) is treated as literal and never matches anything.
+# Keep comments on their own line above the pattern, always.
+# user-uploaded logos
+assets/user_branding/
+# user-uploaded fonts (often licensed)
+assets/user_fonts/
+# voice reference for TTS cloning
+assets/user_voice/
+# generated preview thumbnails
+cache/font_previews/
 config.local.yaml
-tools/                          # local binaries (e.g. driver-compatible ffmpeg) — never commit
+# local binaries (e.g. driver-compatible ffmpeg) — never commit
+tools/
 
 # Reference videos for the style analyzer — never commit (may be copyrighted).
 refs/

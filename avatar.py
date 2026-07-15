@@ -596,7 +596,7 @@ def setup_voice(src: str) -> Path:
     src_path = Path(src).expanduser()
     if not src_path.is_file():
         raise AvatarError(f"voice file not found: {src_path}")
-    info = ffutil.probe(src_path)
+    info = ffutil.probe_audio(src_path)
     if not info.get("has_audio"):
         raise AvatarError(f"no audio stream in {src_path.name}")
     dur = float(info.get("duration", 0))

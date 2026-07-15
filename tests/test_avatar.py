@@ -369,7 +369,7 @@ def test_setup_voice_rejects_bad_duration(tmp_path, monkeypatch):
     import ffutil
     src = tmp_path / "long.wav"
     src.write_bytes(b"\x00" * 16)
-    monkeypatch.setattr(ffutil, "probe",
+    monkeypatch.setattr(ffutil, "probe_audio",
                         lambda p: {"has_audio": True, "duration": 95.0})
     monkeypatch.setattr(avatar, "VOICE_DIR", tmp_path / "voice")
     monkeypatch.setattr(avatar, "save_config", lambda u: u)
@@ -377,12 +377,26 @@ def test_setup_voice_rejects_bad_duration(tmp_path, monkeypatch):
         avatar.setup_voice(str(src))
 
 
+def test_setup_voice_accepts_real_audio_only_wav(tmp_path, monkeypatch):
+    # regression: setup_voice must work on a real audio-only file (no video
+    # stream) — ffutil.probe() requires video and would wrongly reject this
+    import ffutil
+    src = tmp_path / "real.wav"
+    ffutil.run_ffmpeg(["-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                       "-t", "5", src])
+    monkeypatch.setattr(avatar, "VOICE_DIR", tmp_path / "voice")
+    monkeypatch.setattr(avatar, "ROOT", tmp_path)
+    monkeypatch.setattr(avatar, "save_config", lambda u: u)
+    dest = avatar.setup_voice(str(src))
+    assert dest.is_file()
+
+
 def test_setup_voice_installs_and_persists(tmp_path, monkeypatch):
     import ffutil
     src = tmp_path / "me.wav"
     src.write_bytes(b"\x00" * 32)
     saved = {}
-    monkeypatch.setattr(ffutil, "probe",
+    monkeypatch.setattr(ffutil, "probe_audio",
                         lambda p: {"has_audio": True, "duration": 7.5})
     monkeypatch.setattr(avatar, "VOICE_DIR", tmp_path / "voice")
     monkeypatch.setattr(avatar, "ROOT", tmp_path)

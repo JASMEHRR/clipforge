@@ -137,6 +137,25 @@ def probe(path: str | Path) -> dict:
     }
 
 
+def probe_audio(path: str | Path) -> dict:
+    """ffprobe for an audio-only file (no video stream required) →
+    {duration, acodec, has_audio}. Use probe() for video/clip files; this is
+    for standalone audio inputs like a TTS voice reference wav."""
+    cmd = [ffprobe_bin(), "-v", "error", "-print_format", "json",
+           "-show_format", "-show_streams", str(path)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise FFmpegError(f"ffprobe failed for {path}",
+                          detail=(r.stderr or "")[-500:])
+    data = json.loads(r.stdout)
+    a = next((s for s in data["streams"] if s["codec_type"] == "audio"), None)
+    return {
+        "duration": float(data["format"].get("duration", 0.0)),
+        "acodec": (a or {}).get("codec_name", ""),
+        "has_audio": a is not None,
+    }
+
+
 def ffmpeg_version() -> str:
     r = subprocess.run([ffmpeg_bin(), "-version"], capture_output=True, text=True,
                        timeout=30)
