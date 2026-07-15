@@ -24,6 +24,7 @@ assets/music/*.mp3
 assets/music/*.part
 assets/user_branding/          # user-uploaded logos — never commit
 assets/user_fonts/             # user-uploaded fonts (often licensed) — never commit
+assets/user_voice/             # voice reference for TTS cloning — never commit
 cache/font_previews/           # generated preview thumbnails
 config.local.yaml
 tools/                          # local binaries (e.g. driver-compatible ffmpeg) — never commit

@@ -136,6 +136,19 @@ CLIP_METADATA = {
     "additionalProperties": False,
 }
 
+# LLM output: avatar-host intro/outro scripts (avatar.py). Word caps are
+# enforced in avatar.py (JSON Schema cannot count words); the char caps here
+# keep TTS segment durations predictable.
+AVATAR_SCRIPT = {
+    "type": "object",
+    "properties": {
+        "intro": {"type": "string", "minLength": 8, "maxLength": 220},
+        "outro": {"type": "string", "minLength": 8, "maxLength": 200},
+    },
+    "required": ["intro", "outro"],
+    "additionalProperties": False,
+}
+
 # LLM output: per-clip niche classification. Deliberately a loose string —
 # user-defined custom niches make a fixed enum impossible; classify.py checks
 # the answer against the allowed list and falls back to its heuristic.
@@ -611,6 +624,7 @@ SCHEMAS: dict[str, dict] = {
     "highlight_candidates": HIGHLIGHT_CANDIDATES,
     "clip_score": CLIP_SCORE,
     "clip_metadata": CLIP_METADATA,
+    "avatar_script": AVATAR_SCRIPT,
     "niche": NICHE,
     "virality": VIRALITY,
     "job_record": JOB_RECORD,

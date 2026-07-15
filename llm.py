@@ -377,6 +377,23 @@ def _mock_complete(task, schema, prompt, context):
         # complete_json("niche", ...) calls deterministic instead of letting
         # synthesize_from_schema invent a non-taxonomy string.
         return {"niche": "other"}
+    if task == "avatar_script" and context.get("text") is not None:
+        # Deterministic scripts grounded in a real transcript content word so
+        # avatar.script_is_specific passes and keyless runs exercise the full
+        # avatar path. FILLER_WORDS imported lazily (same as clip_metadata).
+        from metadata import FILLER_WORDS
+        words = [w for w in re.findall(r"[a-z']{4,}",
+                                       str(context["text"]).lower())
+                 if w not in FILLER_WORDS]
+        topic = words[0] if words else "this clip"
+        hook = re.sub(r"\s+", " ", str(context.get("hook", ""))).strip()
+        hook = hook.rstrip(".!?")
+        intro = (f"Let's break down {topic} in this one: {hook[:120]}."
+                 if hook else
+                 f"Let's break down {topic} in this one and why it matters.")
+        outro = (f"So that is the real takeaway about {topic}. "
+                 "Watch it again and you will catch even more.")
+        return {"intro": intro[:220], "outro": outro[:200]}
     return synthesize_from_schema(schema, seed=task)
 
 

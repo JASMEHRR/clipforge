@@ -269,6 +269,50 @@ sfx:
   triggers: [cuts, emphasis]    # cuts -> whoosh at segment joins;
                                 # emphasis -> pop on emphasized words
 
+avatar:
+  # Avatar Host mode: each clip becomes intro (frozen first frame, shrunk, a
+  # static avatar image "speaks" a generated intro via local TTS) -> main clip
+  # (untouched, full screen) -> outro (frozen last frame, avatar on the other
+  # side). The avatar never talks over the source speaker: TTS audio exists
+  # only on frozen segments. enabled: false -> pipeline byte-identical to
+  # pre-feature output. Uploads of avatar clips always set YouTube's
+  # altered/synthetic-content disclosure (see upload section notes).
+  enabled: false
+  image: ""                   # avatar PNG with alpha, e.g. assets/user_branding/avatar.png
+  layout:
+    clip_scale: 0.62          # frozen-frame width as a fraction of the 1080 frame
+    clip_y: 0.07              # frozen-frame top offset (fraction of the 1920 frame)
+    avatar_scale: 0.42        # avatar PNG width as a fraction of frame width
+    intro_side: left          # left | right — avatar corner during the intro
+    outro_side: right         # opposite side for the outro
+    margin_px: 48
+  script:
+    intro_max_words: 30       # hard caps keep TTS segment durations predictable
+    outro_max_words: 25
+  timing:
+    pad_s: 0.4                # freeze held this long after the TTS line ends
+    intro_min_s: 4.0
+    intro_max_s: 12.0
+    outro_min_s: 3.0
+    outro_max_s: 10.0
+  tts:
+    engine: chatterbox        # local voice-cloning TTS in an ISOLATED venv
+    python: .venv-tts/Scripts/python.exe   # created by `python avatar.py setup-venv`
+    ref_audio: ""             # set via `python avatar.py setup-voice <wav>` ->
+                              # lands in config.local.yaml, never committed
+    device: auto              # auto | cpu (auto tries CUDA, falls back to CPU;
+                              # CPU synthesis takes minutes per clip — fine at
+                              # avatar-host cadence of 1 upload/day)
+    timeout_s: 1800           # whole TTS batch watchdog
+  captions:
+    enabled: true             # karaoke captions for the avatar's speech,
+                              # intro/outro segments ONLY (deterministic rule —
+                              # the frozen background guarantees clean space)
+    whisper_model: small      # model_override used to time the short TTS wavs
+    intro_anchor: 0.80        # avatar caption block center (fraction of frame
+    outro_anchor: 0.80        # height) — deliberately outside the main-caption
+                              # 0.52-0.66 law; this is the avatar zone
+
 channels:
   # Approved channels & auto-pull. Channels themselves are managed in the UI
   # (cache/channels.json) — a channel is NEVER polled without a filled-in
