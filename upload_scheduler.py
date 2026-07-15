@@ -101,15 +101,22 @@ def account_cfg(cfg: dict, account: str = "default") -> dict:
     behave identically)."""
     up = cfg.get("upload", {})
     acc = (up.get("accounts") or {}).get(account) or {}
+    avatar_host = bool(acc.get("avatar_host"))
+    # avatar-host cadence guard: 1/day unless the account sets max_per_day
+    # explicitly (an explicit value always wins = the documented override)
+    if avatar_host and "max_per_day" not in acc:
+        max_per_day = 1
+    else:
+        max_per_day = int(acc.get("max_per_day", up.get("max_per_day", 20)))
     return {
-        "max_per_day": int(acc.get("max_per_day",
-                                   up.get("max_per_day", 20))),
+        "max_per_day": max_per_day,
         "publish_slots_ist": list(acc.get("publish_slots_ist",
                                           up.get("publish_slots_ist",
                                                  [12, 19]))),
         "slot_spacing_minutes": int(acc.get("slot_spacing_minutes",
                                             up.get("slot_spacing_minutes",
                                                    60))),
+        "avatar_host": avatar_host,
     }
 
 
@@ -319,7 +326,10 @@ def build_snippet(meta: dict) -> dict:
         title = title[:87] + "..."
     hashtags = clean_hashtags(meta.get("hashtags"))
     return {"title": title, "description": (meta.get("description") or "").strip(),
-            "hashtags": hashtags}
+            "hashtags": hashtags,
+            # avatar-host clips: youtube_upload sets the altered/synthetic
+            # content disclosure from this flag
+            "synthetic": bool((meta.get("upload") or {}).get("synthetic"))}
 
 
 # ============================================================

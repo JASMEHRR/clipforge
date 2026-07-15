@@ -149,6 +149,11 @@ def build_request_body(metadata: dict, privacy: str = "private",
     }
     if publish_at:
         status["publishAt"] = publish_at
+    if metadata.get("synthetic"):
+        # Avatar Host clips (cloned voice + generated frames) MUST carry
+        # YouTube's altered/synthetic-content disclosure (Data API field
+        # added Oct 2024). Absent flag -> key absent -> body unchanged.
+        status["containsSyntheticMedia"] = True
     return {
         "snippet": {
             "title": metadata["title"][:100],

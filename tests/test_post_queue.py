@@ -44,6 +44,28 @@ def test_account_cfg_account_values_win():
     assert sched.list_accounts(cfg) == ["default", "second"]
 
 
+def test_account_cfg_avatar_host_defaults_cap_to_one():
+    cfg = _cfg(max_per_day=5, accounts={
+        "avatar": {"avatar_host": True},
+        "avatar_override": {"avatar_host": True, "max_per_day": 3},
+        "normal": {},
+    })
+    assert sched.account_cfg(cfg, "avatar")["max_per_day"] == 1
+    assert sched.account_cfg(cfg, "avatar")["avatar_host"] is True
+    # explicit value always wins ("unless overridden")
+    assert sched.account_cfg(cfg, "avatar_override")["max_per_day"] == 3
+    # flag-less accounts keep today's fallbacks exactly
+    assert sched.account_cfg(cfg, "normal")["max_per_day"] == 5
+    assert sched.account_cfg(cfg, "normal")["avatar_host"] is False
+
+
+def test_build_snippet_carries_synthetic_flag():
+    meta = {"title": "T", "description": "D", "hashtags": ["#ai"],
+            "upload": {"synthetic": True}}
+    assert sched.build_snippet(meta)["synthetic"] is True
+    assert sched.build_snippet({"title": "T"})["synthetic"] is False
+
+
 def test_uploads_today_per_account():
     today = datetime.now(sched.IST).isoformat()
     log = {"uploads": {

@@ -19,6 +19,18 @@ def test_request_body_private_default():
     assert "#a" in body["snippet"]["description"]
 
 
+def test_request_body_synthetic_disclosure():
+    body = yt.build_request_body({**META, "synthetic": True})
+    assert body["status"]["containsSyntheticMedia"] is True
+
+
+def test_request_body_no_synthetic_key_by_default():
+    body = yt.build_request_body(META)
+    assert "containsSyntheticMedia" not in body["status"]
+    body = yt.build_request_body({**META, "synthetic": False})
+    assert "containsSyntheticMedia" not in body["status"]
+
+
 def test_upload_with_mocked_service(tmp_path):
     clip = tmp_path / "final.mp4"
     clip.write_bytes(b"\x00" * 2048)

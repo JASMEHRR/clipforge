@@ -357,11 +357,23 @@ export function mountUploadQueue(container) {
           ? el("div", { class: "t-dim t-mono",
                         style: "font-size:var(--text-xs)" },
               c.hashtags.join(" ")) : null,
+        // avatar-host scripts: reviewed here BEFORE approval; uploads carry
+        // YouTube's altered/synthetic-content disclosure automatically
+        (c.avatar && c.avatar.intro_script)
+          ? el("div", { class: "t-dim",
+                        style: "font-size:var(--text-xs)" },
+              `Avatar intro: ${c.avatar.intro_script}`) : null,
+        (c.avatar && c.avatar.outro_script)
+          ? el("div", { class: "t-dim",
+                        style: "font-size:var(--text-xs)" },
+              `Avatar outro: ${c.avatar.outro_script}`) : null,
         el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
           slot ? `would publish ${slot}` : "",
           c.duration != null ? ` · ${fmtClock(c.duration)}` : "")),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
+        c.synthetic
+          ? el("span", { class: "badge badge-warn" }, "AI avatar") : null,
         c.niche ? el("span", { class: "badge" }, c.niche) : null),
       el("div", { class: "field-inline" }, approveBtn, rejectBtn));
   }
@@ -495,6 +507,8 @@ export function mountUploadQueue(container) {
             + `${c.duplicates > 1 ? "s" : ""} collapsed` : "")),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
+        c.synthetic
+          ? el("span", { class: "badge badge-warn" }, "AI avatar") : null,
         c.niche ? el("span", { class: "badge" }, c.niche) : null,
         state.requireApproval
           ? el("span", { class: "badge badge-ok" }, "Approved") : null,

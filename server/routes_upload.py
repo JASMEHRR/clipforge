@@ -109,7 +109,12 @@ def upload_job(req: UploadRequest):
             if not sched.approval_ok(meta, cfg):
                 skipped += 1
                 continue
-            r = yt.upload_clip(c["path"], c["metadata"], privacy=req.privacy)
+            # thread the synthetic-content disclosure through the manual path
+            # too (the clip record's metadata has no upload.* block)
+            body_meta = c["metadata"]
+            if (meta.get("upload") or {}).get("synthetic"):
+                body_meta = {**body_meta, "synthetic": True}
+            r = yt.upload_clip(c["path"], body_meta, privacy=req.privacy)
             results.append({"title": c["metadata"]["title"], "url": r["url"]})
         return {"uploaded": results, "skipped_approval": skipped}
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
@@ -145,6 +150,9 @@ def _candidate_summary(c: dict) -> dict:
         "video_url": f"/api/youtube/queue/video/{c['key']}",
         "duplicates": len(c.get("duplicates", [])),
         "bytes": dir_size(c["dir"]),
+        # avatar-host clip: shown as an "AI avatar" badge; upload sets
+        # YouTube's altered/synthetic-content disclosure automatically
+        "synthetic": bool((meta.get("upload") or {}).get("synthetic")),
     }
 
 
@@ -243,6 +251,8 @@ def youtube_approvals():
         item["description"] = c["meta"].get("description", "")
         item["hashtags"] = c["meta"].get("hashtags", [])
         item["proposed_publish_at"] = when.isoformat()
+        # generated avatar scripts for human review before approval
+        item["avatar"] = c["meta"].get("avatar")
         items.append(item)
     return {"items": items,
             "require_approval": bool(upload_cfg.get("require_approval",

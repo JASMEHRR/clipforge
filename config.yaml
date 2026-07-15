@@ -336,6 +336,8 @@ upload:
     # fallback for anything unset). Additional accounts each need their own
     # one-time OAuth (token cached as cache/youtube_token_<name>.json);
     # 'default' uses the original cache/youtube_token.json.
+    # avatar_host: true marks an Avatar Host account — its max_per_day
+    # defaults to 1 unless set explicitly on the account.
     default:
       max_per_day: 5
       publish_slots_ist: [12, 17, 19]

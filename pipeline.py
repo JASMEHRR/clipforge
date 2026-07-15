@@ -716,6 +716,10 @@ def main(argv=None):
     ap.add_argument("--subs-mode", default=None,
                     choices=["auto", "replace", "keep", "ignore"],
                     help="burned-in subtitle handling (default: config style.existing_subs.mode)")
+    ap.add_argument("--avatar", action="store_true",
+                    help="Avatar Host mode: generated spoken intro/outro over "
+                         "frozen frames (needs avatar.py setup-venv + "
+                         "setup-voice + avatar.image)")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -740,6 +744,9 @@ def main(argv=None):
         music = a.music or opts.get("music")
         music_vol = (opts.get("music_volume_db", music_vol)
                      if a.music_volume == -18.0 else music_vol)
+    if a.avatar:
+        from config import apply_run_options
+        cfg = apply_run_options(cfg, {"avatar": True})
 
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
                   force=a.force, preset=preset, aspect=aspect,
