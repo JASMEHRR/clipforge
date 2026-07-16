@@ -272,15 +272,24 @@ def _scan_all_clips() -> list[dict]:
 
 
 @router.get("/api/clips/all")
-def list_all_clips(refresh: bool = False):
+def list_all_clips(refresh: bool = False, include_sample: bool = False):
     """Flat index of every clip on disk (all jobs, all statuses) for the
-    All-clips library tab. Cached after the first scan — pass ?refresh=1 (the
-    UI's Refresh button) to force a rescan; every status-changing route
-    (delete, approve/reject, exclude, upload) invalidates it too."""
+    All-clips library tab AND the Avatar Host clip picker — the single shared
+    source for both. Cached after the first scan — pass ?refresh=1 (the UI's
+    Refresh button) to force a rescan; every status-changing route (delete,
+    approve/reject, exclude, upload) invalidates it too.
+
+    status=="sample" clips (from `pipeline.py --sample --provider mock` demo
+    runs) are excluded by default — they're keyless-demo output, not real
+    content, and previously cluttered both tabs with mock: titles. Pass
+    ?include_sample=1 to see them (e.g. while testing the sample flow)."""
     global _ALL_CLIPS_CACHE
     if _ALL_CLIPS_CACHE is None or refresh:
         _ALL_CLIPS_CACHE = _scan_all_clips()
-    return {"clips": _ALL_CLIPS_CACHE}
+    clips = _ALL_CLIPS_CACHE
+    if not include_sample:
+        clips = [c for c in clips if c["status"] != "sample"]
+    return {"clips": clips}
 
 
 @router.get("/api/jobs/{job_name}/zip")

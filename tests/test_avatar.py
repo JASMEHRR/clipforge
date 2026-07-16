@@ -248,30 +248,31 @@ def test_segment_durations_pads_and_clamps():
     assert avatar.segment_durations(60.0, "outro", TIMING_CFG) == 10.0
 
 
-LAYOUT = {"clip_scale": 0.62, "clip_y": 0.07, "avatar_scale": 0.42,
-          "intro_side": "left", "outro_side": "right", "margin_px": 48}
+LAYOUT = {"avatar_scale": 0.42, "side": "left", "margin_px": 48}
 
 
 def test_composite_graph_structure():
     g = avatar.build_composite_graph(1080, 1920, LAYOUT, 8.0, 6.0, 30.0)
     assert "concat=n=3:v=1:a=1[vcat][acat]" in g
     assert "[vcat]null[vout]" in g
-    # intro avatar left, outro avatar right
-    assert "[introb1][avI]overlay=48:H-h-48" in g
-    assert "[outrob1][avO]overlay=W-w-48:H-h-48" in g
-    # even-width scales
-    assert "scale=668:-2" in g          # 1080*0.62=669.6 -> 668 (even)
+    # frozen frame fills the clip's own frame size (no shrink/letterbox)
+    assert "[1:v]scale=1080:1920,setsar=1[introfr]" in g
+    assert "[2:v]scale=1080:1920,setsar=1[outrofr]" in g
+    # avatar stays on the SAME side for both intro and outro
+    assert "[introfr][avI]overlay=48:H-h-48" in g
+    assert "[outrofr][avO]overlay=48:H-h-48" in g
+    # even-width avatar scale
     assert "scale=452:-1" in g          # 1080*0.42=453.6 -> 452 (even)
     # TTS trimmed/padded to the exact segment lengths
     assert "atrim=0:8.000" in g and "apad=whole_dur=8.000" in g
     assert "atrim=0:6.000" in g and "apad=whole_dur=6.000" in g
 
 
-def test_composite_graph_side_swap():
-    layout = {**LAYOUT, "intro_side": "right", "outro_side": "left"}
+def test_composite_graph_side_right():
+    layout = {**LAYOUT, "side": "right"}
     g = avatar.build_composite_graph(1080, 1920, layout, 8.0, 6.0, 30.0)
-    assert "[introb1][avI]overlay=W-w-48:H-h-48" in g
-    assert "[outrob1][avO]overlay=48:H-h-48" in g
+    assert "[introfr][avI]overlay=W-w-48:H-h-48" in g
+    assert "[outrofr][avO]overlay=W-w-48:H-h-48" in g
 
 
 def test_composite_graph_with_subtitles(tmp_path):

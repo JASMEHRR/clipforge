@@ -18,6 +18,7 @@ import { mountPublishTiming } from "./publish_timing_panel.js";
 import { mountPresets } from "./presets_panel.js";
 import { mountChannels } from "./channels_panel.js";
 import { mountPostQueue } from "./post_queue_panel.js";
+import { mountAvatar } from "./avatar_panel.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -36,6 +37,7 @@ const routes = {
   analytics: renderAnalytics,
   presets: renderPresets,
   channels: renderChannels,
+  avatar: renderAvatar,
   settings: renderSettings,
   history: renderHistory,
 };
@@ -1206,6 +1208,17 @@ async function renderChannels() {
         el("h1", { class: "t-display" }, "Approved channels"))),
     card));
   mountChannels(card);
+}
+
+async function renderAvatar() {
+  const card = el("div", { class: "card", style: "display:grid;gap:12px" });
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "results-head" },
+      el("div", {},
+        el("div", { class: "t-label" }, "Avatar Host"),
+        el("h1", { class: "t-display" }, "Host a clip"))),
+    card));
+  cleanup = mountAvatar(card);
 }
 
 async function renderAnalytics() {

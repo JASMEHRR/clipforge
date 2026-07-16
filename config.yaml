@@ -270,21 +270,19 @@ sfx:
                                 # emphasis -> pop on emphasized words
 
 avatar:
-  # Avatar Host mode: each clip becomes intro (frozen first frame, shrunk, a
-  # static avatar image "speaks" a generated intro via local TTS) -> main clip
-  # (untouched, full screen) -> outro (frozen last frame, avatar on the other
-  # side). The avatar never talks over the source speaker: TTS audio exists
-  # only on frozen segments. enabled: false -> pipeline byte-identical to
-  # pre-feature output. Uploads of avatar clips always set YouTube's
-  # altered/synthetic-content disclosure (see upload section notes).
+  # Avatar Host mode: each clip becomes intro (frozen first frame, full
+  # screen, a static avatar image "speaks" a generated intro via local TTS)
+  # -> main clip (untouched, full screen) -> outro (frozen last frame, avatar
+  # on the same configured side). The avatar never talks over the source
+  # speaker: TTS audio exists only on frozen segments. enabled: false ->
+  # pipeline byte-identical to pre-feature output. Uploads of avatar clips
+  # always set YouTube's altered/synthetic-content disclosure (see upload
+  # section notes).
   enabled: false
   image: ""                   # avatar PNG with alpha, e.g. assets/user_branding/avatar.png
   layout:
-    clip_scale: 0.62          # frozen-frame width as a fraction of the 1080 frame
-    clip_y: 0.07              # frozen-frame top offset (fraction of the 1920 frame)
     avatar_scale: 0.42        # avatar PNG width as a fraction of frame width
-    intro_side: left          # left | right — avatar corner during the intro
-    outro_side: right         # opposite side for the outro
+    side: left                # left | right — avatar corner, same for intro + outro
     margin_px: 48
   script:
     intro_max_words: 30       # hard caps keep TTS segment durations predictable
@@ -304,6 +302,15 @@ avatar:
                               # CPU synthesis takes minutes per clip — fine at
                               # avatar-host cadence of 1 upload/day)
     timeout_s: 1800           # whole TTS batch watchdog
+    kokoro:
+      # avatar.tts.engine: kokoro — local ONNX preset-voice TTS, runs
+      # in-process in the main venv (no isolated venv: onnxruntime-based,
+      # no torch pin to conflict with mediapipe/faster-whisper).
+      model_path: kokoro-v1.0.onnx   # https://github.com/thewh1teagle/kokoro-onnx releases
+      voices_path: voices-v1.0.bin
+      voice: af_nicole
+      speed: 1.0
+      lang: en-us
   captions:
     enabled: true             # karaoke captions for the avatar's speech,
                               # intro/outro segments ONLY (deterministic rule —
@@ -312,6 +319,47 @@ avatar:
     intro_anchor: 0.80        # avatar caption block center (fraction of frame
     outro_anchor: 0.80        # height) — deliberately outside the main-caption
                               # 0.52-0.66 law; this is the avatar zone
+  animation:
+    # Animated avatar (LivePortrait motion transfer) in place of the static
+    # PNG — the avatar moves naturally against a bundled generic driving
+    # video. By itself this is NOT audio-driven: mouth shapes come from the
+    # driving video, not the TTS words. Enable lip_sync below to fix that.
+    # Opt-in; static PNG stays the default, guaranteed path.
+    enabled: false
+    engine: liveportrait      # liveportrait | musetalk_only (lip-syncs the
+                              # static avatar PNG directly, skipping
+                              # LivePortrait's motion-transfer stage)
+    python: .venv-avatar-anim/Scripts/python.exe  # `python avatar.py setup-anim-venv`
+    liveportrait_dir: cache/liveportrait           # cloned repo + model weights
+    driving_video: assets/avatar_driving/talking_loop.mp4
+    device: auto              # auto | cpu
+    timeout_s: 1200           # per intro/outro segment watchdog — measured
+                              # ~9.5min/segment on a GTX 1650 with insightface
+                              # on CPU (see avatar_anim._fix_onnxruntime_provider);
+                              # 600s was too tight and caused spurious fallback
+    fallback_to_static: true  # animation failure -> static PNG (logged, never silent)
+    lip_sync:
+      # MuseTalk audio-driven lip-sync post-process: takes LivePortrait's
+      # motion-transfer output above + the real TTS wav and re-syncs just
+      # the mouth region, preserving head motion/identity from LivePortrait.
+      # Latent-space inpainting, NOT full diffusion — fits a 4GB GPU in
+      # fp16. Opt-in on top of animation.enabled; motion-only (LivePortrait
+      # alone) stays the default when this is off.
+      enabled: false
+      engine: musetalk
+      python: .venv-musetalk/Scripts/python.exe   # `python avatar.py setup-musetalk-venv`
+      musetalk_dir: cache/musetalk                 # cloned repo + model weights
+      version: v15
+      bbox_shift: 0              # mouth-openness tuning knob (int)
+      timeout_s: 1200            # per intro/outro segment watchdog — unverified
+                                  # on GTX 1650 (no real run yet); LivePortrait
+                                  # measured ~9.5min/segment there, MuseTalk's
+                                  # own docs estimate ~5min/8s-clip on a stronger
+                                  # 4GB card — starting guess, tune after first run
+      fallback_to_motion_only: true  # lip-sync failure -> LivePortrait output
+                                      # as-is (logged, never silent) — separate
+                                      # from fallback_to_static above, which only
+                                      # covers LivePortrait itself failing
 
 channels:
   # Approved channels & auto-pull. Channels themselves are managed in the UI

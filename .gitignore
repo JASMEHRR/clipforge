@@ -32,6 +32,8 @@ assets/user_branding/
 assets/user_fonts/
 # voice reference for TTS cloning
 assets/user_voice/
+# user-uploaded avatar images
+assets/user_avatars/
 # generated preview thumbnails
 cache/font_previews/
 config.local.yaml
@@ -48,3 +50,11 @@ CLAUDE.md
 
 .env
 assets/sfx/*/*.wav
+
+# Kokoro TTS model/voice files (large binaries, downloaded not committed)
+kokoro-v1.0.onnx
+voices-v1.0.bin
+nicole.wav
+
+# Dev UI-verification screenshots (contain real clip frames / faces)
+ui_verify/

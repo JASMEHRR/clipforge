@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -42,6 +43,117 @@ WORKER_PATH = ROOT / "tts_worker.py"
 
 class AvatarError(ClipForgeError):
     stage = "avatar"
+
+
+# ---------------------------------------------------- render timing history
+# Single-clip UI renders don't go through history.db, so per-stage wall-clock
+# timings for the Avatar Host tab's ETA live in their own small JSON file,
+# keyed by (engine, stage, audio-second bucket). Seeded with hand-measured
+# guesses until a real render lands on this machine — see estimate below.
+AVATAR_TIMINGS_PATH = ROOT / "cache" / "avatar_timings.json"
+_TIMINGS_KEEP = 8   # last N durations per (engine, stage, bucket)
+
+# Rough seeds (seconds) until a real timing exists on THIS hardware. Static
+# tts/composite get measured and replaced within one render; the animated
+# lip-sync numbers are hand-measured guesses from config.yaml comments
+# (LivePortrait ~9.5min/seg on a GTX1650; MuseTalk ~8min cold load + inference,
+# ~10-14min/segment). They only prime the countdown before the first render.
+_TIMING_SEED = {
+    "static":       {"tts": 4.0, "composite": 25.0},
+    "liveportrait": {"tts": 4.0, "lipsync_intro": 570.0,
+                     "lipsync_outro": 570.0, "composite": 30.0},
+    "musetalk":     {"tts": 4.0, "lipsync_intro": 480.0,
+                     "lipsync_outro": 480.0, "composite": 30.0},
+}
+# Ordered stages shown in the UI per engine. ponytail: caption timing and
+# freeze-frame extraction are sub-second — folded into composite, not tracked.
+_TIMING_STAGES = {
+    "static":       ["tts", "composite"],
+    "liveportrait": ["tts", "lipsync_intro", "lipsync_outro", "composite"],
+    "musetalk":     ["tts", "lipsync_intro", "lipsync_outro", "composite"],
+}
+_STAGE_LABELS = {
+    "tts": "Voice synthesis", "lipsync_intro": "Lip-sync (intro)",
+    "lipsync_outro": "Lip-sync (outro)", "composite": "Compositing video",
+}
+
+
+WORDS_PER_SECOND = 2.5   # rough TTS pace; matches the frontend heuristic
+
+
+def estimate_audio_seconds(*texts: str) -> float:
+    """Rough spoken length of the scripts, used to bucket ETA history. Shared
+    by the render-estimate endpoint, the render hint, and the timing persist so
+    all three land in the same bucket."""
+    words = sum(len((t or "").split()) for t in texts)
+    return words / WORDS_PER_SECOND
+
+
+def avatar_engine_key(cfg: dict) -> str:
+    """Which timing bucket a render falls into: 'static' (PNG overlay),
+    'liveportrait' (motion only), or 'musetalk' (motion + lip-sync)."""
+    anim = cfg.get("avatar", {}).get("animation", {})
+    if not anim.get("enabled"):
+        return "static"
+    if anim.get("lip_sync", {}).get("enabled"):
+        return "musetalk"
+    return "liveportrait"
+
+
+def _audio_bucket(audio_s: float) -> str:
+    return str(int(round(max(0.0, float(audio_s)) / 2.0) * 2))
+
+
+def read_avatar_timings() -> dict:
+    try:
+        return json.loads(AVATAR_TIMINGS_PATH.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def append_avatar_timing(engine: str, stage: str, audio_s: float,
+                         seconds: float) -> None:
+    """Record one measured stage duration. Best-effort — never raises into a
+    render. Keeps the last _TIMINGS_KEEP per (engine, stage, audio bucket)."""
+    if not seconds or seconds <= 0:
+        return
+    try:
+        data = read_avatar_timings()
+        bucket = _audio_bucket(audio_s)
+        cell = data.setdefault(engine, {}).setdefault(stage, {}) \
+                   .setdefault(bucket, [])
+        cell.append(round(float(seconds), 2))
+        del cell[:-_TIMINGS_KEEP]
+        AVATAR_TIMINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = AVATAR_TIMINGS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data), "utf-8")
+        tmp.replace(AVATAR_TIMINGS_PATH)
+    except OSError as e:  # noqa: BLE001 — timing is a nicety, never fatal
+        log.warning("could not persist avatar timing (%s) — ETA unaffected", e)
+
+
+def estimate_avatar_stages(engine: str, audio_s: float) -> dict:
+    """Ordered per-stage ETA for `engine` at this TTS audio length. EMA of past
+    real timings where available, else a seed. `has_history` is False until at
+    least one real timing exists (the UI shows a 'rough' note in that case)."""
+    import progress
+    engine = engine if engine in _TIMING_STAGES else "static"
+    data = read_avatar_timings()
+    bucket = _audio_bucket(audio_s)
+    seed = _TIMING_SEED[engine]
+    stages, has_history = [], False
+    for key in _TIMING_STAGES[engine]:
+        durations = data.get(engine, {}).get(key, {}).get(bucket)
+        est = progress.ema(durations) if durations else None
+        if est is not None:
+            has_history = True
+        else:
+            est = float(seed.get(key, 10.0))
+        stages.append({"key": key, "name": _STAGE_LABELS.get(key, key),
+                       "est_s": round(est, 1)})
+    return {"stages": stages,
+            "total_s": round(sum(s["est_s"] for s in stages), 1),
+            "has_history": has_history}
 
 
 SCRIPT_PROMPT = """TASK: Write a spoken intro and outro for an avatar host presenting this short clip.
@@ -191,7 +303,55 @@ def _resolve_ref_audio(cfg: dict) -> Path:
     return p
 
 
-def synthesize_batch(jobs: list[dict], cfg: dict | None = None) -> list[dict]:
+def _kokoro_synth_batch(jobs: list[dict], cfg: dict) -> list[dict]:
+    """Synthesize every job in-process via kokoro-onnx (avatar.tts.engine:
+    kokoro) — no isolated venv, unlike Chatterbox: kokoro-onnx is
+    onnxruntime-based and has no torch pin to conflict with the main venv.
+    Raises AvatarError on missing model files, missing package, or a
+    per-job synth failure."""
+    kcfg = cfg.get("avatar", {}).get("tts", {}).get("kokoro", {})
+    model_path = ROOT / str(kcfg.get("model_path", "kokoro-v1.0.onnx"))
+    voices_path = ROOT / str(kcfg.get("voices_path", "voices-v1.0.bin"))
+    voice = str(kcfg.get("voice", "af_nicole"))
+    speed = float(kcfg.get("speed", 1.0))
+    lang = str(kcfg.get("lang", "en-us"))
+    if not model_path.is_file():
+        raise AvatarError(f"kokoro model not found: {model_path} — set "
+                          "avatar.tts.kokoro.model_path")
+    if not voices_path.is_file():
+        raise AvatarError(f"kokoro voices file not found: {voices_path} — "
+                          "set avatar.tts.kokoro.voices_path")
+    try:
+        from kokoro_onnx import Kokoro
+        import soundfile as sf
+    except ImportError as e:
+        raise AvatarError(f"kokoro-onnx not installed: {e} — "
+                          "pip install kokoro-onnx")
+
+    log.info("tts: synthesizing %d line(s) via kokoro-onnx (voice=%s)",
+             len(jobs), voice)
+    kokoro = Kokoro(str(model_path), str(voices_path))
+    results = []
+    for job in jobs:
+        out_path = Path(str(job["out_path"]))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            samples, sr = kokoro.create(str(job["text"]), voice=voice,
+                                        speed=speed, lang=lang)
+        except Exception as e:
+            raise AvatarError(f"kokoro synthesis failed: {e}")
+        sf.write(str(out_path), samples, sr)
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            raise AvatarError(f"kokoro output missing or empty: {out_path}")
+        duration_s = len(samples) / float(sr)
+        if duration_s <= 0:
+            raise AvatarError(f"kokoro reported zero duration for {out_path.name}")
+        results.append({"out_path": str(out_path), "duration_s": duration_s})
+    return results
+
+
+def synthesize_batch(jobs: list[dict], cfg: dict | None = None,
+                     tracker=None) -> list[dict]:
     """Synthesize every job [{'text', 'out_path'}] in ONE tts_worker.py run
     (the model loads once) inside the isolated .venv-tts. Returns the worker's
     [{'out_path', 'duration_s'}] in job order after verifying each wav landed
@@ -199,14 +359,21 @@ def synthesize_batch(jobs: list[dict], cfg: dict | None = None) -> list[dict]:
     nonzero exit, malformed reply, timeout, or a missing/empty output file."""
     cfg = cfg or load_config()
     tts_cfg = cfg.get("avatar", {}).get("tts", {})
+    if not jobs:
+        return []
+    if tracker:
+        tracker.item("avatar", "voice synthesis (TTS)", 0.0)
+    if str(tts_cfg.get("engine", "chatterbox")) == "kokoro":
+        result = _kokoro_synth_batch(jobs, cfg)
+        if tracker:
+            tracker.item("avatar", "voice synthesis (TTS)", 1.0)
+        return result
     py = _tts_python(cfg)
     if not py.is_file():
         raise AvatarError(
             "TTS venv not found — run `python avatar.py setup-venv` once "
             "(downloads chatterbox-tts, ~2-3 GB)", detail=str(py))
     ref = _resolve_ref_audio(cfg)
-    if not jobs:
-        return []
     payload = {
         "ref_audio": str(ref),
         "device": str(tts_cfg.get("device", "auto")),
@@ -265,7 +432,101 @@ def synthesize_batch(jobs: list[dict], cfg: dict | None = None) -> list[dict]:
         if float(res.get("duration_s", 0)) <= 0:
             raise AvatarError(f"TTS reported zero duration for {out.name}",
                               detail=stderr_tail)
+    if tracker:
+        tracker.item("avatar", "voice synthesis (TTS)", 1.0)
     return results
+
+
+def generate_script_for_clip(job_dir: Path, clip_index: int, cfg: dict,
+                             provider: str | None = None) -> dict:
+    """generate_script() for one already-rendered clip, looking up its
+    transcript span the same way rerender.regenerate_metadata does — for the
+    Avatar Host UI tab's script preview (no TTS/render side-effects)."""
+    import rerender
+    job = rerender.load_job(job_dir)
+    clip = next((c for c in job["clips"] if c["index"] == clip_index), None)
+    if clip is None:
+        raise AvatarError(f"no clip index {clip_index} in {job_dir}")
+    transcript = rerender._load_marker(job_dir, "transcribe")
+    clip_text = " ".join(w["word"] for w in transcript["words"]
+                         if w["start"] >= clip["start"] - 0.05
+                         and w["end"] <= clip["end"] + 0.05)
+    script = generate_script(clip_text, clip.get("hook", ""), cfg,
+                             provider=provider)
+    return {**script, "transcript": clip_text}
+
+
+def apply_avatar_to_clip(job_dir: Path, clip_index: int, cfg: dict,
+                         intro_script: str, outro_script: str,
+                         tracker=None) -> dict:
+    """Single-clip version of prepare_avatar + apply_avatar, for the Avatar
+    Host UI tab: takes already-generated/edited scripts, synthesizes TTS for
+    just this clip, and composites them onto an ALREADY-RENDERED clip's
+    final.mp4 in place — no whole-job candidate scan, no full pipeline run."""
+    import rerender
+    job = rerender.load_job(job_dir)
+    clip = next((c for c in job["clips"] if c["index"] == clip_index), None)
+    if clip is None:
+        raise AvatarError(f"no clip index {clip_index} in {job_dir}")
+    clip_dir = job_dir / f"clip_{clip_index:02d}"
+    final = clip_dir / "final.mp4"
+    if not final.is_file():
+        raise AvatarError(
+            f"clip {clip_index} has no final.mp4 to apply avatar to")
+
+    avatar_dir = job_dir / "avatar"
+    avatar_dir.mkdir(exist_ok=True)
+    item = {"intro_script": intro_script, "outro_script": outro_script,
+            "intro_wav": str(avatar_dir / f"clip_{clip_index:02d}_intro_ui.wav"),
+            "outro_wav": str(avatar_dir / f"clip_{clip_index:02d}_outro_ui.wav")}
+    _tts_t = time.perf_counter()
+    results = synthesize_batch(
+        [{"text": intro_script, "out_path": item["intro_wav"]},
+         {"text": outro_script, "out_path": item["outro_wav"]}], cfg,
+        tracker=tracker)
+    tts_wall = time.perf_counter() - _tts_t
+    item["intro_s"] = float(results[0]["duration_s"])
+    item["outro_s"] = float(results[1]["duration_s"])
+
+    if cfg.get("avatar", {}).get("captions", {}).get("enabled", True):
+        import copy
+        import transcribe as transcribe_mod
+        if tracker:
+            tracker.item("avatar", "caption timing", 0.0)
+        wcfg = copy.deepcopy(cfg)
+        wcfg.setdefault("whisper", {})["model_override"] = str(
+            cfg.get("avatar", {}).get("captions", {}).get(
+                "whisper_model", "small"))
+        for kind in ("intro", "outro"):
+            try:
+                t = transcribe_mod.transcribe(item[f"{kind}_wav"], wcfg)
+                item[f"{kind}_words"] = t["words"]
+            except Exception as e:  # noqa: BLE001 — captions are an extra
+                log.warning("clip %02d %s caption timing failed (%s) — "
+                            "avatar captions skipped for that line",
+                            clip_index, kind, e)
+        if tracker:
+            tracker.item("avatar", "caption timing", 1.0)
+
+    preset_name = job.get("settings", {}).get("preset") or \
+        cfg["captions"]["preset"]
+    avatar_meta = apply_avatar(final, clip_dir, item, cfg,
+                               preset_name=preset_name, tracker=tracker)
+
+    # persist per-stage wall-clock for the UI ETA (best-effort). Bucket by the
+    # SAME word-count estimate the render-estimate endpoint queries with (not
+    # the actual TTS seconds) so a repeat of the same clip reuses its own
+    # history. ponytail: audio-word bucket is a coarse proxy — composite time
+    # tracks clip length; key on that if ETA accuracy ever matters.
+    engine = avatar_engine_key(cfg)
+    audio_s = estimate_audio_seconds(intro_script, outro_script)
+    append_avatar_timing(engine, "tts", audio_s, tts_wall)
+    for stage_key, secs in (avatar_meta.get("stage_timings") or {}).items():
+        append_avatar_timing(engine, stage_key, audio_s, secs)
+
+    clip["avatar"] = avatar_meta
+    rerender._save_job(job_dir, job)
+    return avatar_meta
 
 
 # ------------------------------------------------------- stage + composite
@@ -342,38 +603,41 @@ def prepare_avatar(candidates: list[dict], transcript: dict, job_dir: Path,
 def build_composite_graph(w: int, h: int, layout: dict, intro_dur: float,
                           outro_dur: float, fps: float,
                           ass_path: Path | None = None,
-                          fontsdir: Path | None = None) -> str:
+                          fontsdir: Path | None = None,
+                          animated: bool = False) -> str:
     """Pure filter_complex builder for the 3-segment composite. Input order is
     fixed: [0] finished clip, [1] first-frame PNG (looped), [2] last-frame PNG
-    (looped), [3] avatar PNG, [4] intro TTS wav, [5] outro TTS wav. Emits
-    [vout] + [acat]. TTS longer than its segment is trimmed with a short fade;
-    shorter is padded with silence, so A/V stays in sync by construction."""
-    cw = int(w * float(layout.get("clip_scale", 0.62))) // 2 * 2
+    (looped), [3] avatar PNG, [4] intro TTS wav, [5] outro TTS wav, and when
+    `animated` two more: [6] intro avatar video (alpha), [7] outro avatar
+    video (alpha). Emits [vout] + [acat]. TTS longer than its segment is
+    trimmed with a short fade; shorter is padded with silence, so A/V stays in
+    sync by construction."""
     aw = int(w * float(layout.get("avatar_scale", 0.42))) // 2 * 2
-    cy = int(h * float(layout.get("clip_y", 0.07)))
     m = int(layout.get("margin_px", 48))
-    canvas = str(layout.get("canvas_color", "0x101014"))
     left, right = f"{m}", f"W-w-{m}"
-    ix = left if layout.get("intro_side", "left") != "right" else right
-    ox = right if layout.get("outro_side", "right") != "left" else left
+    x = left if layout.get("side", "left") != "right" else right
 
-    def _seg(tag: str, src: int, av: str, x: str, dur: float) -> list[str]:
+    def _seg(tag: str, src: int, av: str, dur: float) -> list[str]:
+        # Frozen frame fills the full clip frame (no shrink/letterbox) —
+        # avatar overlays directly on top of it, same side both segments.
         fade = max(0.0, dur - 0.15)
         return [
-            f"color=c={canvas}:s={w}x{h}:d={dur:.3f}:r={fps:.3f}[{tag}bg]",
-            f"[{src}:v]scale={cw}:-2,setsar=1[{tag}fr]",
-            f"[{tag}bg][{tag}fr]overlay=(W-w)/2:{cy}[{tag}b1]",
-            f"[{tag}b1][{av}]overlay={x}:H-h-{m}[{tag}b2]",
-            f"[{tag}b2]fps={fps:.3f},format=yuv420p[{tag}v]",
+            f"[{src}:v]scale={w}:{h},setsar=1[{tag}fr]",
+            f"[{tag}fr][{av}]overlay={x}:H-h-{m}[{tag}b1]",
+            f"[{tag}b1]fps={fps:.3f},format=yuv420p[{tag}v]",
             f"[{4 if tag == 'intro' else 5}:a]aresample=44100,"
             "aformat=sample_fmts=fltp:channel_layouts=stereo,"
             f"atrim=0:{dur:.3f},afade=t=out:st={fade:.3f}:d=0.15,"
             f"apad=whole_dur={dur:.3f}[{tag}a]",
         ]
 
-    parts = [f"[3:v]format=rgba,scale={aw}:-1,split[avI][avO]"]
-    parts += _seg("intro", 1, "avI", ix, intro_dur)
-    parts += _seg("outro", 2, "avO", ox, outro_dur)
+    if animated:
+        parts = [f"[6:v]format=rgba,scale={aw}:-1[avI]",
+                f"[7:v]format=rgba,scale={aw}:-1[avO]"]
+    else:
+        parts = [f"[3:v]format=rgba,scale={aw}:-1,split[avI][avO]"]
+    parts += _seg("intro", 1, "avI", intro_dur)
+    parts += _seg("outro", 2, "avO", outro_dur)
     parts += [
         f"[0:v]setsar=1,fps={fps:.3f},format=yuv420p[mainv]",
         "[0:a]aresample=44100,"
@@ -462,6 +726,24 @@ Style: Avatar,{family},{size},{preset['primary_color']},{preset['highlight_color
                     f"Avatar,,0,0,0,,{text}\n")
 
 
+def validate_avatar_image_alpha(p: Path) -> None:
+    """Raises AvatarError unless `p` is a real image with actual (non-fully-
+    opaque) transparency — shared by the render-time resolver below and the
+    upload endpoint, so a bad avatar PNG is rejected at upload time too."""
+    from PIL import Image
+    with Image.open(p) as im:
+        if im.mode not in ("RGBA", "LA"):
+            raise AvatarError(
+                f"avatar image {p} has no alpha channel (mode={im.mode}) — "
+                "export a PNG with real transparency, not an opaque one")
+        alpha = im.convert("RGBA").getchannel("A")
+        if alpha.getextrema()[0] == 255:
+            raise AvatarError(
+                f"avatar image {p} has an alpha channel but every pixel is "
+                "fully opaque — export it with the background actually "
+                "made transparent")
+
+
 def _resolve_avatar_image(cfg: dict) -> Path:
     img = str(cfg.get("avatar", {}).get("image", "")).strip()
     if not img:
@@ -471,11 +753,12 @@ def _resolve_avatar_image(cfg: dict) -> Path:
     p = p if p.is_absolute() else ROOT / p
     if not p.is_file():
         raise AvatarError(f"avatar image not found: {p}")
+    validate_avatar_image_alpha(p)
     return p
 
 
 def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
-                 preset_name: str | None = None) -> dict:
+                 preset_name: str | None = None, tracker=None) -> dict:
     """Wrap the finished clip in the avatar intro/outro segments (in place:
     `final` is replaced). Freeze frames come from the pre-caption reframed.mp4
     when present so no burned caption fragment freezes on screen. Raises
@@ -483,7 +766,16 @@ def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
     so this is NOT best-effort like bumpers."""
     import ffutil
     final = Path(final)
+    st_times: dict[str, float] = {}   # per-stage wall-clock, for the UI ETA
     avatar_png = _resolve_avatar_image(cfg)
+    acfg_trace = cfg.get("avatar", {})
+    anim_trace = acfg_trace.get("animation", {})
+    log.info("%s: avatar config (merged) — enabled=%s image=%s "
+             "animation.enabled=%s animation.engine=%s "
+             "animation.driving_video=%s", clip_dir.name,
+             acfg_trace.get("enabled"), avatar_png,
+             anim_trace.get("enabled"), anim_trace.get("engine"),
+             anim_trace.get("driving_video"))
     info = ffutil.probe(final)
     if not info["has_audio"]:
         raise AvatarError(f"{final.name} has no audio stream")
@@ -505,6 +797,8 @@ def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
     ffutil.run_ffmpeg(["-ss", f"{max(0.0, src_dur - 0.15):.3f}",
                        "-i", freeze_src, "-frames:v", "1", "-update", "1",
                        last_png])
+    if tracker:
+        tracker.item("avatar", "freeze frames", 1.0)
 
     # avatar karaoke captions (intro/outro only): burned by the composite pass
     ass_path, fontsdir = None, None
@@ -518,20 +812,90 @@ def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
                          play_w=w, play_h=h, preset_name=preset_name)
         fontsdir = fontreg.fonts_dir(cfg)
 
+    # Animated avatar (LivePortrait) is opt-in and NOT best-effort like the
+    # static path — a failure here either falls back to the static PNG (with
+    # a clear log line) or propagates, per avatar.animation.fallback_to_static.
+    # Never a silent fallback.
+    anim_cfg = cfg.get("avatar", {}).get("animation", {})
+    animated = bool(anim_cfg.get("enabled", False))
+    log.info("%s: avatar.animation.enabled=%s (raw config value; "
+             "animated branch %s)", clip_dir.name, animated,
+             "will run" if animated else "SKIPPED — static PNG path used")
+    anim_intro_path = anim_outro_path = None
+    if animated:
+        import avatar_anim
+        try:
+            renderer = avatar_anim.AnimatedAvatarRenderer(cfg)
+            if tracker:
+                tracker.item("avatar", "lip-sync (intro)", 0.0)
+            _t = time.perf_counter()
+            anim_intro_path = renderer.render_intro(item, clip_dir,
+                                                     avatar_png, intro_dur)
+            st_times["lipsync_intro"] = time.perf_counter() - _t
+            if tracker:
+                tracker.item("avatar", "lip-sync (intro)", 1.0)
+                tracker.item("avatar", "lip-sync (outro)", 0.0)
+            _t = time.perf_counter()
+            anim_outro_path = renderer.render_outro(item, clip_dir,
+                                                     avatar_png, outro_dur)
+            st_times["lipsync_outro"] = time.perf_counter() - _t
+            if tracker:
+                tracker.item("avatar", "lip-sync (outro)", 1.0)
+        except AvatarError as e:
+            import traceback
+            if anim_cfg.get("fallback_to_static", True):
+                log.warning(
+                    "%s: avatar animation FAILED — falling back to static "
+                    "avatar image. Reason: %s\n%s", clip_dir.name, e,
+                    traceback.format_exc())
+                animated = False
+            else:
+                raise
+        else:
+            for label, p in (("intro", anim_intro_path),
+                             ("outro", anim_outro_path)):
+                if not Path(p).is_file():
+                    raise AvatarError(
+                        f"animated {label} video reported success but is "
+                        f"missing on disk: {p}")
+            log.info("%s: animated avatar videos ready — intro=%s outro=%s",
+                     clip_dir.name, anim_intro_path, anim_outro_path)
+
     layout = cfg.get("avatar", {}).get("layout", {})
     graph = build_composite_graph(w, h, layout, intro_dur, outro_dur, fps,
-                                  ass_path=ass_path, fontsdir=fontsdir)
+                                  ass_path=ass_path, fontsdir=fontsdir,
+                                  animated=animated)
     out = clip_dir / "final_avatar.mp4"
     args = ["-i", final,
             "-loop", "1", "-t", f"{intro_dur:.3f}", "-i", first_png,
             "-loop", "1", "-t", f"{outro_dur:.3f}", "-i", last_png,
             "-i", avatar_png,
-            "-i", item["intro_wav"], "-i", item["outro_wav"],
-            "-filter_complex", graph, "-map", "[vout]", "-map", "[acat]"]
+            "-i", item["intro_wav"], "-i", item["outro_wav"]]
+    if animated:
+        # Input-level -t cap, same as the PNG loop inputs above. Without it,
+        # ffmpeg's duration estimation runs away across the whole command
+        # when several other inputs are present but unreferenced by this
+        # segment's -map (reproduced directly: dropping this -t blew a 4s
+        # segment out to 3075s) — even though the .mov files themselves are
+        # ~4.1s/~3.1s, correctly bounded.
+        args += ["-t", f"{intro_dur:.3f}", "-i", anim_intro_path,
+                 "-t", f"{outro_dur:.3f}", "-i", anim_outro_path]
+        log.info("%s: ffmpeg overlay source = ANIMATED (%s, %s)",
+                 clip_dir.name, anim_intro_path, anim_outro_path)
+    else:
+        log.info("%s: ffmpeg overlay source = STATIC PNG (%s)",
+                 clip_dir.name, avatar_png)
+    args += ["-filter_complex", graph, "-map", "[vout]", "-map", "[acat]"]
     args += ffutil.video_encode_args(cfg, final=True)
     args += ["-c:a", "aac", "-b:a", cfg["render"]["audio_bitrate"],
              "-movflags", "+faststart", out]
+    if tracker:
+        tracker.item("avatar", "compositing (ffmpeg)", 0.0)
+    _t = time.perf_counter()
     ffutil.run_ffmpeg(args, progress_label=f"avatar {clip_dir.name}")
+    st_times["composite"] = time.perf_counter() - _t
+    if tracker:
+        tracker.item("avatar", "compositing (ffmpeg)", 1.0)
 
     total = intro_dur + main_dur + outro_dur
     got = ffutil.probe(out)["duration"]
@@ -546,7 +910,8 @@ def apply_avatar(final: Path, clip_dir: Path, item: dict, cfg: dict,
              "outro %.1fs)", clip_dir.name, intro_dur, main_dur, outro_dur)
     return {"intro_s": intro_dur, "outro_s": outro_dur,
             "intro_script": item["intro_script"],
-            "outro_script": item["outro_script"]}
+            "outro_script": item["outro_script"],
+            "animated": animated, "stage_timings": st_times}
 
 
 # ---------------------------------------------------------- one-time setup
@@ -636,6 +1001,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("setup-venv",
                    help="create .venv-tts and install chatterbox-tts (~2-3GB)")
+    sub.add_parser("setup-anim-venv",
+                   help="create .venv-avatar-anim and clone/install "
+                        "LivePortrait (~2-3GB)")
+    sub.add_parser("setup-musetalk-venv",
+                   help="create .venv-musetalk and clone/install MuseTalk "
+                        "lip-sync (~3-4GB + weights)")
     p_voice = sub.add_parser("setup-voice",
                              help="install a voice reference wav (3-30s)")
     p_voice.add_argument("wav", help="path to your recorded voice sample")
@@ -646,6 +1017,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "setup-venv":
             setup_venv()
+        elif a.cmd == "setup-anim-venv":
+            import avatar_anim
+            avatar_anim.setup_anim_venv()
+        elif a.cmd == "setup-musetalk-venv":
+            import avatar_anim
+            avatar_anim.setup_musetalk_venv()
         elif a.cmd == "setup-voice":
             setup_voice(a.wav)
         elif a.cmd == "say":

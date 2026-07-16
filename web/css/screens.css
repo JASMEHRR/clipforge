@@ -291,6 +291,100 @@ body.dragging .drop-hint {
 .edit-progress { display: flex; align-items: center; gap: var(--sp-3); }
 .edit-progress canvas { max-width: 240px; height: auto; }
 
+/* ----------------------------------------------------- avatar preview --- */
+.avatar-preview-frame {
+  position: relative;
+  width: 100%; max-width: 220px;
+  aspect-ratio: 9 / 16;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--line);
+}
+.avatar-preview-clip {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-preview-overlay {
+  position: absolute; bottom: 0;
+  max-width: 60%;
+  pointer-events: none;
+}
+.avatar-thumb {
+  width: 64px; height: 64px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  background: #000;
+  border: 1px solid var(--line);
+  display: block;
+}
+
+/* inline avatar picker: thumbnail strip + upload tile + drag/drop (item 1) */
+.avatar-picker { display: grid; gap: var(--sp-2); }
+.avatar-picker.is-drop {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--r-sm);
+}
+.avatar-strip {
+  display: flex; gap: var(--sp-2);
+  overflow-x: auto;
+  padding-bottom: var(--sp-1);
+}
+.avatar-tile {
+  flex: 0 0 auto;
+  width: 64px; height: 64px;
+  padding: 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: #000;
+  cursor: pointer;
+  overflow: hidden;
+}
+.avatar-tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.avatar-tile.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.avatar-tile.avatar-upload {
+  display: grid; place-content: center; gap: 2px;
+  background: var(--bg-1);
+  border-style: dashed;
+  color: var(--fg-2, inherit);
+}
+.avatar-plus { font-size: 20px; line-height: 1; }
+.avatar-drop-hint { font-size: var(--text-xs); }
+.avatar-drop-hint .btn { vertical-align: baseline; }
+
+/* preview base when no clip is chosen yet — a neutral 9:16 frame (item 2) */
+.avatar-preview-dummy {
+  width: 100%; height: 100%;
+  background:
+    repeating-linear-gradient(45deg, #141417 0 10px, #191920 10px 20px);
+}
+
+/* chosen-clip compact card (clip choosing lives in a popup now) */
+.avatar-clip-card {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+}
+.avatar-clip-thumb { width: 48px; height: 84px; object-fit: cover; }
+.avatar-clip-meta { flex: 1 1 auto; min-width: 0; }
+.avatar-clip-meta .uq-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-clip-thumb { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; }
+
+/* avatar render progress: dot-matrix + honest per-stage ETA */
+.avatar-progress { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
+.avatar-progress canvas { max-width: 240px; width: 100%; height: auto; }
+.avatar-eta { font-size: var(--text-xs); }
+.avatar-stagelist { display: grid; gap: 2px; }
+.avatar-stage-row.is-done { color: var(--accent); }
+
+/* voice preview button: inline dot-matrix "generating…" state */
+.voice-preview-btn { min-width: 8ch; }
+.voice-preview-dots { width: 40px; height: 12px; vertical-align: middle; }
+
 /* -------------------------------------------------------------- queue --- */
 
 .queue-grid {
