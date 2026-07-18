@@ -251,8 +251,6 @@ def youtube_approvals():
         item["description"] = c["meta"].get("description", "")
         item["hashtags"] = c["meta"].get("hashtags", [])
         item["proposed_publish_at"] = when.isoformat()
-        # generated avatar scripts for human review before approval
-        item["avatar"] = c["meta"].get("avatar")
         items.append(item)
     return {"items": items,
             "require_approval": bool(upload_cfg.get("require_approval",

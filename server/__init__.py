@@ -56,11 +56,10 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
-    from server import (routes_analytics, routes_avatar, routes_channels,
+    from server import (routes_analytics, routes_channels,
                         routes_edit, routes_library, routes_presets,
                         routes_run, routes_settings, routes_upload)
     app.include_router(routes_run.router)
-    app.include_router(routes_avatar.router)
     app.include_router(routes_presets.router)
     app.include_router(routes_channels.router)
     app.include_router(routes_library.router)

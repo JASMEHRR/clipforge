@@ -230,11 +230,6 @@ def apply_run_options(cfg: dict, opts: dict) -> dict:
         # creator credit appended to every clip description (channel auto-pull)
         c.setdefault("metadata", {})["credit_text"] = o["credit_text"].strip()
 
-    if o.get("avatar") is not None:
-        # Avatar Host per-run toggle (CLI --avatar / channels later); the rest
-        # of the avatar.* config (image, voice, layout) stays as configured
-        c.setdefault("avatar", {})["enabled"] = bool(o["avatar"])
-
     return c
 
 
