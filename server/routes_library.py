@@ -196,15 +196,20 @@ def get_job(job_name: str):
     return job
 
 
-_ALL_CLIPS_CACHE: list[dict] | None = None
+_ALL_CLIPS_CACHE: dict[str, list[dict]] = {}
+
+
+def _cache_key() -> str:
+    import config
+    return config.current_workspace.get()
 
 
 def invalidate_all_clips_cache() -> None:
     """Every route that changes a clip's status/approval/existence after the
     All-clips index has been scanned must call this — otherwise the cached
-    list silently disagrees with disk until the user hits Refresh."""
-    global _ALL_CLIPS_CACHE
-    _ALL_CLIPS_CACHE = None
+    list silently disagrees with disk until the user hits Refresh. Clears
+    every workspace's cache (cheap — each rebuilds lazily on next request)."""
+    _ALL_CLIPS_CACHE.clear()
 
 
 def _clip_status(key: str, scheduled_keys: set, uploaded_keys: set,
@@ -283,10 +288,10 @@ def list_all_clips(refresh: bool = False, include_sample: bool = False):
     runs) are excluded by default — they're keyless-demo output, not real
     content, and previously cluttered both tabs with mock: titles. Pass
     ?include_sample=1 to see them (e.g. while testing the sample flow)."""
-    global _ALL_CLIPS_CACHE
-    if _ALL_CLIPS_CACHE is None or refresh:
-        _ALL_CLIPS_CACHE = _scan_all_clips()
-    clips = _ALL_CLIPS_CACHE
+    key = _cache_key()
+    if key not in _ALL_CLIPS_CACHE or refresh:
+        _ALL_CLIPS_CACHE[key] = _scan_all_clips()
+    clips = _ALL_CLIPS_CACHE[key]
     if not include_sample:
         clips = [c for c in clips if c["status"] != "sample"]
     return {"clips": clips}

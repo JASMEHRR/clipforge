@@ -38,19 +38,95 @@ const routes = {
   channels: renderChannels,
   settings: renderSettings,
   history: renderHistory,
+  workspaces: renderWorkspaceSelect,
 };
 
+const WORKSPACE_KEY = "clipforge_workspace";
+const WORKSPACE_NAME_KEY = "clipforge_workspace_name";
+
 function navigate() {
-  if (cleanup) { cleanup(); cleanup = null; }
   const [, name = "", ...rest] = location.hash.split("/");
+  // no workspace chosen yet -> land on the picker first, before any other screen
+  if (!localStorage.getItem(WORKSPACE_KEY) && name !== "workspaces") {
+    location.hash = "#/workspaces";
+    return;
+  }
+  if (cleanup) { cleanup(); cleanup = null; }
   document.querySelectorAll(".topbar nav a").forEach((a) => {
     a.toggleAttribute("aria-current",
       a.getAttribute("href") === `#/${name}` || (!name && a.hash === "#/"));
   });
+  updateWorkspaceBadge();
   view.replaceChildren();
   (routes[name] || renderHome)(...rest.map(decodeURIComponent));
 }
 window.addEventListener("hashchange", navigate);
+
+function updateWorkspaceBadge() {
+  const badge = document.getElementById("workspace-badge");
+  if (!badge) return;
+  const name = localStorage.getItem(WORKSPACE_NAME_KEY);
+  badge.textContent = name || "";
+  badge.style.display = name ? "" : "none";
+}
+
+// --------------------------------------------------------- workspaces -----
+
+function renderWorkspaceSelect() {
+  const list = el("div", { class: "activity-list" });
+  const nameIn = el("input", { class: "input", type: "text",
+                               placeholder: "e.g. My Cooking Channel" });
+  const createBtn = el("button", { class: "btn btn-primary", type: "button" },
+    "Create");
+
+  const choose = (id, name) => {
+    localStorage.setItem(WORKSPACE_KEY, id);
+    localStorage.setItem(WORKSPACE_NAME_KEY, name);
+    location.hash = "#/";
+  };
+
+  const row = (w) => {
+    const a = el("a", { class: "activity-row", href: "#" },
+      el("div", { class: "activity-meta" },
+        el("div", { class: "activity-title" }, w.name)));
+    a.addEventListener("click", (e) => { e.preventDefault(); choose(w.id, w.name); });
+    return a;
+  };
+
+  const load = async () => {
+    try {
+      const { workspaces } = await api.get("/api/workspaces");
+      list.replaceChildren(...workspaces.map(row));
+    } catch (e) {
+      list.replaceChildren(el("p", { class: "t-dim", style: "margin:0" }, e.message));
+    }
+  };
+
+  createBtn.addEventListener("click", async () => {
+    const name = nameIn.value.trim();
+    if (!name) { toast("Give it a name first.", "is-error"); return; }
+    createBtn.disabled = true;
+    try {
+      const w = await api.post("/api/workspaces", { name });
+      choose(w.id, w.name);
+    } catch (e) {
+      toast(e.message, "is-error");
+      createBtn.disabled = false;
+    }
+  });
+
+  view.append(el("section", { class: "screen" },
+    el("div", { class: "hero" },
+      el("div", { class: "t-label" }, "Workspaces"),
+      el("h1", { class: "t-display" }, "Which channel are you working on?"),
+      el("p", { class: "hero-sub" },
+        "Each workspace keeps its own separate videos and clips — nothing ",
+        "from one ever shows up in another."),
+      el("div", { class: "card card-flat" }, list),
+      el("div", { class: "field-inline" }, nameIn, createBtn))));
+
+  load();
+}
 
 /* A picker-backed form row: button shows the current choice. */
 function pickerRow(label, initialText, open) {

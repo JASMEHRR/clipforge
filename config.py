@@ -2,6 +2,7 @@
 startup check and config hashing for cache keys."""
 from __future__ import annotations
 
+import contextvars
 import copy
 import hashlib
 import json
@@ -20,6 +21,14 @@ CONFIG_PATH = ROOT / "config.yaml"
 LOCAL_PATH = ROOT / "config.local.yaml"
 
 _cached: dict | None = None
+
+# Active workspace (library) for the current request — set by the server's
+# X-Workspace middleware. "default" is today's top-level output/ dir
+# (untouched); anything else scopes paths.output_dir to output/_workspaces/<id>/
+# for every load_config() caller, without those callers needing to know.
+current_workspace: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_workspace", default="default")
+WORKSPACES_SUBDIR = "_workspaces"
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -51,24 +60,40 @@ def load_config(path: Path | None = None, check_python: bool = True) -> dict:
     """Load config.yaml, overlay .env into os.environ (never into the dict)."""
     global _cached
     if _cached is not None and path is None:
-        return _cached
-    p = path or CONFIG_PATH
-    if not p.exists():
-        raise ConfigError(f"config file not found: {p}")
-    with open(p, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    if path is None and LOCAL_PATH.exists():  # Settings-tab overrides
-        try:
-            local = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
-            _deep_merge(cfg, local)
-        except (yaml.YAMLError, OSError) as e:
-            raise ConfigError(f"could not read {LOCAL_PATH.name}: {e}") from e
-    if check_python:
-        check_python_version(cfg)
-    _load_dotenv(ROOT / ".env")
+        cfg = _cached
+    else:
+        p = path or CONFIG_PATH
+        if not p.exists():
+            raise ConfigError(f"config file not found: {p}")
+        with open(p, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        if path is None and LOCAL_PATH.exists():  # Settings-tab overrides
+            try:
+                local = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
+                _deep_merge(cfg, local)
+            except (yaml.YAMLError, OSError) as e:
+                raise ConfigError(f"could not read {LOCAL_PATH.name}: {e}") from e
+        if check_python:
+            check_python_version(cfg)
+        _load_dotenv(ROOT / ".env")
+        if path is None:
+            _cached = cfg
     if path is None:
-        _cached = cfg
+        ws = current_workspace.get()
+        if ws and ws != "default":
+            cfg = {**cfg, "paths": {**cfg["paths"],
+                   "output_dir": f'{cfg["paths"]["output_dir"]}/{WORKSPACES_SUBDIR}/{ws}'}}
     return cfg
+
+
+def base_output_dir() -> Path:
+    """paths.output_dir with no workspace scoping applied — the physical root
+    all workspace subfolders live under."""
+    token = current_workspace.set("default")
+    try:
+        return ROOT / load_config()["paths"]["output_dir"]
+    finally:
+        current_workspace.reset(token)
 
 
 def save_config(updates: dict) -> dict:

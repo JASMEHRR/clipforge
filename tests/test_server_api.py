@@ -572,7 +572,7 @@ def test_delete_refuses_mid_upload(client, monkeypatch, tmp_path):
 def test_all_clips_lists_every_status(client, monkeypatch, tmp_path):
     import server.routes_library as lib
     output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
-    lib._ALL_CLIPS_CACHE = None
+    lib._ALL_CLIPS_CACHE = {}
 
     _write_candidate_clip(output_dir, "job1", "clip_00", score=70,
                           title="Pending clip", approval="pending")
@@ -612,7 +612,7 @@ def test_all_clips_lists_every_status(client, monkeypatch, tmp_path):
 def test_all_clips_cached_until_refresh_or_delete(client, monkeypatch, tmp_path):
     import server.routes_library as lib
     output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
-    lib._ALL_CLIPS_CACHE = None
+    lib._ALL_CLIPS_CACHE = {}
     _write_job_with_clip(output_dir, "job1", 0)
 
     first = client.get("/api/clips/all").json()["clips"]
@@ -639,7 +639,7 @@ def test_all_clips_reflects_approval_change_without_manual_refresh(
     call — not just after the UI's manual Refresh button."""
     import server.routes_library as lib
     output_dir = _isolate_upload_scheduler(monkeypatch, tmp_path)
-    lib._ALL_CLIPS_CACHE = None
+    lib._ALL_CLIPS_CACHE = {}
     _write_candidate_clip(output_dir, "job1", "clip_00", score=60,
                           title="Clip", approval="pending")
     (output_dir / "job1" / "job.json").write_text(json.dumps({

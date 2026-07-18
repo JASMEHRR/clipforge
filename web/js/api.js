@@ -4,9 +4,12 @@
 async function request(method, url, body) {
   let res;
   try {
+    const headers = body !== undefined ? { "Content-Type": "application/json" } : {};
+    const workspace = localStorage.getItem("clipforge_workspace");
+    if (workspace) headers["X-Workspace"] = workspace;
     res = await fetch(url, {
       method,
-      headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -33,6 +36,8 @@ export function uploadFile(url, file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
+    const workspace = localStorage.getItem("clipforge_workspace");
+    if (workspace) xhr.setRequestHeader("X-Workspace", workspace);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
     };

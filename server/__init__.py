@@ -56,12 +56,24 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
+    @app.middleware("http")
+    async def _workspace_scope(request, call_next):
+        import config
+        ws = request.headers.get("x-workspace") or "default"
+        token = config.current_workspace.set(ws)
+        try:
+            return await call_next(request)
+        finally:
+            config.current_workspace.reset(token)
+
     from server import (routes_analytics, routes_channels,
                         routes_edit, routes_library, routes_presets,
-                        routes_run, routes_settings, routes_upload)
+                        routes_run, routes_settings, routes_upload,
+                        routes_workspaces)
     app.include_router(routes_run.router)
     app.include_router(routes_presets.router)
     app.include_router(routes_channels.router)
+    app.include_router(routes_workspaces.router)
     app.include_router(routes_library.router)
     app.include_router(routes_edit.router)
     app.include_router(routes_upload.router)
