@@ -91,15 +91,21 @@ def open_ui(url: str, cfg: dict, block: bool = False) -> None:
             log.warning("auto-open: server not reachable at %s — skipping", url)
             return
         import subprocess
-        cmd = build_launch_command(url, window_mode, detect_browser())
+        # Cache-buster: a unique query per launch makes the browser re-fetch
+        # index.html (its URL changed), which then revalidates app.js and its
+        # module imports against the server's no-cache headers — so a fresh
+        # start always shows the latest UI without any manual hard-refresh.
+        sep = "&" if "?" in url else "?"
+        open_url = f"{url}{sep}v={int(time.time())}"
+        cmd = build_launch_command(open_url, window_mode, detect_browser())
         try:
             if cmd:
                 log.info("auto-open: launching app window: %s", " ".join(cmd))
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
             else:
-                log.info("auto-open: opening browser tab at %s", url)
-                webbrowser.open(url)
+                log.info("auto-open: opening browser tab at %s", open_url)
+                webbrowser.open(open_url)
         except Exception as e:  # noqa: BLE001
             log.warning("auto-open failed (non-fatal): %s", e)
 
