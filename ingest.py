@@ -145,6 +145,37 @@ def ingest(source: str, job_dir: str | Path, cfg: dict | None = None,
     return result
 
 
+def ytdlp_network_opts(cfg: dict | None = None) -> dict:
+    """yt-dlp options that reduce YouTube's "sign in to confirm you're not a
+    bot" challenge, driven by the config `download` block. Shared by the video
+    download (here) and the channel listing (channels.py).
+
+    ACCOUNT SAFETY: cookies authenticate requests as whatever account they
+    belong to. Use cookies from a SEPARATE / throwaway Google account only —
+    never your main account, since automated use can get an account flagged or
+    suspended. Rate-limiting (default on) needs no account and is the safest
+    first line of defence."""
+    from config import load_config
+    d = (cfg or load_config()).get("download", {})
+    opts: dict = {}
+    cookies_file = str(d.get("cookies_file", "")).strip()
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+    browser = str(d.get("cookies_from_browser", "")).strip()
+    if browser:
+        opts["cookiesfrombrowser"] = (browser,)  # yt-dlp expects a tuple
+    lo = float(d.get("sleep_interval_s", 0) or 0)
+    hi = float(d.get("max_sleep_interval_s", 0) or 0)
+    if lo > 0:
+        opts["sleep_interval"] = lo
+        if hi >= lo:
+            opts["max_sleep_interval"] = hi
+    ua = str(d.get("user_agent", "")).strip()
+    if ua:
+        opts["http_headers"] = {"User-Agent": ua}
+    return opts
+
+
 def _download_url(url: str, job_dir: Path, progress_cb=None) -> Path:
     try:
         import yt_dlp
@@ -174,6 +205,7 @@ def _download_url(url: str, job_dir: Path, progress_cb=None) -> Path:
         "noplaylist": True,
         "retries": 3,
     }
+    opts.update(ytdlp_network_opts())   # cookies / rate-limit / UA from config
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])

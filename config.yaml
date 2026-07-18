@@ -385,6 +385,23 @@ avatar:
                                       # from fallback_to_static above, which only
                                       # covers LivePortrait itself failing
 
+download:
+  # yt-dlp behaviour for fetching source videos. YouTube sometimes challenges
+  # automated downloads with "Sign in to confirm you're not a bot". Safest
+  # fixes, in order:
+  #   1) keep yt-dlp updated (`.venv/Scripts/python -m pip install -U yt-dlp`)
+  #   2) rate-limit below so requests look human (needs no account — safest)
+  #   3) ONLY if still blocked: cookies from a SEPARATE / throwaway Google
+  #      account. NEVER your main account — automated use can get an account
+  #      flagged or suspended.
+  cookies_file: ""            # path to a cookies.txt exported from a SECONDARY
+                              # account (see yt-dlp "How do I pass cookies")
+  cookies_from_browser: ""    # e.g. "edge"/"chrome"/"firefox" — uses that
+                              # browser's logged-in session (secondary account!)
+  sleep_interval_s: 5         # min random delay before each download (0 = off)
+  max_sleep_interval_s: 15    # max random delay — human-like pacing
+  user_agent: ""              # optional UA override; blank = yt-dlp default
+
 channels:
   # Approved channels & auto-pull. Channels themselves are managed in the UI
   # (cache/channels.json) — a channel is NEVER polled without a filled-in

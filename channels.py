@@ -174,6 +174,8 @@ def _fetch_entries(url: str, limit: int) -> list[dict]:
     tab = url if url.rstrip("/").endswith("/videos") else url + "/videos"
     opts = {"extract_flat": "in_playlist", "playlistend": int(limit),
             "quiet": True, "noprogress": True, "skip_download": True}
+    import ingest
+    opts.update(ingest.ytdlp_network_opts())  # cookies/rate-limit from config
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(tab, download=False)
