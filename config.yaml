@@ -336,18 +336,32 @@ avatar:
     # driving video, not the TTS words. Enable lip_sync below to fix that.
     # Opt-in; static PNG stays the default, guaranteed path.
     enabled: false
-    engine: liveportrait      # liveportrait | musetalk_only (lip-syncs the
-                              # static avatar PNG directly, skipping
-                              # LivePortrait's motion-transfer stage)
+    engine: hallo2            # hallo2 = audio-driven talking head (recommended;
+                              # one pass, no driving video). Needs a large CUDA
+                              # GPU — Hallo2 targets ~A100-class cards and will
+                              # NOT run on a small 4GB laptop GPU. Legacy engines
+                              # liveportrait | musetalk_only stay below (dormant).
+    fallback_to_static: true  # animation failure -> static PNG (logged, never silent)
+    hallo2:
+      # avatar.animation.engine: hallo2 — fudan-generative-vision/hallo2,
+      # audio-driven portrait animation. Isolated venv (Python 3.10 +
+      # torch==2.2.2/cu118) set up by `python avatar.py setup-hallo2`, which
+      # clones the repo and downloads weights via huggingface-cli.
+      python: .venv-hallo2/Scripts/python.exe
+      hallo2_dir: cache/hallo2                        # cloned repo
+      pretrained_dir: cache/hallo2/pretrained_models  # huggingface weights
+      config: ""                # blank -> <hallo2_dir>/configs/inference/long.yaml
+      pose_weight: 1.0
+      face_weight: 1.0
+      lip_weight: 1.0
+      face_expand_ratio: 1.2
+      timeout_s: 2400           # per intro/outro segment watchdog (diffusion is slow)
+    # --- legacy engines (dormant unless engine is set back to one of them) ---
     python: .venv-avatar-anim/Scripts/python.exe  # `python avatar.py setup-anim-venv`
     liveportrait_dir: cache/liveportrait           # cloned repo + model weights
     driving_video: assets/avatar_driving/talking_loop.mp4
     device: auto              # auto | cpu
-    timeout_s: 1200           # per intro/outro segment watchdog — measured
-                              # ~9.5min/segment on a GTX 1650 with insightface
-                              # on CPU (see avatar_anim._fix_onnxruntime_provider);
-                              # 600s was too tight and caused spurious fallback
-    fallback_to_static: true  # animation failure -> static PNG (logged, never silent)
+    timeout_s: 1200           # (liveportrait) per intro/outro segment watchdog
     lip_sync:
       # MuseTalk audio-driven lip-sync post-process: takes LivePortrait's
       # motion-transfer output above + the real TTS wav and re-syncs just

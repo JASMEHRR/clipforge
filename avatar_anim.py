@@ -65,9 +65,20 @@ MUSETALK_VENV_DIR = ROOT / ".venv-musetalk"
 MUSETALK_DIR = ROOT / "cache" / "musetalk"
 MUSETALK_WORKER_PATH = ROOT / "musetalk_worker.py"
 
+# Hallo2 (fudan-generative-vision) — audio-driven talking head, the current
+# avatar.animation.engine. Replaces the LivePortrait(+MuseTalk) two-stage
+# engine: Hallo2 animates the portrait directly from the TTS wav in one pass.
+HALLO2_VENV_DIR = ROOT / ".venv-hallo2"
+HALLO2_DIR = ROOT / "cache" / "hallo2"
+HALLO2_WORKER_PATH = ROOT / "hallo2_worker.py"
+
 
 def _acfg(cfg: dict) -> dict:
     return cfg.get("avatar", {}).get("animation", {})
+
+
+def _h2cfg(cfg: dict) -> dict:
+    return _acfg(cfg).get("hallo2", {})
 
 
 def _lscfg(cfg: dict) -> dict:
@@ -94,6 +105,32 @@ def _musetalk_venv_python(cfg: dict) -> Path:
 
 def _musetalk_dir(cfg: dict) -> Path:
     raw = str(_lscfg(cfg).get("musetalk_dir", "cache/musetalk"))
+    p = Path(raw)
+    return p if p.is_absolute() else ROOT / p
+
+
+def _hallo2_venv_python(cfg: dict) -> Path:
+    raw = str(_h2cfg(cfg).get("python", ".venv-hallo2/Scripts/python.exe"))
+    p = Path(raw)
+    return p if p.is_absolute() else ROOT / p
+
+
+def _hallo2_dir(cfg: dict) -> Path:
+    raw = str(_h2cfg(cfg).get("hallo2_dir", "cache/hallo2"))
+    p = Path(raw)
+    return p if p.is_absolute() else ROOT / p
+
+
+def _hallo2_pretrained_dir(cfg: dict) -> Path:
+    raw = str(_h2cfg(cfg).get("pretrained_dir", "cache/hallo2/pretrained_models"))
+    p = Path(raw)
+    return p if p.is_absolute() else ROOT / p
+
+
+def _hallo2_config(cfg: dict) -> Path:
+    raw = str(_h2cfg(cfg).get("config", "")).strip()
+    if not raw:
+        return _hallo2_dir(cfg) / "configs" / "inference" / "long.yaml"
     p = Path(raw)
     return p if p.is_absolute() else ROOT / p
 
@@ -318,6 +355,126 @@ class AnimatedAvatarRenderer:
             "-c:v", "qtrle", "-pix_fmt", "argb", alpha_out])
         mask_path.unlink(missing_ok=True)
 
+    # -------------------------------------------------------- Hallo2 engine
+
+    def _run_hallo2(self, source_image: Path, driving_audio: Path,
+                    out_path: Path) -> Path:
+        """Animate source_image from driving_audio via Hallo2 (one pass, no
+        driving video, no separate lip-sync). Raises AvatarError on any
+        failure — the caller has no lower tier to fall back to."""
+        py = _hallo2_venv_python(self.cfg)
+        if not py.is_file():
+            raise AvatarError(
+                "Hallo2 venv not found — run `python avatar.py setup-hallo2` "
+                "once (clones Hallo2 + downloads model weights, several GB; "
+                "needs a CUDA GPU with plenty of VRAM — Hallo2 targets "
+                "~A100-class cards, it will not run on a small 4GB laptop GPU)",
+                detail=str(py))
+        h2 = _h2cfg(self.cfg)
+        payload = {
+            "source_image": str(source_image),
+            "driving_audio": str(driving_audio),
+            "out_path": str(out_path),
+            "hallo2_dir": str(_hallo2_dir(self.cfg)),
+            "pretrained_dir": str(_hallo2_pretrained_dir(self.cfg)),
+            "config": str(_hallo2_config(self.cfg)),
+            "pose_weight": float(h2.get("pose_weight", 1.0)),
+            "face_weight": float(h2.get("face_weight", 1.0)),
+            "lip_weight": float(h2.get("lip_weight", 1.0)),
+            "face_expand_ratio": float(h2.get("face_expand_ratio", 1.2)),
+        }
+        timeout = float(h2.get("timeout_s", 2400))
+        log.info("animation: running Hallo2 via %s", py)
+        try:
+            proc = subprocess.run(
+                [str(py), str(HALLO2_WORKER_PATH)], input=json.dumps(payload),
+                capture_output=True, text=True, encoding="utf-8",
+                timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            raise AvatarError(
+                f"Hallo2 worker timed out after {timeout:.0f}s "
+                "(raise avatar.animation.hallo2.timeout_s)",
+                detail=(e.stderr or "")[-1000:] if isinstance(e.stderr, str)
+                else None)
+        except OSError as e:
+            raise AvatarError(f"could not launch Hallo2 worker: {e}",
+                              detail=str(py))
+
+        stderr_tail = (proc.stderr or "")[-1000:]
+        lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        reply = None
+        if lines:
+            try:
+                reply = json.loads(lines[-1])
+            except json.JSONDecodeError:
+                reply = None
+        if reply is None:
+            raise AvatarError(f"Hallo2 worker exited {proc.returncode}",
+                              detail=stderr_tail)
+        if not reply.get("ok"):
+            raise AvatarError(
+                f"Hallo2 failed: {reply.get('error', 'unknown error')}",
+                detail=stderr_tail)
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            raise AvatarError(f"Hallo2 output missing or empty: {out_path}",
+                              detail=stderr_tail)
+        return out_path
+
+    def _render_hallo2(self, audio_path: Path, image_path: Path,
+                       duration_s: float, out_path: Path) -> Path:
+        """avatar.animation.engine: hallo2 — animate the static avatar image
+        directly from the TTS wav, then fit to the segment length and cut out
+        the background to alpha. Mandatory: any failure raises AvatarError."""
+        import ffutil
+        log.info("ENTER AnimatedAvatarRenderer._render_hallo2() "
+                 "source_image=%s audio=%s out=%s duration_s=%.2f",
+                 image_path.resolve(), audio_path.resolve(),
+                 out_path.resolve(), duration_s)
+        key = _cache_key(image_path, audio_path, image_path, duration_s,
+                         self.cfg)
+        sidecar = out_path.with_suffix(".hash.json")
+        if out_path.is_file() and sidecar.is_file():
+            try:
+                cached_key = json.loads(sidecar.read_text())["key"]
+            except (OSError, json.JSONDecodeError, KeyError):
+                cached_key = None
+            if cached_key == key:
+                log.info("animation cache hit: %s", out_path.name)
+                return out_path
+
+        tmp_dir = out_path.parent / f".anim_tmp_{out_path.stem}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        talking_path = tmp_dir / "talking.mp4"
+        self._run_hallo2(image_path, audio_path, talking_path)
+
+        # Hallo2 output length follows the audio; the avatar segment is
+        # duration_s (speech + freeze pad). tpad clones the last frame to
+        # cover any shortfall, then -t caps the result at exactly duration_s.
+        fitted = tmp_dir / "fitted.mp4"
+        ffutil.run_ffmpeg([
+            "-i", str(talking_path), "-t", f"{duration_s:.3f}",
+            "-vf", f"tpad=stop_mode=clone:stop_duration={duration_s:.3f}",
+            "-an", "-pix_fmt", "yuv420p", str(fitted)])
+        self._segment_alpha(fitted, out_path)
+
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            raise AvatarError(
+                f"animation pipeline reported success but output is "
+                f"missing or empty: {out_path}")
+
+        sidecar.write_text(json.dumps({"key": key, "lipsynced": True}),
+                          encoding="utf-8")
+        for f in (talking_path, fitted):
+            f.unlink(missing_ok=True)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+        log.info("animation rendered (hallo2): %s (%.1fs) — verified on disk "
+                 "(%d bytes)", out_path.name, duration_s,
+                 out_path.stat().st_size)
+        return out_path
+
     # -------------------------------------------------------------- public
 
     def _render_musetalk_only(self, audio_path: Path, image_path: Path,
@@ -387,7 +544,11 @@ class AnimatedAvatarRenderer:
                  "source_image=%s audio=%s out=%s duration_s=%.2f",
                  image_path.resolve(), audio_path.resolve(),
                  out_path.resolve(), duration_s)
-        if str(_acfg(self.cfg).get("engine", "liveportrait")) == "musetalk_only":
+        engine = str(_acfg(self.cfg).get("engine", "hallo2"))
+        if engine == "hallo2":
+            return self._render_hallo2(audio_path, image_path, duration_s,
+                                       out_path)
+        if engine == "musetalk_only":
             return self._render_musetalk_only(audio_path, image_path,
                                               duration_s, out_path)
         driving = _resolve_driving_video(self.cfg)
@@ -473,6 +634,37 @@ class AnimatedAvatarRenderer:
                      outro_dur: float) -> Path:
         out = clip_dir / "avatar_outro.mov"
         return self.render(Path(item["outro_wav"]), image_path, outro_dur, out)
+
+
+HALLO2_SETUP_INSTRUCTIONS = r"""
+Hallo2 avatar setup - run on a machine with a LARGE CUDA GPU. Hallo2 targets
+~A100-class cards; it will NOT run on a small 4GB laptop GPU (e.g. a GTX 1650).
+
+1) Clone Hallo2 into cache/hallo2:
+     git clone https://github.com/fudan-generative-vision/hallo2 cache/hallo2
+
+2) Create the isolated env (Python 3.10) and install deps:
+     py -3.10 -m venv .venv-hallo2
+     .venv-hallo2\Scripts\python -m pip install --upgrade pip
+     .venv-hallo2\Scripts\python -m pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2
+     .venv-hallo2\Scripts\python -m pip install -r cache/hallo2/requirements.txt
+     .venv-hallo2\Scripts\python -m pip install "huggingface_hub[cli]" pyyaml
+
+3) Download the model weights (several GB):
+     .venv-hallo2\Scripts\huggingface-cli download fudan-generative-ai/hallo2 --local-dir cache/hallo2/pretrained_models
+
+4) Ensure ffmpeg is installed and on PATH.
+
+avatar.animation.engine is already 'hallo2' (config.yaml). Paths/weights are
+tunable under avatar.animation.hallo2. Then use the Avatar Host tab as usual.
+"""
+
+
+def setup_hallo2() -> None:
+    """Print Hallo2 setup steps. Deliberately does NOT auto-run the heavy,
+    GPU/CUDA-specific install (Python 3.10 + torch + multi-GB weights) — those
+    belong on the capable GPU box, run by the user against Hallo2's own docs."""
+    print(HALLO2_SETUP_INSTRUCTIONS)
 
 
 def _pick_anim_python_launcher() -> list[str]:

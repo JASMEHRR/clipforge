@@ -64,6 +64,12 @@ _TIMING_SEED = {
                      "lipsync_outro": 570.0, "composite": 30.0},
     "musetalk":     {"tts": 4.0, "lipsync_intro": 480.0,
                      "lipsync_outro": 480.0, "composite": 30.0},
+    # hallo2 animates each segment directly from audio (no separate motion +
+    # lip-sync passes). Seed guesses only — Hallo2 is a diffusion model, so
+    # per-segment time is large and dominated by the GPU; real timings replace
+    # these after the first run on the actual hardware.
+    "hallo2":       {"tts": 4.0, "lipsync_intro": 300.0,
+                     "lipsync_outro": 300.0, "composite": 30.0},
 }
 # Ordered stages shown in the UI per engine. ponytail: caption timing and
 # freeze-frame extraction are sub-second — folded into composite, not tracked.
@@ -71,6 +77,7 @@ _TIMING_STAGES = {
     "static":       ["tts", "composite"],
     "liveportrait": ["tts", "lipsync_intro", "lipsync_outro", "composite"],
     "musetalk":     ["tts", "lipsync_intro", "lipsync_outro", "composite"],
+    "hallo2":       ["tts", "lipsync_intro", "lipsync_outro", "composite"],
 }
 _STAGE_LABELS = {
     "tts": "Voice synthesis", "lipsync_intro": "Lip-sync (intro)",
@@ -91,10 +98,14 @@ def estimate_audio_seconds(*texts: str) -> float:
 
 def avatar_engine_key(cfg: dict) -> str:
     """Which timing bucket a render falls into: 'static' (PNG overlay),
-    'liveportrait' (motion only), or 'musetalk' (motion + lip-sync)."""
+    'hallo2' (audio-driven talking head), 'liveportrait' (motion only), or
+    'musetalk' (motion + lip-sync)."""
     anim = cfg.get("avatar", {}).get("animation", {})
     if not anim.get("enabled"):
         return "static"
+    engine = str(anim.get("engine", "hallo2"))
+    if engine == "hallo2":
+        return "hallo2"
     if anim.get("lip_sync", {}).get("enabled"):
         return "musetalk"
     return "liveportrait"
@@ -1062,6 +1073,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("setup-musetalk-venv",
                    help="create .venv-musetalk and clone/install MuseTalk "
                         "lip-sync (~3-4GB + weights)")
+    sub.add_parser("setup-hallo2",
+                   help="print Hallo2 talking-head setup steps (run on a large "
+                        "CUDA GPU; the current default animation engine)")
     p_voice = sub.add_parser("setup-voice",
                              help="install a voice reference wav (3-30s)")
     p_voice.add_argument("wav", help="path to your recorded voice sample")
@@ -1078,6 +1092,9 @@ def main(argv: list[str] | None = None) -> int:
         elif a.cmd == "setup-musetalk-venv":
             import avatar_anim
             avatar_anim.setup_musetalk_venv()
+        elif a.cmd == "setup-hallo2":
+            import avatar_anim
+            avatar_anim.setup_hallo2()
         elif a.cmd == "setup-voice":
             setup_voice(a.wav)
         elif a.cmd == "say":
