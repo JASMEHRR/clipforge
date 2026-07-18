@@ -23,7 +23,6 @@ router = APIRouter()
 
 UPLOAD_DIR = ROOT / "cache" / "uploads"
 BRANDING_DIR = ROOT / "assets" / "user_branding"
-AVATAR_DIR = ROOT / "assets" / "user_avatars"
 _CHUNK = 1024 * 1024
 
 
@@ -78,37 +77,6 @@ def upload_logo(file: UploadFile):
         return {"path": str(dest.relative_to(ROOT)).replace("\\", "/")}
     except OSError as e:
         raise HTTPException(500, friendly(e, "Saving your logo"))
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
-@router.post("/api/uploads/avatar_image")
-def upload_avatar_image(file: UploadFile):
-    """Persist an avatar PNG under assets/user_avatars/ (survives restarts;
-    re-uploading the same name replaces it). Validates real alpha transparency
-    at upload time — the same check apply_avatar does at render time — so a
-    bad image fails loud here instead of on the render run."""
-    import avatar as avatar_mod
-    tmp = _save_upload(file, UPLOAD_DIR, 64)
-    try:
-        try:
-            avatar_mod.validate_avatar_image_alpha(tmp)
-        except avatar_mod.AvatarError as e:
-            raise HTTPException(422, str(e))
-        except OSError:
-            # not a decodable image at all (PIL's UnidentifiedImageError is
-            # an OSError subclass) — same "bad input" framing as AvatarError,
-            # not a server-side failure
-            raise HTTPException(
-                422, "That file isn't a readable image — please upload a PNG.")
-        AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-        safe = re.sub(r"[^A-Za-z0-9._-]", "_",
-                      Path(file.filename or "avatar.png").name) or "avatar.png"
-        dest = AVATAR_DIR / safe
-        shutil.copyfile(tmp, dest)
-        return {"path": str(dest.relative_to(ROOT)).replace("\\", "/")}
-    except OSError as e:
-        raise HTTPException(500, friendly(e, "Saving your avatar image"))
     finally:
         tmp.unlink(missing_ok=True)
 

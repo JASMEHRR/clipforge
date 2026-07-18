@@ -271,39 +271,6 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                 notes.append(f"style refinement applied to {len(edit_plans)} clips "
                              f"(profile: {prof_tag})")
 
-        # Avatar Host: scripts + TTS for every clip in ONE serial pass (the
-        # TTS model loads once; never inside the parallel render workers).
-        # Hash-keyed marker like events/refine. Failure fails the JOB here —
-        # an avatar run without voices is wrong content, and nothing has
-        # rendered yet.
-        _check_cancel()
-        avatar_on = cfg.get("avatar", {}).get("enabled", False)
-        job["settings"]["avatar"] = bool(avatar_on)
-        avatar_items = None
-        if avatar_on:
-            import avatar as avatar_mod
-            avatar_key = config_hash(cfg, "avatar", "llm") + "_" + resolved
-            marker = job_dir / ".done_avatar.json"
-            if marker.exists() and not force and \
-                    json.loads(marker.read_text(encoding="utf-8")).get("key") == avatar_key:
-                avatar_items = json.loads(marker.read_text(encoding="utf-8"))["items"]
-                tracker.skip("avatar")
-                timings["avatar"] = {"status": "skipped", "seconds": 0.0}
-                log.info("stage avatar: marker present — skipped")
-            else:
-                tracker.start("avatar", "generating avatar scripts + voice")
-                with stage_timer(log, "avatar", timings):
-                    avatar_items = avatar_mod.prepare_avatar(
-                        candidates, transcript, job_dir, cfg,
-                        provider=resolved)
-                marker.write_text(json.dumps({"key": avatar_key,
-                                              "items": avatar_items}),
-                                  encoding="utf-8")
-                tracker.finish("avatar")
-            notes.append(f"avatar host: {len(avatar_items)} clips")
-        else:
-            tracker.skip("avatar", "avatar host disabled")
-
         # resolve background music once per job (one backing track), download
         # on first use; any failure disables music without failing the job
         music_path, music_attr = None, ""
@@ -348,8 +315,7 @@ def run_job(source: str, cfg: dict | None = None, provider: str | None = None,
                     cut_mod, reframe_mod, captions_mod, metadata_mod,
                     scenes_mod, music_path, music_attr, music_volume_db,
                     tracker, edit_plans[i] if edit_plans else None,
-                    events,
-                    avatar_items[i] if avatar_items else None): i
+                    events): i
                     for i, cand in enumerate(candidates)}
                 for fut in as_completed(futures):
                     i = futures[fut]
@@ -424,7 +390,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 preset, aspect, debug_dir, cut_mod, reframe_mod, captions_mod,
                 metadata_mod, scenes_mod, music_path=None, music_attr="",
                 music_volume_db=-18.0, tracker=None, edit_plan=None,
-                events=None, avatar_item=None) -> dict:
+                events=None) -> dict:
     def _sub(frac: float) -> None:
         if tracker:
             tracker.item("render", f"clip_{i:02d}", frac)
@@ -557,20 +523,7 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
                 f"(existing_subs={edit_plan['existing_subs']['decision']})")
             log.warning("clip %02d: %s", i, dup_caption_warning)
 
-    # Avatar Host composite wraps the FINISHED clip (captions + mixdown +
-    # bumpers + dup-caption check all done). NOT best-effort: a missing avatar
-    # on an avatar-channel clip is wrong content, so AvatarError propagates and
-    # the existing per-clip containment in run_job logs this clip as failed.
-    avatar_meta = None
-    if avatar_item:
-        import avatar as avatar_mod
-        avatar_meta = avatar_mod.apply_avatar(final, clip_dir, avatar_item,
-                                              cfg, preset_name=preset,
-                                              tracker=tracker)
-        _sub(0.95)
-
-    # content duration (drives virality/rescore); avatar intro/outro seconds
-    # live in avatar_meta so the true file length stays derivable
+    # content duration (drives virality/rescore)
     duration = edit_plan["output_duration"] if edit_plan else round(out_end - out_start, 3)
     clip_text = " ".join(w["word"] for w in words)
     meta = metadata_mod.generate_metadata(clip_text, cand["hook"], cfg, provider)
@@ -624,11 +577,6 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
     if refine_summary:
         payload["style"] = refine_summary
         log.info("clip %02d refined: %s", i, json.dumps(payload["style"]))
-    if avatar_meta:
-        payload["avatar"] = avatar_meta
-        # synthetic voice + generated frames: uploads must carry YouTube's
-        # altered/synthetic-content disclosure (read by upload_scheduler)
-        payload.setdefault("upload", {})["synthetic"] = True
     (clip_dir / "metadata.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -646,9 +594,6 @@ def _render_one(i, cand, info, transcript, scene_data, job_dir, cfg, provider,
             "path": str(final), "srt": str(final.with_suffix(".srt")),
             "metadata": meta, "virality": vir, "reframe": metrics,
             "niche": payload["niche"],
-            # only avatar-mode clips carry the key (job.json of normal runs
-            # stays unchanged)
-            **({"avatar": avatar_meta} if avatar_meta else {}),
             "events": clip_events,
             "style": payload.get("style"),
             "preset": preset or cfg["captions"]["preset"], "aspect": aspect}
@@ -718,10 +663,6 @@ def main(argv=None):
     ap.add_argument("--subs-mode", default=None,
                     choices=["auto", "replace", "keep", "ignore"],
                     help="burned-in subtitle handling (default: config style.existing_subs.mode)")
-    ap.add_argument("--avatar", action="store_true",
-                    help="Avatar Host mode: generated spoken intro/outro over "
-                         "frozen frames (needs avatar.py setup-venv + "
-                         "setup-voice + avatar.image)")
     a = ap.parse_args(argv)
 
     cfg = load_config()
@@ -746,10 +687,6 @@ def main(argv=None):
         music = a.music or opts.get("music")
         music_vol = (opts.get("music_volume_db", music_vol)
                      if a.music_volume == -18.0 else music_vol)
-    if a.avatar:
-        from config import apply_run_options
-        cfg = apply_run_options(cfg, {"avatar": True})
-
     job = run_job(source, cfg, provider=a.provider, job_dir=a.job_dir,
                   force=a.force, preset=preset, aspect=aspect,
                   debug=a.debug or None, target_count=a.clips,

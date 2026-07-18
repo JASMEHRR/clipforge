@@ -98,12 +98,6 @@ def rerender_clip(job_dir: str | Path, clip_index: int, start: float,
     clip_dir = job_dir / f"clip_{clip_index:02d}"
     log.info("re-render clip %02d: %.2f–%.2f preset=%s", clip_index, start,
              end, preset)
-    if clip.get("avatar"):
-        # rerender skips mixdown/bumpers/avatar by design — the re-rendered
-        # file loses the avatar intro/outro until the job is re-run
-        log.warning("clip %02d was avatar-rendered; this re-render drops the "
-                    "avatar intro/outro — re-run the job to restore them",
-                    clip_index)
 
     # Refine the edited bounds unless disabled (mirrors pipeline _render_one).
     style_on = (cfg.get("style", {}).get("enabled", False)
