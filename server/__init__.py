@@ -43,6 +43,19 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="ClipForge", lifespan=lifespan)
 
+    # Local, self-updating app: never let the browser serve a stale UI after an
+    # update (the auto-opened window otherwise keeps cached HTML/JS/CSS and the
+    # non-technical user has no reason to know about "hard refresh"). Force a
+    # revalidate on every page/asset — on localhost the cost is negligible, and
+    # StaticFiles still answers unchanged files with a cheap 304.
+    @app.middleware("http")
+    async def _no_stale_ui(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.endswith((".html", ".js", ".css")):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     from server import (routes_analytics, routes_avatar, routes_channels,
                         routes_edit, routes_library, routes_presets,
                         routes_run, routes_settings, routes_upload)
