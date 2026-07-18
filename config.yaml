@@ -294,7 +294,10 @@ avatar:
     outro_min_s: 3.0
     outro_max_s: 10.0
   tts:
-    engine: chatterbox        # local voice-cloning TTS in an ISOLATED venv
+    engine: edge              # edge = free Microsoft neural voices (no key,
+                              # online, incl. Hindi/Hinglish); kokoro = local
+                              # ONNX preset voices (offline); chatterbox = local
+                              # voice-cloning in an ISOLATED venv (heavy)
     python: .venv-tts/Scripts/python.exe   # created by `python avatar.py setup-venv`
     ref_audio: ""             # set via `python avatar.py setup-voice <wav>` ->
                               # lands in config.local.yaml, never committed
@@ -302,6 +305,13 @@ avatar:
                               # CPU synthesis takes minutes per clip — fine at
                               # avatar-host cadence of 1 upload/day)
     timeout_s: 1800           # whole TTS batch watchdog
+    edge:
+      # avatar.tts.engine: edge — free Microsoft neural voices via the edge-tts
+      # package. No API key, needs internet. See EDGE_VOICES in
+      # server/routes_avatar.py for the picker's curated list (Hindi/Hinglish
+      # included). No local model to download.
+      voice: en-US-AriaNeural
+      rate: "+0%"             # speaking-rate delta, e.g. -10% / +15%
     kokoro:
       # avatar.tts.engine: kokoro — local ONNX preset-voice TTS, runs
       # in-process in the main venv (no isolated venv: onnxruntime-based,

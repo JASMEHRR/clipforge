@@ -29,6 +29,30 @@ AVATAR_DIR = ROOT / "assets" / "user_avatars"
 # introspection. Add real enumeration if the voice set ever changes.
 KOKORO_VOICES = ["af_nicole", "af_bella", "af_sarah", "am_adam", "am_michael"]
 
+# Curated edge-tts (Microsoft) neural voices — free, no key, includes
+# Hindi/Hinglish. Ids are edge-tts' ShortName values.
+EDGE_VOICES = [
+    {"id": "en-US-AriaNeural", "label": "Aria — US English (female)"},
+    {"id": "en-US-GuyNeural", "label": "Guy — US English (male)"},
+    {"id": "en-GB-SoniaNeural", "label": "Sonia — UK English (female)"},
+    {"id": "en-IN-NeerjaNeural", "label": "Neerja — Indian English (female)"},
+    {"id": "en-IN-PrabhatNeural", "label": "Prabhat — Indian English (male)"},
+    {"id": "hi-IN-SwaraNeural", "label": "Swara — Hindi/Hinglish (female)"},
+    {"id": "hi-IN-MadhurNeural", "label": "Madhur — Hindi/Hinglish (male)"},
+]
+
+
+def _voice_options(cfg: dict) -> tuple[str, list[dict]]:
+    """(tts engine, previewable voice list) for the configured avatar TTS
+    engine. edge and kokoro both preview fast in-process; other engines
+    (chatterbox) have no on-demand preset list."""
+    engine = str(cfg.get("avatar", {}).get("tts", {}).get("engine", "edge"))
+    if engine == "edge":
+        return engine, list(EDGE_VOICES)
+    if engine == "kokoro":
+        return engine, [{"id": v, "label": v} for v in KOKORO_VOICES]
+    return engine, []
+
 # bump to invalidate every cached voice preview at once
 _PREVIEW_VERSION = "1"
 
@@ -42,9 +66,7 @@ def _tts_cache_dir(cfg: dict) -> Path:
 @router.get("/api/avatar/voices")
 def list_avatar_voices():
     cfg = load_config()
-    voices = [{"id": v, "label": v} for v in KOKORO_VOICES]
-    if str(cfg.get("avatar", {}).get("tts", {}).get("ref_audio", "")).strip():
-        voices.append({"id": "cloned", "label": "Your cloned voice"})
+    _, voices = _voice_options(cfg)
     animation = cfg.get("avatar", {}).get("animation", {})
     engine = (str(animation.get("engine", "liveportrait"))
               if animation.get("enabled") else "static image")
@@ -131,18 +153,19 @@ def avatar_voice_preview(req: VoicePreviewRequest):
     if not text:
         raise HTTPException(422, "Nothing to say yet — write some script text "
                                  "first.")
-    if voice not in KOKORO_VOICES:
+    engine, voices = _voice_options(load_config())
+    if voice not in {v["id"] for v in voices}:
         raise HTTPException(422, "Preview is only available for the built-in "
                                  "voices.")
     key = hashlib.sha256(json.dumps(
-        {"voice": voice, "text": text, "engine": "kokoro",
+        {"voice": voice, "text": text, "engine": engine,
          "v": _PREVIEW_VERSION}, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     wav = _tts_cache_dir(load_config()) / f"{key}.wav"
     if not wav.is_file():
         cfg = copy.deepcopy(load_config())
         tts = cfg.setdefault("avatar", {}).setdefault("tts", {})
-        tts["engine"] = "kokoro"
-        tts.setdefault("kokoro", {})["voice"] = voice
+        tts["engine"] = engine
+        tts.setdefault(engine, {})["voice"] = voice
         # synth to a unique temp then atomic-replace: a failed or concurrent
         # synth never leaves a partial/empty wav that later serves as a "hit"
         tmp = wav.with_name(f"{key}.{uuid.uuid4().hex[:8]}.tmp")
@@ -199,8 +222,9 @@ def avatar_render(job_name: str, index: int, req: AvatarRenderRequest):
     avatar_cfg = cfg.setdefault("avatar", {})
     avatar_cfg["enabled"] = True
     if req.voice:
-        avatar_cfg.setdefault("tts", {}).setdefault("engine", "kokoro")
-        avatar_cfg["tts"].setdefault("kokoro", {})["voice"] = req.voice
+        tts = avatar_cfg.setdefault("tts", {})
+        engine = str(tts.setdefault("engine", "edge"))
+        tts.setdefault(engine, {})["voice"] = req.voice
     layout = avatar_cfg.setdefault("layout", {})
     if req.side in ("left", "right"):
         layout["side"] = req.side

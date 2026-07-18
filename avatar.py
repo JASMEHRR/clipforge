@@ -350,6 +350,59 @@ def _kokoro_synth_batch(jobs: list[dict], cfg: dict) -> list[dict]:
     return results
 
 
+def _edge_synth_batch(jobs: list[dict], cfg: dict) -> list[dict]:
+    """Synthesize every job in-process via edge-tts (avatar.tts.engine: edge) —
+    Microsoft's free online neural voices (no API key, includes Hindi/Hinglish),
+    no torch pin, no local model. Needs internet. Output is transcoded to a real
+    PCM wav so downstream (Whisper timing + ffmpeg composite) is unaffected by
+    the mp3 edge-tts emits. Raises AvatarError on missing package or synth
+    failure (an offline machine surfaces here with a clear message)."""
+    import asyncio
+
+    import ffutil
+    ecfg = cfg.get("avatar", {}).get("tts", {}).get("edge", {})
+    voice = str(ecfg.get("voice", "en-US-AriaNeural"))
+    rate = str(ecfg.get("rate", "+0%"))
+    try:
+        import edge_tts
+    except ImportError as e:
+        raise AvatarError(f"edge-tts not installed: {e} — pip install edge-tts")
+
+    log.info("tts: synthesizing %d line(s) via edge-tts (voice=%s)",
+             len(jobs), voice)
+    results = []
+    for job in jobs:
+        out_path = Path(str(job["out_path"]))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        text = str(job["text"]).strip()
+        if not text:
+            raise AvatarError("empty TTS text")
+        mp3 = out_path.with_name(out_path.stem + ".edge.mp3")
+
+        async def _run(t=text, m=str(mp3)):
+            await edge_tts.Communicate(t, voice, rate=rate).save(m)
+        try:
+            asyncio.run(_run())
+        except Exception as e:  # noqa: BLE001 — network/synth failures → friendly
+            raise AvatarError(f"edge-tts synthesis failed (need internet?): {e}")
+        if not mp3.is_file() or mp3.stat().st_size == 0:
+            raise AvatarError("edge-tts produced no audio — check your internet "
+                              "connection")
+        # transcode mp3 → wav (24kHz mono) so the pipeline gets a real PCM wav.
+        # -f wav forces the container: out_path may be a .tmp (preview writes to
+        # a temp name then atomic-renames), which ffmpeg can't infer a format from.
+        ffutil.run_ffmpeg(["-i", str(mp3), "-ar", "24000", "-ac", "1",
+                           "-f", "wav", str(out_path)])
+        mp3.unlink(missing_ok=True)
+        if not out_path.is_file() or out_path.stat().st_size == 0:
+            raise AvatarError(f"edge-tts output missing or empty: {out_path}")
+        duration_s = float(ffutil.probe_audio(out_path)["duration"])
+        if duration_s <= 0:
+            raise AvatarError(f"edge-tts reported zero duration for {out_path.name}")
+        results.append({"out_path": str(out_path), "duration_s": duration_s})
+    return results
+
+
 def synthesize_batch(jobs: list[dict], cfg: dict | None = None,
                      tracker=None) -> list[dict]:
     """Synthesize every job [{'text', 'out_path'}] in ONE tts_worker.py run
@@ -363,8 +416,10 @@ def synthesize_batch(jobs: list[dict], cfg: dict | None = None,
         return []
     if tracker:
         tracker.item("avatar", "voice synthesis (TTS)", 0.0)
-    if str(tts_cfg.get("engine", "chatterbox")) == "kokoro":
-        result = _kokoro_synth_batch(jobs, cfg)
+    engine = str(tts_cfg.get("engine", "chatterbox"))
+    if engine in ("kokoro", "edge"):
+        result = (_edge_synth_batch(jobs, cfg) if engine == "edge"
+                  else _kokoro_synth_batch(jobs, cfg))
         if tracker:
             tracker.item("avatar", "voice synthesis (TTS)", 1.0)
         return result
