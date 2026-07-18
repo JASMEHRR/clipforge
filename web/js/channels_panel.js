@@ -12,7 +12,18 @@ function input(value, attrs = {}) {
 }
 
 export function mountChannels(container) {
-  const state = { channels: [], presets: [] };
+  const state = { channels: [], presets: [], accounts: [] };
+
+  // <select> of connected YouTube channels (upload accounts). Reused by the
+  // add form and each channel row's "change destination" control.
+  function accountSelect(current) {
+    const sel = el("select", {}, ...(state.accounts.length
+      ? state.accounts.map((a) => el("option", { value: a.account },
+          a.account + (a.authorized ? "" : " (not connected)")))
+      : [el("option", { value: "default" }, "default")]));
+    sel.value = current || "default";
+    return sel;
+  }
   const listWrap = el("div", { style: "display:grid;gap:8px" });
   const formWrap = el("div");
   const poolWrap = el("div");
@@ -56,6 +67,15 @@ export function mountChannels(container) {
     });
     const poolBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Pool");
     poolBtn.addEventListener("click", () => showPool(c));
+    // change which YouTube channel this source's clips upload to
+    const acctSel = accountSelect(c.account);
+    acctSel.addEventListener("change", async () => {
+      try {
+        await api.patch(`/api/channels/${c.id}`, { account: acctSel.value });
+        toast(`Uploads to "${acctSel.value}".`, "is-ok");
+        await refresh();
+      } catch (e) { toast(e.message, "is-error"); }
+    });
     const delBtn = el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Remove");
     delBtn.addEventListener("click", async () => {
       const ok = await confirmDialog({
@@ -80,6 +100,9 @@ export function mountChannels(container) {
         `${c.videos_pulled} pulled · ${c.pending} queued · `
         + `${c.processed} done${c.failed ? ` · ${c.failed} failed` : ""}`
         + (c.default_preset ? ` · preset: ${c.default_preset}` : "")),
+      el("div", { class: "field-inline" },
+        el("span", { class: "t-dim", style: "font-size:var(--text-xs)" }, "Uploads to"),
+        acctSel),
       el("div", { class: "field-inline" }, pauseBtn, poolBtn, delBtn));
   }
 
@@ -94,6 +117,7 @@ export function mountChannels(container) {
       el("option", { value: "" }, "No preset (run defaults)"),
       ...state.presets.map((p) => el("option", { value: p.name }, p.name)));
     const topN = input("10", { type: "number", min: "1", max: "50" });
+    const account = accountSelect("default");
     const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, "Add channel");
     const cancelBtn = el("button", { class: "btn btn-ghost", type: "button" }, "Cancel");
     cancelBtn.addEventListener("click", () => formWrap.replaceChildren());
@@ -108,6 +132,7 @@ export function mountChannels(container) {
           credit_text: credit.value.trim(),
           default_preset: preset.value,
           top_n: Number(topN.value) || 10,
+          account: account.value,
         });
         toast("Channel added.", "is-ok");
         formWrap.replaceChildren();
@@ -125,6 +150,7 @@ export function mountChannels(container) {
       el("div", { class: "field-inline" },
         field("Default preset", preset),
         field("Top videos to pull", topN)),
+      field("Upload to which YouTube channel", account),
       el("div", { class: "field-inline" }, saveBtn, cancelBtn)));
   }
 
@@ -151,12 +177,14 @@ export function mountChannels(container) {
 
   async function refresh() {
     try {
-      const [ch, pr] = await Promise.all([
+      const [ch, pr, acc] = await Promise.all([
         api.get("/api/channels"),
         api.get("/api/edit-presets"),
+        api.get("/api/accounts"),
       ]);
       state.channels = ch.channels;
       state.presets = pr.presets;
+      state.accounts = acc.accounts || [];
     } catch (e) {
       listWrap.replaceChildren(el("p", { class: "t-dim" }, e.message));
       return;

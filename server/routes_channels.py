@@ -20,6 +20,7 @@ class ChannelCreate(BaseModel):
     name: str = ""
     default_preset: str = ""
     top_n: int | None = None
+    account: str = "default"      # destination YouTube upload account
 
 
 class ChannelPatch(BaseModel):
@@ -29,6 +30,7 @@ class ChannelPatch(BaseModel):
     paused: bool | None = None
     default_preset: str | None = None
     top_n: int | None = None
+    account: str | None = None
 
 
 @router.get("/api/channels")
@@ -44,7 +46,7 @@ def create_channel(body: ChannelCreate):
         return channels.add_channel(
             body.url, body.permission_source, body.credit_text,
             name=body.name, default_preset=body.default_preset,
-            top_n=body.top_n)
+            top_n=body.top_n, account=body.account)
     except channels.ChannelError as e:
         raise HTTPException(422, friendly(e, "Adding this channel"))
 

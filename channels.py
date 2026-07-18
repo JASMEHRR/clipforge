@@ -78,10 +78,11 @@ def can_auto_pull(ch: dict) -> bool:
 
 def add_channel(url: str, permission_source: str = "", credit_text: str = "",
                 name: str = "", default_preset: str = "",
-                top_n: int | None = None) -> dict:
+                top_n: int | None = None, account: str = "default") -> dict:
     """Register a channel. `permission_source` and `credit_text` are optional
     but recommended; when set, credit_text is appended to every clip
-    description made from this channel."""
+    description made from this channel. `account` is the destination YouTube
+    channel (upload account) that clips from this source get posted to."""
     url = (url or "").strip().rstrip("/")
     if not url.startswith("http"):
         raise ChannelError("channel URL must be a link (https://...)")
@@ -100,6 +101,7 @@ def add_channel(url: str, permission_source: str = "", credit_text: str = "",
             "credit_text": (credit_text or "").strip(),
             "paused": False,
             "default_preset": (default_preset or "").strip(),
+            "account": (account or "default").strip() or "default",
             "top_n": int(top_n or cfg.get("channels", {}).get(
                 "top_n_default", 10)),
             "added_at": dt.datetime.now().isoformat(timespec="seconds"),
@@ -129,6 +131,22 @@ def update_channel(ch_id: str, fields: dict) -> dict:
         ch.setdefault("account", "default")
         save_store(store)
     return ch
+
+
+def reassign_account(old_account: str, new_account: str = "default") -> int:
+    """Point every channel currently uploading to `old_account` at
+    `new_account` instead. Used when a destination account is removed so its
+    source channels don't silently stop uploading. Returns how many changed."""
+    changed = 0
+    with _store_lock:
+        store = load_store()
+        for ch in store["channels"].values():
+            if ch.get("account", "default") == old_account:
+                ch["account"] = new_account
+                changed += 1
+        if changed:
+            save_store(store)
+    return changed
 
 
 def delete_channel(ch_id: str) -> None:
@@ -361,6 +379,7 @@ def channel_stats(store: dict | None = None) -> list[dict]:
             "paused": ch.get("paused", False),
             "permission_source": ch.get("permission_source", ""),
             "default_preset": ch.get("default_preset", ""),
+            "account": ch.get("account", "default"),
             "last_poll": ch.get("last_poll"),
             "videos_pulled": len(pool),
             "pending": sum(1 for e in pool if e["status"] == "new"),

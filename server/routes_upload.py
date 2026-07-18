@@ -681,6 +681,107 @@ def authorize_account(account: str):
     return {"account": account, "authorized": yt.authorized(account)}
 
 
+# ---- multiple destination accounts (add / list / remove) ----------------
+# Each account == one connected YouTube channel with its own OAuth token
+# (youtube_upload.token_path(account)). One Google client_secret.json serves
+# them all; you sign in with each channel's Google account at Connect time.
+
+def _safe_account_name(name: str) -> str:
+    """Normalize an account name to the same safe form token_path() uses, so
+    the config key and the on-disk token filename always line up."""
+    raw = (name or "").strip().lower().replace(" ", "-")
+    return "".join(c for c in raw if c.isalnum() or c in "-_")
+
+
+class AccountCreate(BaseModel):
+    name: str
+    max_per_day: int | None = None
+
+
+@router.get("/api/accounts")
+def list_accounts_route():
+    """Light account list for dropdowns and the linking UI."""
+    import youtube_upload as yt
+    from upload_scheduler import list_accounts
+    cfg = load_config()
+    return {"accounts": [{"account": a, "authorized": yt.authorized(a),
+                          "is_default": a == "default"}
+                         for a in list_accounts(cfg)]}
+
+
+@router.post("/api/accounts")
+def create_account(body: AccountCreate):
+    """Add a new destination YouTube channel (a named upload account). It still
+    has to be connected (authorized) separately."""
+    from upload_scheduler import list_accounts
+    name = _safe_account_name(body.name)
+    if not name:
+        raise HTTPException(422, "Give the channel a name (letters, numbers, "
+                                 "- or _).")
+    if name == "default":
+        raise HTTPException(422, "'default' is the built-in first channel — "
+                                 "pick another name.")
+    cfg = load_config()
+    if name in list_accounts(cfg):
+        raise HTTPException(409, "You already have a channel with that name.")
+    n = 3 if body.max_per_day is None else max(0, min(50, int(body.max_per_day)))
+    try:
+        # keep the built-in 'default' account present when the first named
+        # account is added (otherwise list_accounts would drop it)
+        save_config({"upload": {"accounts": {"default": {},
+                                             name: {"max_per_day": n}}}})
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, friendly(e, "Adding that channel"))
+    return {"account": name, "max_per_day": n}
+
+
+@router.delete("/api/accounts/{account}")
+def delete_account(account: str):
+    """Remove a named account from the config (its cached OAuth token file is
+    left in place, harmless). The built-in 'default' account can't be removed."""
+    import yaml
+
+    from config import LOCAL_PATH
+    if account == "default":
+        raise HTTPException(422, "The first channel can't be removed.")
+    if not LOCAL_PATH.exists():
+        raise HTTPException(404, "That channel isn't configured.")
+    data = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
+    accts = (data.get("upload") or {}).get("accounts") or {}
+    if account not in accts:
+        raise HTTPException(404, "That channel isn't configured.")
+    del accts[account]
+    LOCAL_PATH.write_text(yaml.safe_dump(data, sort_keys=False),
+                          encoding="utf-8")
+    from config import reload_config
+    reload_config()   # direct file edit bypasses save_config's cache refresh
+
+    # Re-home anything still pointing at the removed account so its clips don't
+    # get stranded (drain_queue/scheduler only ever loop over list_accounts).
+    import channels
+    from upload_scheduler import load_queue, save_queue
+    reassigned = channels.reassign_account(account, "default")
+    qdata = load_queue()
+    moved = False
+    for e in qdata["queue"]:
+        if e.get("account", "default") == account:
+            e["account"] = "default"
+            moved = True
+    if moved:
+        save_queue(qdata)
+
+    # Drop the cached OAuth token so a later account re-created with the same
+    # name can't silently inherit this channel's credentials and upload to it.
+    import youtube_upload as yt
+    try:
+        tok = yt.token_path(account)
+        if tok.exists():
+            tok.unlink()
+    except Exception as e:  # noqa: BLE001 — token cleanup is best-effort
+        log.warning("could not remove token for account %s: %s", account, e)
+    return {"deleted": account, "channels_reassigned": reassigned}
+
+
 @router.get("/api/queue/calendar")
 def queue_calendar(account: str | None = None, days: int = 7):
     from upload_scheduler import calendar_view, load_log

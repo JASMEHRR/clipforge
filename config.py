@@ -86,6 +86,14 @@ def save_config(updates: dict) -> dict:
     return load_config()
 
 
+def reload_config() -> dict:
+    """Drop the cached singleton and reload. Use after editing config.local.yaml
+    outside save_config (e.g. removing a key, which a deep-merge can't do)."""
+    global _cached
+    _cached = None
+    return load_config()
+
+
 def _load_dotenv(env_path: Path) -> None:
     """Minimal .env loader (no dependency needed at import time). Existing
     environment variables win; the build never requires .env to exist."""
