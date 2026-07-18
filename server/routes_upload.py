@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+import config
 from config import ROOT, load_config, save_config
 from logutil import get_logger
 from server.copy import friendly
@@ -23,9 +24,19 @@ log = get_logger("server")
 router = APIRouter()
 
 
+def _account() -> str:
+    """Each workspace is its own YouTube destination account (same id) — set
+    by the server's X-Workspace middleware for the duration of the request."""
+    return config.current_workspace.get()
+
+
+def _workspace_prefix(cfg: dict) -> str:
+    return cfg["paths"]["output_dir"] + "/"
+
+
 def _authorized() -> bool:
     import youtube_upload as yt
-    return yt.authorized()
+    return yt.authorized(_account())
 
 
 def _dry_run() -> bool:
@@ -36,13 +47,15 @@ def _dry_run() -> bool:
 @router.get("/api/youtube/state")
 def youtube_state():
     import youtube_upload as yt
-    from upload_scheduler import load_log, panel_state
+    from upload_scheduler import load_log, panel_state, scoped_log
     cfg = load_config()
+    account = _account()
     state = {"configured": yt.credentials_available(),
              "authorized": _authorized(),
              "setup_instructions": yt.SETUP_INSTRUCTIONS}
     try:
-        state["panel"] = panel_state(cfg, load_log(), state["authorized"])
+        log_data = scoped_log(load_log(), _workspace_prefix(cfg))
+        state["panel"] = panel_state(cfg, log_data, state["authorized"], account)
     except Exception as e:  # noqa: BLE001 — panel must render even if the log breaks
         log.warning("auto-upload panel state failed: %s", e)
         state["panel"] = None
@@ -58,7 +71,7 @@ def authorize():
         raise HTTPException(409, "YouTube isn't set up yet — add the Google "
                                  "credentials file first (see Settings).")
     try:
-        yt.authorize()
+        yt.authorize(_account())
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, friendly(e, "Connecting to YouTube"))
     return {"authorized": _authorized()}
@@ -71,7 +84,8 @@ class AutoUploadRequest(BaseModel):
 @router.put("/api/youtube/auto")
 def set_auto_upload(req: AutoUploadRequest):
     try:
-        save_config({"upload": {"auto_enabled": bool(req.enabled)}})
+        save_config({"upload": {"accounts": {_account():
+                     {"auto_enabled": bool(req.enabled)}}}})
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, friendly(e, "Saving that setting"))
     return {"enabled": bool(req.enabled)}
@@ -91,6 +105,7 @@ def upload_job(req: UploadRequest):
         raise HTTPException(409, "Connect to YouTube first (one-time).")
     cfg = load_config()
     job_dir = safe_job_path(req.job_name)
+    service = yt.build_service(account=_account())
     try:
         job = load_job(job_dir)
         results = []
@@ -114,7 +129,8 @@ def upload_job(req: UploadRequest):
             body_meta = c["metadata"]
             if (meta.get("upload") or {}).get("synthetic"):
                 body_meta = {**body_meta, "synthetic": True}
-            r = yt.upload_clip(c["path"], body_meta, privacy=req.privacy)
+            r = yt.upload_clip(c["path"], body_meta, privacy=req.privacy,
+                               service=service)
             results.append({"title": c["metadata"]["title"], "url": r["url"]})
         return {"uploaded": results, "skipped_approval": skipped}
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
@@ -130,7 +146,7 @@ def _safe_candidate_path(key: str) -> Path:
     """Resolve an upload_scheduler candidate key ('output/<job>/clip_NN') to
     its clip directory, refusing anything that escapes output/."""
     import upload_scheduler as sched
-    out_root = sched.OUTPUT_DIR.resolve()
+    out_root = sched._output_dir().resolve()
     p = (ROOT / key).resolve()
     if not p.is_relative_to(out_root) or p == out_root:
         raise HTTPException(404, "That clip can't be found.")
@@ -161,7 +177,8 @@ def youtube_queue():
     import archive
     import upload_scheduler as sched
     cfg = load_config()
-    log_data = sched.load_log()
+    account = _account()
+    log_data = sched.scoped_log(sched.load_log(), _workspace_prefix(cfg))
     from server.routes_library import _clip_dir_from_key
     candidates = sched.find_candidates(cfg, log_data)
     wm = cfg.get("upload", {}).get("end_watermark", {})
@@ -185,7 +202,7 @@ def youtube_queue():
             import youtube_upload as yt
             ids = [e.get("video_id") for e in log_data.get("uploads", {}).values()
                    if e.get("video_id")]
-            live = yt.video_status(ids, service=yt.build_service())
+            live = yt.video_status(ids, service=yt.build_service(account=account))
         except Exception as e:  # noqa: BLE001 — status is optional context
             log.info("live video status unavailable: %s", e)
     split = sched.classify_uploads(log_data, live)
@@ -207,8 +224,8 @@ def youtube_queue():
         "candidates": [_candidate_summary(c) for c in candidates],
         "require_approval": bool(
             cfg.get("upload", {}).get("require_approval", False)),
-        "uploads_today": sched.uploads_today(log_data),
-        "max_per_day": cfg.get("upload", {}).get("max_per_day", 3),
+        "uploads_today": sched.uploads_today(log_data, account),
+        "max_per_day": sched.account_cfg(cfg, account)["max_per_day"],
         "end_watermark": {"enabled": bool(wm.get("enabled")),
                           "text": wm.get("text", "ClipForge"),
                           "duration_s": wm.get("duration_s", 1.2)},
@@ -346,6 +363,7 @@ def queue_upload(req: QueueSelectRequest):
     import youtube_upload as yt
     if not _authorized():
         raise HTTPException(409, "Connect to YouTube first (one-time).")
+    account = _account()  # captured now — work() runs in a plain thread, no request context
     cfg, log_data, picked = _select(req)
     if not picked:
         raise HTTPException(422, "No clips to upload — pick at least one.")
@@ -363,11 +381,12 @@ def queue_upload(req: QueueSelectRequest):
 
     def work() -> None:
         try:
-            youtube = yt.build_service()
+            youtube = yt.build_service(account=account)
             for c in picked:
                 with _BATCHES_LOCK:
                     _BATCHES[batch_id]["items"][c["key"]]["status"] = "uploading"
-                sched.upload_now(youtube, cfg, log_data, [c], on_progress=on_progress)
+                sched.upload_now(youtube, cfg, log_data, [c],
+                                 on_progress=on_progress, account=account)
         except Exception as e:  # noqa: BLE001 — batch worker must never crash silently
             log.error("upload-now batch %s crashed: %s", batch_id, e)
         finally:
@@ -455,11 +474,13 @@ def sync_schedule():
     import youtube_upload as yt
     if not _authorized():
         raise HTTPException(409, "Connect to YouTube first (one-time).")
+    account = _account()
     cfg = load_config()
     log_data = sched.load_log()
     try:
-        result = sched.sync_schedule(yt.build_service(),
-                                     yt.build_analytics_service(), cfg, log_data)
+        result = sched.sync_schedule(yt.build_service(account=account),
+                                     yt.build_analytics_service(account=account),
+                                     cfg, log_data, account=account)
     except Exception as e:  # noqa: BLE001 — includes friendly quota message
         raise HTTPException(502, friendly(e, "Scheduling uploads"))
     if result.get("scheduled"):
@@ -482,7 +503,8 @@ def unschedule(req: UnscheduleRequest):
         raise HTTPException(409, "Connect to YouTube first (one-time).")
     log_data = sched.load_log()
     try:
-        result = sched.unschedule(yt.build_service(), req.key, log_data)
+        result = sched.unschedule(yt.build_service(account=_account()),
+                                  req.key, log_data)
     except UploadError as e:
         raise HTTPException(409, str(e))
     except Exception as e:  # noqa: BLE001

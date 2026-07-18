@@ -86,11 +86,37 @@ function renderWorkspaceSelect() {
   };
 
   const row = (w) => {
-    const a = el("a", { class: "activity-row", href: "#" },
+    const open = el("a", { class: "activity-row", href: "#" },
       el("div", { class: "activity-meta" },
         el("div", { class: "activity-title" }, w.name)));
-    a.addEventListener("click", (e) => { e.preventDefault(); choose(w.id, w.name); });
-    return a;
+    open.addEventListener("click", (e) => { e.preventDefault(); choose(w.id, w.name); });
+    if (w.id === "default") return open;
+    const delBtn = el("button", { class: "btn btn-danger btn-sm", type: "button" },
+      "Delete");
+    delBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const ok = await confirmDialog({
+        title: `Delete "${w.name}"?`,
+        body: "This permanently deletes every video and clip in this "
+          + "workspace, and disconnects its YouTube channel. This can't be undone.",
+      });
+      if (!ok) return;
+      delBtn.disabled = true;
+      try {
+        await api.del(`/api/workspaces/${encodeURIComponent(w.id)}`);
+        if (localStorage.getItem(WORKSPACE_KEY) === w.id) {
+          localStorage.removeItem(WORKSPACE_KEY);
+          localStorage.removeItem(WORKSPACE_NAME_KEY);
+        }
+        load();
+      } catch (err) {
+        toast(err.message, "is-error");
+        delBtn.disabled = false;
+      }
+    });
+    return el("div", { class: "activity-row",
+                       style: "display:flex;align-items:center;gap:12px" },
+      el("div", { style: "flex:1" }, open), delBtn);
   };
 
   const load = async () => {

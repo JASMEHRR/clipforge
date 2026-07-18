@@ -13,13 +13,18 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
 
-from config import ROOT, WORKSPACES_SUBDIR, base_output_dir
-from errors import ConfigError
+import yaml
 
+from config import LOCAL_PATH, ROOT, WORKSPACES_SUBDIR, base_output_dir, save_config
+from errors import ConfigError
+from logutil import get_logger
+
+log = get_logger("server")
 WORKSPACES_JSON = ROOT / "cache" / "workspaces.json"
 
 
@@ -69,4 +74,57 @@ def create_workspace(name: str) -> dict:
     data["workspaces"][wid] = {"name": name, "created_at": time.time()}
     _save(data)
     output_dir_for(wid).mkdir(parents=True, exist_ok=True)
+    # each workspace is its own YouTube destination account (same id) — see
+    # server/routes_upload.py's _account(), which maps the active workspace
+    # straight onto upload.accounts.<id>. Keep 'default' present too — an
+    # accounts dict with only the new entry would make list_accounts() drop
+    # 'default' entirely (it only falls back to ['default'] when the dict is
+    # empty).
+    save_config({"upload": {"accounts": {"default": {}, wid: {}}}})
     return {"id": wid, "name": name}
+
+
+def delete_workspace(workspace_id: str) -> None:
+    """Deletes the workspace's videos/clips, its YouTube account config and
+    cached OAuth token, and re-homes anything still pointing at it (queued
+    clips, pulled channels) back onto "default" so nothing is stranded."""
+    if workspace_id == "default":
+        raise ConfigError("The Default workspace can't be deleted.")
+    data = _load()
+    if workspace_id not in data.get("workspaces", {}):
+        raise ConfigError("That workspace can't be found.")
+
+    shutil.rmtree(output_dir_for(workspace_id), ignore_errors=True)
+
+    if LOCAL_PATH.exists():
+        local = yaml.safe_load(LOCAL_PATH.read_text(encoding="utf-8")) or {}
+        accts = (local.get("upload") or {}).get("accounts") or {}
+        if workspace_id in accts:
+            del accts[workspace_id]
+            LOCAL_PATH.write_text(yaml.safe_dump(local, sort_keys=False),
+                                  encoding="utf-8")
+            import config
+            config.reload_config()
+
+    import channels
+    from upload_scheduler import load_queue, save_queue
+    channels.reassign_account(workspace_id, "default")
+    qdata = load_queue()
+    moved = False
+    for e in qdata["queue"]:
+        if e.get("account", "default") == workspace_id:
+            e["account"] = "default"
+            moved = True
+    if moved:
+        save_queue(qdata)
+
+    import youtube_upload as yt
+    try:
+        tok = yt.token_path(workspace_id)
+        if tok.exists():
+            tok.unlink()
+    except OSError as e:  # noqa: BLE001 — token cleanup is best-effort
+        log.warning("could not remove token for workspace %s: %s", workspace_id, e)
+
+    del data["workspaces"][workspace_id]
+    _save(data)

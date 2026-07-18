@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import ffutil
-from config import ROOT
+from config import ROOT, load_config
 from errors import UploadError, UploadQuotaError
 from logutil import get_logger
 
@@ -26,6 +26,27 @@ log = get_logger("upload")
 OUTPUT_DIR = ROOT / "output"
 LOG_FILE = ROOT / "cache" / "upload_log.json"
 QUEUE_FILE = ROOT / "cache" / "post_queue.json"
+
+
+def _output_dir() -> Path:
+    """The current workspace's output dir. A test/caller that monkeypatches
+    module-level OUTPUT_DIR away from its built-in default always wins (an
+    explicit override means "use exactly this directory"); otherwise this
+    re-reads load_config() so each workspace's own output/_workspaces/<id>/
+    folder is what gets scanned for candidates."""
+    if OUTPUT_DIR != ROOT / "output":
+        return OUTPUT_DIR
+    return ROOT / load_config()["paths"]["output_dir"]
+
+
+def scoped_log(log_data: dict, prefix: str) -> dict:
+    """Read-only view of the upload log limited to clip keys under `prefix`
+    (a workspace's output_dir, e.g. "output/_workspaces/cooking-channel/") —
+    since every key already encodes its workspace's path, this is enough to
+    keep one workspace's upload history out of another's. Never pass the
+    result to save_log — mutating callers must use the full load_log()."""
+    return {"uploads": {k: v for k, v in log_data.get("uploads", {}).items()
+                        if k.startswith(prefix)}}
 
 # posting-queue priority: newest uploads from approved channels first, then
 # their top performers, then manually queued clips
@@ -117,6 +138,7 @@ def account_cfg(cfg: dict, account: str = "default") -> dict:
                                             up.get("slot_spacing_minutes",
                                                    60))),
         "avatar_host": avatar_host,
+        "auto_enabled": bool(acc.get("auto_enabled", up.get("auto_enabled", False))),
     }
 
 
@@ -162,10 +184,11 @@ def _scan_clips(cfg: dict, log_data: dict) -> list[dict]:
     upload_cfg = cfg.get("upload", {})
     min_virality = upload_cfg.get("min_virality", 40)
     clips = []
-    if not OUTPUT_DIR.exists():
+    out_dir = _output_dir()
+    if not out_dir.exists():
         return clips
 
-    for meta_path in OUTPUT_DIR.glob("*/clip_*/metadata.json"):
+    for meta_path in out_dir.glob("*/clip_*/metadata.json"):
         clip_dir = meta_path.parent
         video = clip_dir / "final.mp4"
         if not video.exists():
@@ -424,22 +447,25 @@ def next_publish_times(count: int, analytics, log_data: dict,
 # ============================================================
 # UI panel snapshot
 # ============================================================
-def panel_state(cfg: dict, log_data: dict, authorized: bool) -> dict:
+def panel_state(cfg: dict, log_data: dict, authorized: bool,
+                account: str = "default") -> dict:
     """Everything the UI's auto-upload panel shows, as plain data. Pure given
-    its arguments (no I/O); the caller supplies config, log and auth state."""
-    upload_cfg = cfg.get("upload", {})
-    today = uploads_today(log_data)
-    max_day = upload_cfg.get("max_per_day", 25)
+    its arguments (no I/O); the caller supplies config, log and auth state.
+    `log_data` should already be scoped to the calling workspace (scoped_log)
+    so "recent"/counts never leak another workspace's uploads."""
+    acc = account_cfg(cfg, account)
+    today = uploads_today(log_data, account)
+    max_day = acc["max_per_day"]
     next_slot = None
-    if authorized and upload_cfg.get("auto_enabled") and today < max_day:
+    if authorized and acc["auto_enabled"] and today < max_day:
         slots = next_publish_times(
-            1, None, log_data, upload_cfg.get("publish_slots_ist", [12, 19]),
-            upload_cfg.get("slot_spacing_minutes", 60), cfg=cfg)
+            1, None, log_data, acc["publish_slots_ist"],
+            acc["slot_spacing_minutes"], cfg=cfg)
         next_slot = slots[0].isoformat() if slots else None
     recent = sorted(log_data["uploads"].values(),
                     key=lambda e: e.get("uploaded_at", ""), reverse=True)[:5]
     return {
-        "auto_enabled": bool(upload_cfg.get("auto_enabled", False)),
+        "auto_enabled": acc["auto_enabled"],
         "authorized": bool(authorized),
         "uploads_today": today,
         "max_per_day": max_day,
@@ -567,7 +593,8 @@ def upload_one(youtube, clip: dict, publish_at: datetime, category_id: str,
 
 
 def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
-                 slots_per_day: int | None = None) -> int:
+                 slots_per_day: int | None = None,
+                 account: str = "default") -> int:
     """Upload up to `limit` eligible, fully-rendered clips.
     Returns how many were uploaded. Safe to call repeatedly.
     `slots_per_day` caps publishes per calendar day (schedule-ahead spreads a
@@ -602,6 +629,7 @@ def upload_batch(youtube, analytics, cfg: dict, log_data: dict, limit: int,
             "publish_at": publish_at.isoformat(),
             "title": build_snippet(clip["meta"])["title"],
             "virality_score": clip["score"],
+            "account": account,
         }
         save_log(log_data)
         done += 1
@@ -662,7 +690,8 @@ def _future_scheduled_count(log_data: dict, within_days: int | None = None) -> i
 
 
 def sync_schedule(youtube, analytics, cfg: dict, log_data: dict,
-                  horizon_days: int | None = None) -> dict:
+                  horizon_days: int | None = None,
+                  account: str = "default") -> dict:
     """Fill open publish slots across the horizon with approved clips, uploading
     each as private + publishAt so YouTube publishes them with the app closed.
     Bounded by (a) today's remaining quota, (b) open slots left in the horizon,
@@ -673,14 +702,14 @@ def sync_schedule(youtube, analytics, cfg: dict, log_data: dict,
     spd = _slots_per_day(cfg)
     capacity = spd * horizon_days
     open_slots = max(0, capacity - _future_scheduled_count(log_data, horizon_days))
-    q = quota_status(cfg, log_data)
+    q = quota_status(cfg, log_data, account)
     candidates = find_candidates(cfg, log_data)
     n = min(q["can_schedule_now"], open_slots, len(candidates))
     done = upload_batch(youtube, analytics, cfg, log_data, limit=n,
-                        slots_per_day=spd) if n > 0 else 0
+                        slots_per_day=spd, account=account) if n > 0 else 0
     return {"scheduled": done, "open_slots": open_slots,
             "candidates": len(candidates), "horizon_days": horizon_days,
-            "slots_per_day": spd, **quota_status(cfg, log_data)}
+            "slots_per_day": spd, **quota_status(cfg, log_data, account)}
 
 
 def classify_uploads(log_data: dict, live_status: dict | None = None) -> dict:
@@ -739,7 +768,7 @@ def unschedule(youtube, key: str, log_data: dict) -> dict:
 
 
 def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
-               on_progress=None) -> list[dict]:
+               on_progress=None, account: str = "default") -> list[dict]:
     """Publish `clips` immediately (public, no publish_at) — the manual
     'Upload now' override, distinct from upload_batch's scheduled path.
     Unlike upload_batch, a failed clip does NOT stop the rest of the batch
@@ -781,7 +810,7 @@ def upload_now(youtube, cfg: dict, log_data: dict, clips: list[dict],
         log_data["uploads"][clip["key"]] = {
             "video_id": result["video_id"], "uploaded_at": now_iso,
             "publish_at": now_iso, "title": snippet["title"],
-            "virality_score": clip["score"],
+            "virality_score": clip["score"], "account": account,
         }
         save_log(log_data)
         notify("Short published",

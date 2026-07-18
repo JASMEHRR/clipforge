@@ -26,3 +26,14 @@ def create_workspace(req: CreateWorkspaceRequest):
         return workspaces.create_workspace(req.name)
     except ConfigError as e:
         raise HTTPException(422, friendly(e, "Creating that workspace"))
+
+
+@router.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: str):
+    from server.routes_library import invalidate_all_clips_cache
+    try:
+        workspaces.delete_workspace(workspace_id)
+    except ConfigError as e:
+        raise HTTPException(422, friendly(e, "Deleting that workspace"))
+    invalidate_all_clips_cache()
+    return {"deleted": workspace_id}

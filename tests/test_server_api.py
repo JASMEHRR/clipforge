@@ -427,7 +427,7 @@ def test_youtube_queue_upload_confirm_then_submit_flow(client, monkeypatch, tmp_
 
     monkeypatch.setattr("youtube_upload.credentials_available", lambda: True)
     monkeypatch.setattr("youtube_upload.has_cached_token", lambda account="default": True)
-    monkeypatch.setattr("youtube_upload.build_service", lambda service=None: object())
+    monkeypatch.setattr("youtube_upload.build_service", lambda service=None, account="default": object())
 
     def fake_upload_clip(video, snippet, privacy="private", service=None,
                          publish_at=None, category_id=None):
@@ -895,8 +895,8 @@ def test_sync_schedule_and_unschedule_flow(client, monkeypatch, tmp_path):
                               title=f"Clip {i}")
     monkeypatch.setattr(yt, "credentials_available", lambda: True)
     monkeypatch.setattr(yt, "has_cached_token", lambda account="default": True)
-    monkeypatch.setattr(yt, "build_service", lambda service=None: object())
-    monkeypatch.setattr(yt, "build_analytics_service", lambda service=None: None)
+    monkeypatch.setattr(yt, "build_service", lambda service=None, account="default": object())
+    monkeypatch.setattr(yt, "build_analytics_service", lambda service=None, account="default": None)
     n = {"i": 0}
 
     def fake_upload_clip(video, snippet, privacy="private", service=None,
