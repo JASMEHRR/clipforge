@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import urllib.request
 import uuid
@@ -1069,6 +1070,63 @@ def report(analytics, log_data: dict) -> str:
     lines.append("- Clips with avg watch % under 40 are being swiped away: raise "
                  "min_virality or tighten hooks.")
     return "\n".join(lines)
+
+
+# ============================================================
+# Background sync (primary hands-off path — runs inside the server process)
+# ============================================================
+_sync_thread: threading.Thread | None = None
+
+
+def start_background_sync() -> None:
+    """Periodic sync_schedule for every authorized, auto-enabled account, so
+    upload scheduling stays hands-off for as long as ClipForge is running —
+    no separate external scheduler, and no dependence on trigger_after_render
+    (which only fires right after a render finishes, so it can't pick back
+    up clips that were already queued from an earlier session, or resume the
+    day after a quota reset on its own). Mirrors channels.start_background_poll.
+    Failures for one account, or the loop itself, never take down the rest."""
+    global _sync_thread
+    if _sync_thread is not None and _sync_thread.is_alive():
+        return
+
+    def loop() -> None:
+        # Grace period before the first pass: lets the rest of server startup
+        # settle, and — just as importantly — means a short-lived process
+        # (like a test's TestClient, which boots and tears down the app in
+        # well under this window) never overlaps with this thread's first
+        # real sync_schedule call and races the test's own assertions.
+        time.sleep(30)
+        while True:
+            interval = 3600
+            try:
+                cfg = load_config()
+                interval = int(cfg.get("upload", {}).get("sync_interval_s", 3600))
+                if youtube_upload.credentials_available():
+                    log_data = load_log()
+                    analytics = youtube_upload.build_analytics_service()
+                    for account in list_accounts(cfg):
+                        acc = account_cfg(cfg, account)
+                        if not acc["auto_enabled"] or not youtube_upload.authorized(account):
+                            continue
+                        try:
+                            youtube = youtube_upload.build_service(account=account)
+                            result = sync_schedule(youtube, analytics, cfg,
+                                                   log_data, account=account)
+                            if result["scheduled"]:
+                                log.info("background sync: '%s' scheduled %d clip(s)",
+                                        account, result["scheduled"])
+                        except Exception as e:  # noqa: BLE001 — one account's failure must not block others
+                            log.warning("background sync failed for account "
+                                       "'%s': %s", account, e)
+            except Exception as e:  # noqa: BLE001 — the loop must survive anything
+                log.warning("background sync loop error (will retry): %s", e)
+                interval = 3600
+            time.sleep(interval)
+
+    _sync_thread = threading.Thread(target=loop, name="upload-sync", daemon=True)
+    _sync_thread.start()
+    log.info("background upload sync started")
 
 
 # ============================================================

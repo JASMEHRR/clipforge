@@ -5,7 +5,7 @@
  * an additional manual trigger into it, not a second selection system. */
 
 import { api } from "./api.js";
-import { confirmDialog, el, fmtBytes, fmtClock, thumbButton,
+import { collapsible, confirmDialog, el, fmtBytes, fmtClock, thumbButton,
   toast } from "./ui.js";
 
 const STATUS_LABEL = {
@@ -73,7 +73,7 @@ export function mountUploadQueue(container) {
       el("div", {},
         el("div", { class: "uq-section-label t-label" },
           "Scheduled on YouTube — publishes with the app closed"),
-        quotaLine),
+        collapsible("quota details", quotaLine, { mini: true })),
       syncBtn),
     scheduledWrap,
     el("div", { class: "uq-controls", style: "margin-top:8px" },
@@ -350,16 +350,18 @@ export function mountUploadQueue(container) {
       thumbButton(c.video_url, c.title, "uq-thumb"),
       el("div", { class: "uq-meta" },
         el("div", { class: "uq-title" }, c.title),
-        c.description ? el("div", { class: "t-dim",
-                                    style: "font-size:var(--text-xs)" },
-          c.description) : null,
-        (c.hashtags && c.hashtags.length)
-          ? el("div", { class: "t-dim t-mono",
-                        style: "font-size:var(--text-xs)" },
-              c.hashtags.join(" ")) : null,
-        el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
-          slot ? `would publish ${slot}` : "",
-          c.duration != null ? ` · ${fmtClock(c.duration)}` : "")),
+        collapsible("details", [
+          c.description ? el("div", { class: "t-dim",
+                                      style: "font-size:var(--text-xs)" },
+            c.description) : null,
+          (c.hashtags && c.hashtags.length)
+            ? el("div", { class: "t-dim t-mono",
+                          style: "font-size:var(--text-xs)" },
+                c.hashtags.join(" ")) : null,
+          el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+            slot ? `would publish ${slot}` : "",
+            c.duration != null ? ` · ${fmtClock(c.duration)}` : ""),
+        ], { mini: true })),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
         c.niche ? el("span", { class: "badge" }, c.niche) : null),
@@ -486,13 +488,19 @@ export function mountUploadQueue(container) {
     return el("div", { class: "uq-row" },
       check,
       thumbButton(c.video_url, c.title, "uq-thumb"),
-      el("div", { class: "uq-meta", onclick: () => setSel(!check.checked) },
+      el("div", { class: "uq-meta", onclick: (ev) => {
+        // let clicks inside the nested "details" toggle it instead of also
+        // toggling this row's selection checkbox
+        if (ev.target.closest(".retract")) return;
+        setSel(!check.checked);
+      } },
         el("div", { class: "uq-title" }, c.title),
-        el("div", { class: "t-dim t-mono", style: "font-size:var(--text-xs)" },
+        collapsible("details", el("div", { class: "t-dim t-mono",
+                                          style: "font-size:var(--text-xs)" },
           c.source_name, c.duration != null ? ` · ${fmtClock(c.duration)}` : "",
           c.bytes ? ` · ${fmtBytes(c.bytes)}` : "",
           c.duplicates ? ` · +${c.duplicates} duplicate`
-            + `${c.duplicates > 1 ? "s" : ""} collapsed` : "")),
+            + `${c.duplicates > 1 ? "s" : ""} collapsed` : ""), { mini: true })),
       el("div", { class: "uq-score" },
         el("span", { class: "t-mono" }, String(c.score)),
         c.niche ? el("span", { class: "badge" }, c.niche) : null,

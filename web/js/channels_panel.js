@@ -3,7 +3,7 @@
  * "check now", per-channel source pool. */
 
 import { api } from "./api.js";
-import { confirmDialog, el, field, toast } from "./ui.js";
+import { confirmDialog, el, field, fmtClock, toast } from "./ui.js";
 
 function input(value, attrs = {}) {
   const i = el("input", { type: "text", ...attrs });
@@ -154,6 +154,43 @@ export function mountChannels(container) {
       el("div", { class: "field-inline" }, saveBtn, cancelBtn)));
   }
 
+  let poolTimer = null;
+
+  function poolRow(v) {
+    const retryBtn = v.status === "failed"
+      ? el("button", { class: "btn btn-ghost btn-sm", type: "button" }, "Retry")
+      : null;
+    if (retryBtn) {
+      retryBtn.addEventListener("click", async () => {
+        retryBtn.disabled = true;
+        try {
+          await api.post(`/api/channels/pool/${encodeURIComponent(v.video_id)}/retry`);
+          toast("Queued for another try.", "is-ok");
+          await showPool({ id: v.channel_id, name: state.channels
+            .find((c) => c.id === v.channel_id)?.name || "" });
+        } catch (e) { toast(e.message, "is-error"); retryBtn.disabled = false; }
+      });
+    }
+    const p = v.progress;
+    const progressLine = (v.status === "processing" && p)
+      ? el("div", { class: "t-dim", style: "font-size:var(--text-xs)" },
+          `${p.stage || "working"} — ${Math.round((p.overall || 0) * 100)}%`,
+          p.overall_eta != null ? ` · eta ${fmtClock(p.overall_eta)}` : "")
+      : null;
+    return el("div", { class: "an-row" },
+      el("div", {},
+        el("a", { href: v.url, target: "_blank", rel: "noopener" },
+          v.title || v.video_id),
+        progressLine),
+      el("div", { class: "t-dim" },
+        `${v.source}${v.views != null ? ` · ${v.views.toLocaleString()} views` : ""}`),
+      el("div", {},
+        el("span", { class: `badge ${v.status === "processed" ? "badge-ok" : ""}` },
+          v.status),
+        v.error ? el("span", { class: "t-dim", style: "margin-left:8px" }, v.error) : "",
+        retryBtn));
+  }
+
   async function showPool(c) {
     let pool;
     try {
@@ -161,18 +198,17 @@ export function mountChannels(container) {
     } catch (e) { toast(e.message, "is-error"); return; }
     poolWrap.replaceChildren(el("div", { class: "card", style: "display:grid;gap:8px" },
       el("h3", { class: "t-label", style: "margin:0" }, `Source pool — ${c.name}`),
-      ...(pool.length ? pool.map((v) => el("div", { class: "an-row" },
-        el("div", {},
-          el("a", { href: v.url, target: "_blank", rel: "noopener" },
-            v.title || v.video_id)),
-        el("div", { class: "t-dim" },
-          `${v.source}${v.views != null ? ` · ${v.views.toLocaleString()} views` : ""}`),
-        el("div", {},
-          el("span", { class: `badge ${v.status === "processed" ? "badge-ok" : ""}` },
-            v.status),
-          v.error ? el("span", { class: "t-dim", style: "margin-left:8px" }, v.error) : "")))
+      ...(pool.length ? pool.map(poolRow)
         : [el("p", { class: "t-dim", style: "margin:0" },
             "Nothing pulled yet — hit “Check now”.")])));
+
+    // Live-refresh while anything is mid-render (progress/eta only change
+    // while something is actually processing); stop as soon as nothing is,
+    // so this doesn't poll forever after the pool settles.
+    clearTimeout(poolTimer);
+    if (pool.some((v) => v.status === "processing")) {
+      poolTimer = setTimeout(() => showPool(c), 3000);
+    }
   }
 
   async function refresh() {
@@ -196,5 +232,5 @@ export function mountChannels(container) {
   }
 
   refresh();
-  return { refresh };
+  return { refresh, dispose: () => clearTimeout(poolTimer) };
 }

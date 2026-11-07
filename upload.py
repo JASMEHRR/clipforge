@@ -5,6 +5,11 @@ Usage:
   python upload.py dry        show what WOULD upload, without uploading
   python upload.py watch      poll loop fallback (primary path is automatic,
                               see upload.auto_enabled in config.yaml)
+  python upload.py sync       fill open publish slots across the configured
+                              schedule-ahead horizon (quota- and slot-aware;
+                              same call the web UI's "Sync schedule" button
+                              makes). Safe to run repeatedly/unattended —
+                              picks up exactly where the last run left off.
   python upload.py report     28-day analytics + recommendations
 
 First run opens a browser once to approve access (needs YOUTUBE_CLIENT_SECRETS
@@ -52,6 +57,16 @@ def main(argv=None) -> int:
 
     youtube = youtube_upload.build_service()
     analytics = youtube_upload.build_analytics_service()
+
+    if mode == "sync":
+        log_data = upload_scheduler.load_log()
+        result = upload_scheduler.sync_schedule(youtube, analytics, cfg, log_data)
+        print(f"Scheduled {result['scheduled']} clip(s). "
+              f"{result['open_slots']} slot(s) still open in the next "
+              f"{result['horizon_days']} day(s); {result['candidates']} "
+              f"candidate(s) available; {result['can_schedule_now']} more "
+              f"can go out today under quota.")
+        return 0
 
     if mode == "report":
         log_data = upload_scheduler.load_log()

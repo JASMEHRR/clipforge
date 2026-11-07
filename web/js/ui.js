@@ -14,6 +14,26 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/* Retractable section: a native <details> so it's collapsed by default with
+ * no JS bookkeeping needed. `title` is always visible in the <summary> row;
+ * `bodyChildren` (anything — nodes or arrays of nodes) is hidden until
+ * opened. Pass `{ open: true }` for sections that should start expanded
+ * (the few genuinely load-bearing ones — everything else defaults closed
+ * so a tab full of stats reads as a short list of headings, not a wall of
+ * numbers). Returns the <details> node directly so callers can append it
+ * like any other element. */
+export function collapsible(title, bodyChildren,
+  { open = false, badge = null, mini = false } = {}) {
+  return el("details", {
+    class: `retract${mini ? " retract-mini" : ""}`, ...(open ? { open: "" } : {}),
+  },
+    el("summary", { class: "retract-summary" },
+      el("span", { class: "retract-title" }, title),
+      badge,
+      el("span", { class: "retract-chevron" }, "⌄")),
+    el("div", { class: "retract-body" }, bodyChildren));
+}
+
 export function toast(message, kind = "") {
   document.querySelectorAll(".toast").forEach((t) => t.remove());
   const t = el("div", { class: `toast ${kind}`, role: "status" }, message);

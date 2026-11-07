@@ -6,8 +6,8 @@
 import { api, uploadFile, watchRun } from "./api.js";
 import { barsSVG, sparklineSVG } from "./charts.js";
 import { createDotMatrix, miniScore } from "./dots.js";
-import { clipVideo, confirmDialog, el, field, fmtBytes, fmtClock, isKept,
-  toast, toggle } from "./ui.js";
+import { clipVideo, collapsible, confirmDialog, el, field, fmtBytes,
+  fmtClock, isKept, toast, toggle } from "./ui.js";
 import {
   pickFont, pickMusic, pickPosition, pickPreset, pickProfile, pickShape,
   pickSubsMode,
@@ -1139,13 +1139,19 @@ async function renderYouTube() {
     return;
   }
 
+  // Status card stays fully visible (it's the one thing you actually need
+  // at a glance); everything else is a retractable column, closed by
+  // default, so the tab reads as 3-4 short headings instead of a long
+  // scroll of stats you didn't ask for.
   const left = el("div", { class: "card", style: "display:grid;gap:16px" });
-  const right = el("div", { class: "card card-flat", style: "display:grid;gap:12px" });
-  const postQueueCard = el("div", {
-    class: "card uq-span", style: "display:grid;gap:12px",
-  });
+  const recentBody = el("div", { style: "display:grid;gap:8px" });
+  const right = el("div", { class: "card card-flat" },
+    collapsible("Recent uploads", recentBody));
+  const postQueueBody = el("div", { style: "display:grid;gap:12px" });
+  const postQueueCard = el("div", { class: "card" },
+    collapsible("Channels & posting queue", postQueueBody));
   body.replaceChildren(left, right, postQueueCard);
-  mountPostQueue(postQueueCard);
+  mountPostQueue(postQueueBody);
 
   if (!st.configured) {
     left.append(
@@ -1213,19 +1219,18 @@ async function renderYouTube() {
   }
 
   const recent = st.panel?.recent || [];
-  right.append(el("h2", { class: "t-title", style: "margin:0" }, "Recent uploads"));
-  right.append(el("p", { class: "t-dim", style: "margin:0" }, recent.length
+  recentBody.append(el("p", { class: "t-dim", style: "margin:0" }, recent.length
     ? "Your uploaded videos are listed in the Uploaded section below, with links."
     : "Nothing uploaded yet — finished clips appear in the Uploaded section below."));
 
   if (st.authorized) {
-    const queueCard = el("div", { class: "card uq-span", style: "display:grid;gap:16px" },
-      el("div", {},
-        el("h2", { class: "t-title", style: "margin:0" }, "Upload queue"),
-        el("p", { class: "t-dim", style: "margin:4px 0 0" },
-          "Send clips right now instead of waiting for the next slot.")));
+    const uploadQueueBody = el("div", { style: "display:grid;gap:16px" },
+      el("p", { class: "t-dim", style: "margin:0" },
+        "Send clips right now instead of waiting for the next slot."));
+    const queueCard = el("div", { class: "card" },
+      collapsible("Upload queue", uploadQueueBody));
     body.append(queueCard);
-    const uq = mountUploadQueue(queueCard);
+    const uq = mountUploadQueue(uploadQueueBody);
     cleanup = uq.dispose;
   }
 }
@@ -1307,7 +1312,8 @@ async function renderChannels() {
         el("div", { class: "t-label" }, "Channels"),
         el("h1", { class: "t-display" }, "Approved channels"))),
     card));
-  mountChannels(card);
+  const mc = mountChannels(card);
+  cleanup = mc.dispose;
 }
 
 async function renderAnalytics() {

@@ -39,6 +39,8 @@ def create_app() -> FastAPI:
         analytics.start_background_refresh()
         import channels
         channels.start_background_poll()
+        import upload_scheduler
+        upload_scheduler.start_background_sync()
         yield
 
     app = FastAPI(title="ClipForge", lifespan=lifespan)

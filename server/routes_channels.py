@@ -86,8 +86,7 @@ def poll_now():
 
     def drain() -> None:
         try:
-            while channels.process_next():
-                pass
+            channels.drain_pool()
         except Exception as e:  # noqa: BLE001
             log.warning("pool processing failed: %s", e)
 
@@ -105,3 +104,26 @@ def channel_pool(ch_id: str):
             if e["channel_id"] == ch_id]
     pool.sort(key=lambda e: e.get("added_at", ""), reverse=True)
     return {"pool": pool}
+
+
+@router.post("/api/channels/pool/{video_id}/retry")
+def retry_pool_entry(video_id: str):
+    """Requeue a failed pull and kick a drain right away (worker thread, same
+    pattern as poll_now) instead of leaving it to wait for the next hourly
+    poll or a manual 'Check now'."""
+    import threading
+
+    import channels
+    try:
+        result = channels.retry_pool_entry(video_id)
+    except channels.ChannelError as e:
+        raise HTTPException(409, friendly(e, "Retrying that video"))
+
+    def drain() -> None:
+        try:
+            channels.drain_pool()
+        except Exception as e:  # noqa: BLE001
+            log.warning("pool processing failed: %s", e)
+
+    threading.Thread(target=drain, name="channel-retry-drain", daemon=True).start()
+    return result

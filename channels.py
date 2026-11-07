@@ -37,6 +37,13 @@ log = get_logger("channels")
 STORE_PATH = ROOT / "cache" / "channels.json"
 _store_lock = threading.Lock()
 _poll_thread: threading.Thread | None = None
+# Reentrancy guard for drain_pool: the hourly background poll and the UI's
+# manual "Check now" button both reach drain_pool independently, and
+# _store_lock only protects individual store reads/writes, not a whole
+# drain run — without this, two drains can each claim a different pool
+# entry and render concurrently, defeating both "one video at a time" and
+# pull_delay_s.
+_drain_lock = threading.Lock()
 
 
 class ChannelError(ClipForgeError):
@@ -285,7 +292,87 @@ def _finish(vid: str, status: str, job_dir: str = "", error: str = "") -> None:
         if vid in store["pool"]:
             store["pool"][vid].update({"status": status, "job_dir": job_dir,
                                        "error": error[:300]})
+            store["pool"][vid].pop("progress", None)
             save_store(store)
+
+
+_PROGRESS_WRITE_INTERVAL_S = 2.0
+
+
+def _pool_progress_writer(vid: str):
+    """Throttled on_change callback for the ProgressTracker driving one
+    pool video's render: writes tracker.snapshot() onto the pool entry so
+    the UI can poll it, at most every _PROGRESS_WRITE_INTERVAL_S — a
+    render's per-clip item() updates can fire many times a second, and
+    writing the whole store (read+lock+write) on every single one would be
+    wasteful I/O for no visible benefit to a polling UI."""
+    last = [0.0]
+
+    def on_change(tracker) -> None:
+        now = time.monotonic()
+        if now - last[0] < _PROGRESS_WRITE_INTERVAL_S:
+            return
+        last[0] = now
+        snap = tracker.snapshot()
+        with _store_lock:
+            store = load_store()
+            if vid in store["pool"]:
+                store["pool"][vid]["progress"] = {
+                    "overall": snap["overall"], "overall_eta": snap["overall_eta"],
+                    "stage": next((s["label"] for s in snap["stages"]
+                                  if s["state"] == "running"), ""),
+                }
+                save_store(store)
+    return on_change
+
+
+def retry_pool_entry(video_id: str) -> dict:
+    """Requeue a failed pool entry: back to 'new' so the next drain picks it
+    up again. Refuses anything currently mid-render ('processing') — that
+    one isn't stuck, it just hasn't finished yet."""
+    with _store_lock:
+        store = load_store()
+        entry = store["pool"].get(video_id)
+        if entry is None:
+            raise ChannelError(f"unknown pool entry '{video_id}'")
+        if entry["status"] == "processing":
+            raise ChannelError("that video is still processing — not stuck, just busy")
+        entry["status"] = "new"
+        entry["error"] = ""
+        entry.pop("progress", None)
+        save_store(store)
+        return {**entry, "video_id": video_id}
+
+
+def drain_pool(cfg: dict | None = None) -> int:
+    """Process every pending pool entry sequentially: process_next already
+    fully renders one video's clips (pipeline.run_job runs synchronously)
+    before returning, so this never starts a second video's render while the
+    first is still in progress. Between videos it pauses
+    `channels.pull_delay_s` so consecutive fetches/downloads don't hit
+    yt-dlp back-to-back — the same rate-limit concern the download.
+    sleep_interval_s setting addresses for a single download, applied at the
+    per-video level here. Returns how many videos were processed.
+
+    Guarded by _drain_lock so the background poll and a manual "Check now"
+    (or two manual clicks) can never run concurrently: a call that finds a
+    drain already in progress returns 0 immediately rather than racing it —
+    the in-progress drain will pick up anything newly pooled on its own next
+    iteration anyway."""
+    if not _drain_lock.acquire(blocking=False):
+        log.info("drain_pool: a drain is already in progress; skipping")
+        return 0
+    try:
+        cfg = cfg or load_config()
+        delay = float(cfg.get("channels", {}).get("pull_delay_s", 30))
+        n = 0
+        while process_next(cfg):
+            n += 1
+            if delay > 0:
+                time.sleep(delay)
+        return n
+    finally:
+        _drain_lock.release()
 
 
 def process_next(cfg: dict | None = None) -> bool:
@@ -320,18 +407,64 @@ def process_next(cfg: dict | None = None) -> bool:
         run_cfg["upload"]["queue_account"] = ch.get("account", "default")
         log.info("auto-pull processing %s (%s) from %s", vid,
                  entry.get("title", "")[:60], ch.get("name"))
+        from progress import ProgressTracker
+        tracker = ProgressTracker(on_change=_pool_progress_writer(vid))
         job = pipeline.run_job(
             entry["url"], run_cfg,
             preset=opts.get("preset"),
             aspect=opts.get("aspect", "9:16"),
             music=opts.get("music"),
             music_volume_db=float(opts.get("music_volume_db", -18.0)),
-            edit_preset=preset_name or None)
+            edit_preset=preset_name or None,
+            tracker=tracker)
         _finish(vid, "processed", job_dir=str(job.get("job_dir", "")))
     except Exception as e:  # noqa: BLE001 — one bad video never stalls the pool
         log.warning("auto-pull failed for %s: %s", vid, e)
         _finish(vid, "failed", error=str(e))
     return True
+
+
+# ============================================================
+# Exhaustion detection (prompt for the next channel)
+# ============================================================
+def check_exhausted(cfg: dict) -> list[dict]:
+    """Notify once per channel when it has no pending ('new') videos left —
+    everything ever fetched from it has been processed or failed, so it's
+    fully drained and needs another source added to keep the pipeline fed.
+    Only fires after the channel has actually been polled at least once
+    (last_poll set), so a brand-new channel awaiting its first poll never
+    triggers this. Re-arms automatically if the channel later gets new
+    uploads (so a future exhaustion is notified again too). Returns the
+    channels newly flagged exhausted by this call (empty most of the time)."""
+    import upload_scheduler
+    ntfy = cfg.get("upload", {}).get("ntfy_topic", "")
+    newly_exhausted = []
+    with _store_lock:
+        store = load_store()
+        changed = False
+        for ch in store["channels"].values():
+            if not can_auto_pull(ch) or not ch.get("last_poll"):
+                continue
+            pending = any(e["channel_id"] == ch["id"] and e["status"] == "new"
+                         for e in store["pool"].values())
+            if pending:
+                if ch.get("exhausted_notified"):
+                    ch["exhausted_notified"] = False
+                    changed = True
+                continue
+            if not ch.get("exhausted_notified"):
+                upload_scheduler.notify(
+                    "Channel exhausted",
+                    f"'{ch['name']}' has no more videos left to pull — add "
+                    "another approved channel to keep clips coming.", ntfy)
+                log.info("channel '%s' exhausted; prompting for next channel",
+                         ch["name"])
+                ch["exhausted_notified"] = True
+                changed = True
+                newly_exhausted.append(ch)
+        if changed:
+            save_store(store)
+    return newly_exhausted
 
 
 # ============================================================
@@ -353,8 +486,8 @@ def start_background_poll() -> None:
                 if any(can_auto_pull(c)
                        for c in load_store()["channels"].values()):
                     poll_all(cfg)
-                    while process_next(cfg):
-                        pass
+                    drain_pool(cfg)
+                    check_exhausted(cfg)
             except Exception as e:  # noqa: BLE001 — the loop must survive anything
                 log.warning("channel poll loop error (will retry): %s", e)
                 interval = 3600
@@ -387,5 +520,6 @@ def channel_stats(store: dict | None = None) -> list[dict]:
             "pending": sum(1 for e in pool if e["status"] == "new"),
             "processed": sum(1 for e in pool if e["status"] == "processed"),
             "failed": sum(1 for e in pool if e["status"] == "failed"),
+            "exhausted": bool(ch.get("exhausted_notified")),
         })
     return stats

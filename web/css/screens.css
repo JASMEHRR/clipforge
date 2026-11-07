@@ -409,12 +409,31 @@ body.dragging .drop-hint {
 
 /* ------------------------------------------------------------ youtube --- */
 
-.yt-grid, .settings-grid {
+.settings-grid {
   display: grid;
   grid-template-columns: minmax(320px, 1.2fr) 1fr;
   gap: var(--sp-5);
   align-items: start;
 }
+
+/* youtube tab: up to 4 narrow columns instead of a few full-width panels
+ * stacked one under the other — each card is short (retractable sections
+ * default closed), so the tab reads at a glance instead of scrolling. */
+.yt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+.yt-grid .card { min-width: 0; }
+/* only for content that's genuinely a full-width table (e.g. the account
+ * list) — most cards should stay a single column now */
+.yt-grid .card.uq-span { grid-column: 1 / -1; }
+/* Channels/queue/upload-queue panels are dense multi-column rows (account
+ * grids, drag-reorder queue, thumbnail rows) built for full page width —
+ * they don't reflow into a ~240px column without breaking. Stay narrow
+ * while collapsed; reclaim full row width the moment they're opened. */
+.yt-grid .card:has(> .retract[open]) { grid-column: 1 / -1; }
 .yt-stats { display: flex; gap: var(--sp-7); align-items: end; }
 .yt-recent-row {
   display: flex; justify-content: space-between; gap: var(--sp-3);
@@ -424,7 +443,30 @@ body.dragging .drop-hint {
 }
 .yt-recent-row:last-child { border-bottom: 0; }
 .yt-recent-row a { color: var(--ink); }
-.yt-grid .card.uq-span { grid-column: 1 / -1; }
+
+/* retractable section (ui.js collapsible()) */
+.retract { border: 0; }
+.retract-summary {
+  display: flex; align-items: center; gap: var(--sp-2);
+  cursor: pointer; list-style: none;
+  font: inherit; padding: var(--sp-1) 0;
+}
+.retract-summary::-webkit-details-marker { display: none; }
+.retract-title { font-weight: 600; font-size: var(--text-sm); }
+.retract-chevron {
+  margin-left: auto; color: var(--ink-faint);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.retract[open] > .retract-summary .retract-chevron { transform: rotate(180deg); }
+.retract-body { padding-top: var(--sp-3); }
+/* compact variant: a small "details" toggle inline in a dense row (queue
+ * rows, account rows) instead of a card-level heading */
+.retract-mini .retract-summary {
+  padding: 0; gap: 4px; color: var(--ink-faint); font-size: var(--text-xs);
+}
+.retract-mini .retract-title { font-weight: 400; font-size: var(--text-xs); }
+.retract-mini .retract-chevron { font-size: var(--text-xs); }
+.retract-mini .retract-body { padding-top: 4px; }
 
 /* ----------------------------------------------------------- analytics -- */
 

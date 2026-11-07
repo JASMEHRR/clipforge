@@ -4,7 +4,7 @@
  * per day" stepper that takes effect immediately. */
 
 import { api } from "./api.js";
-import { el, toast } from "./ui.js";
+import { collapsible, el, toast } from "./ui.js";
 
 const SOURCE_LABEL = {
   channel_new: "new upload",
@@ -34,19 +34,19 @@ export function mountPostQueue(container) {
   });
 
   container.append(
-    el("div", { class: "field-inline", style: "justify-content:space-between" },
+    el("h3", { class: "t-label", style: "margin:0" }, "This week"),
+    calendarWrap,
+    el("div", { class: "field-inline", style: "justify-content:space-between;margin-top:8px" },
       el("h2", { class: "t-title", style: "margin:0" }, "Your YouTube channels"),
       drainBtn),
-    el("p", { class: "t-dim", style: "margin:0" },
+    collapsible("What's this?", el("p", { class: "t-dim", style: "margin:0" },
       "Each channel connects once with its own Google sign-in. Source channels "
-      + "in the Channels tab pick which of these they upload to."),
+      + "in the Channels tab pick which of these they upload to."), { mini: true }),
     accountsWrap,
     addWrap,
     el("h3", { class: "t-label", style: "margin:8px 0 0" },
       "Queue (drag to reorder)"),
-    queueWrap,
-    el("h3", { class: "t-label", style: "margin:8px 0 0" }, "This week"),
-    calendarWrap);
+    queueWrap);
 
   function accountRow(a) {
     const stepper = el("input", {
@@ -120,11 +120,13 @@ export function mountPostQueue(container) {
           a.authorized
             ? el("span", { class: "badge badge-ok", style: "margin-left:8px" }, "connected")
             : el("span", { class: "badge", style: "margin-left:8px" }, "not connected")),
-        el("div", { class: "t-dim", style: "font-size:var(--text-xs)" },
-          sources.length ? `Sources: ${sources.join(", ")}` : "No source channels linked yet"),
-        allChannels.length
-          ? el("div", { class: "field-inline", style: "margin-top:4px" }, linkSel)
-          : ""),
+        collapsible("details", [
+          el("div", { class: "t-dim", style: "font-size:var(--text-xs)" },
+            sources.length ? `Sources: ${sources.join(", ")}` : "No source channels linked yet"),
+          allChannels.length
+            ? el("div", { class: "field-inline", style: "margin-top:4px" }, linkSel)
+            : "",
+        ], { mini: true })),
       el("div", { class: "t-dim" },
         `${a.uploads_today}/${a.max_per_day} today · `
         + `${a.can_schedule_now} more can go out`),

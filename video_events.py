@@ -508,6 +508,17 @@ def _cloud_events(video_path, duration, cfg, progress_cb) -> list[dict]:
     fns = {"gemini": gemini_chunk_events, "openrouter": openrouter_chunk_events}
     prompts = {"gemini": build_prompt(cfg), "openrouter": build_prompt(cfg, frames=True)}
     events: list[dict] = []
+    # A single LLMError (timeout, 5xx, etc.) is treated as a one-off blip —
+    # skip just that chunk, keep the provider for the next one. But repeated
+    # timeouts back-to-back on the same provider (e.g. Gemini having an
+    # outage) mean it's effectively down for this whole run; retrying it
+    # forever would cost minutes per chunk for the rest of the video. After
+    # `max_consecutive_llm_failures` in a row, drop that provider (same as
+    # quota exhaustion) and retry the CURRENT chunk on the next provider
+    # instead of skipping it, so an outage degrades to "use OpenRouter" not
+    # "silently lose most of the timeline".
+    consecutive_fail: dict[str, int] = {}
+    max_fail = int(cfg["viral_v2"].get("max_consecutive_llm_failures", 2))
     try:
         for i, chunk in enumerate(chunks):
             if progress_cb:
@@ -517,12 +528,21 @@ def _cloud_events(video_path, duration, cfg, progress_cb) -> list[dict]:
                 p = providers[0]
                 try:
                     events += fns[p](chunk, cfg, prompts[p])
+                    consecutive_fail[p] = 0
                     break
                 except QuotaExhausted as e:
                     log.warning("viral_v2: %s exhausted (%s) — falling through",
                                 p, e)
                     providers.pop(0)
                 except LLMError as e:
+                    consecutive_fail[p] = consecutive_fail.get(p, 0) + 1
+                    if consecutive_fail[p] >= max_fail:
+                        log.warning(
+                            "viral_v2: %s failed %d times in a row (%s) — "
+                            "treating as unavailable, falling through", p,
+                            consecutive_fail[p], e)
+                        providers.pop(0)
+                        continue  # retry THIS chunk on the next provider
                     log.warning("viral_v2: %s failed on chunk %d: %s — "
                                 "continuing", p, i, e)
                     break  # transient failure: skip chunk, keep provider

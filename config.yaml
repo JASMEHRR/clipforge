@@ -32,6 +32,12 @@ viral_v2:
   # is explicitly true. YouTube-URL sources are exempt (already public).
   allow_upload: false
   providers: [gemini, openrouter]   # cloud order; keyless -> audio-DSP only
+  max_consecutive_llm_failures: 2  # a provider erroring (timeout/5xx) this many
+                                    # chunks IN A ROW is treated like quota
+                                    # exhaustion — dropped, current chunk retried
+                                    # on the next provider — instead of retrying
+                                    # a provider that's having a real outage for
+                                    # every remaining chunk of the video
   chunk_minutes: 10          # ffmpeg stream-copy chunk size for Gemini upload
   frame_interval_s: 2.0      # OpenRouter fallback: 1 frame per this many seconds
   reaction_window_s: 6.0     # extend clip end into a reaction starting within this
@@ -293,6 +299,12 @@ channels:
   # permission_source (clipping program / creator approval) and credit text.
   poll_interval_s: 3600         # hourly check for new uploads
   top_n_default: 10             # top performers fetched per channel
+  pull_delay_s: 30              # pause between pooled videos; each video's
+                                # clips finish rendering (pipeline.run_job is
+                                # synchronous) before the next is even
+                                # claimed — this just adds breathing room
+                                # between them so consecutive yt-dlp fetches
+                                # look less automated
 
 classify:
   enabled: true                 # tag each clip with a content niche (library
@@ -347,6 +359,13 @@ upload:
   ntfy_topic: ""                 # ntfy.sh topic for phone notifications; "" = disabled
   category_id: "22"              # matches youtube_upload.py's default (People & Blogs)
   watch_interval_s: 60           # poll interval for `python upload.py watch`
+  sync_interval_s: 3600          # how often the server's own background sync
+                                  # (upload_scheduler.start_background_sync)
+                                  # re-runs sync_schedule for every authorized,
+                                  # auto-enabled account — this is what keeps
+                                  # scheduling going hands-off as long as
+                                  # ClipForge is running, no external
+                                  # scheduler or "Sync schedule" click needed
   end_watermark:                 # branded outro appended ONLY to the uploaded
     enabled: false               # copy (the archived render stays clean)
     text: "ClipForge"            # wordmark on the end card (Doto brand font)
