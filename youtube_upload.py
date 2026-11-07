@@ -145,7 +145,8 @@ def build_request_body(metadata: dict, privacy: str = "private",
         metadata.get("hashtags", []))
     status = {
         "privacyStatus": privacy,
-        "selfDeclaredMadeForKids": False,
+        # Create-mode kids videos set made_for_kids; everything else stays False.
+        "selfDeclaredMadeForKids": bool(metadata.get("made_for_kids", False)),
     }
     if publish_at:
         status["publishAt"] = publish_at

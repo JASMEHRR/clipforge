@@ -250,6 +250,81 @@ def video_encode_args(cfg: dict, final: bool = False) -> list[str]:
             "-pix_fmt", "yuv420p"]
 
 
+class RawVideoWriter:
+    """Stream raw rgb24 frames (H×W×3 uint8 arrays) into ffmpeg and encode them
+    to `out_path` with `encode_args` (usually video_encode_args(cfg)). Silent
+    video only. Used by animate.py, which draws every frame in Python.
+
+        with RawVideoWriter(out, w, h, fps, video_encode_args(cfg)) as wr:
+            wr.write(frame)
+
+    ffmpeg's stderr goes to a temp file (a pipe could fill up and deadlock the
+    frame writes); any failure raises FFmpegError carrying its tail."""
+
+    def __init__(self, out_path: str | Path, width: int, height: int, fps: float,
+                 encode_args: list[str], finish_timeout: int = 900):
+        self.cmd = [ffmpeg_bin(), "-y", "-v", "error", "-f", "rawvideo",
+                    "-pix_fmt", "rgb24", "-s", f"{int(width)}x{int(height)}",
+                    "-r", f"{fps:g}", "-i", "-", "-an",
+                    *[str(a) for a in encode_args], str(out_path)]
+        self.frame_bytes = int(width) * int(height) * 3
+        self.finish_timeout = finish_timeout
+        self.proc: subprocess.Popen | None = None
+        self._err = None
+
+    def __enter__(self) -> "RawVideoWriter":
+        import tempfile
+        self._err = tempfile.TemporaryFile()
+        log.info("ffmpeg rawvideo -> %s", self.cmd[-1])
+        try:
+            self.proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE,
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=self._err)
+        except FileNotFoundError as e:
+            self._err.close()
+            raise FFmpegError("ffmpeg not found on PATH") from e
+        return self
+
+    def _stderr_tail(self) -> str:
+        self._err.seek(0)
+        return self._err.read().decode("utf-8", "replace")[-1000:]
+
+    def write(self, frame) -> None:
+        if getattr(frame, "nbytes", None) != self.frame_bytes or \
+                str(getattr(frame, "dtype", "")) != "uint8":
+            raise FFmpegError("RawVideoWriter: frame has the wrong size or dtype")
+        try:
+            self.proc.stdin.write(frame.tobytes())
+        except OSError as e:  # BrokenPipeError: ffmpeg died mid-stream
+            self.proc.kill()
+            self.proc.wait()
+            raise FFmpegError("ffmpeg stopped accepting frames",
+                              detail=self._stderr_tail()) from e
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        try:
+            if exc_type is not None:
+                if self.proc.poll() is None:
+                    self.proc.kill()
+                    self.proc.wait()
+                return False
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass  # already broken; returncode below carries the failure
+            try:
+                rc = self.proc.wait(timeout=self.finish_timeout)
+            except subprocess.TimeoutExpired as e:
+                self.proc.kill()
+                raise FFmpegError(f"ffmpeg did not finish within "
+                                  f"{self.finish_timeout}s") from e
+            if rc != 0:
+                raise FFmpegError(f"ffmpeg exited {rc}", detail=self._stderr_tail())
+        finally:
+            self._err.close()
+        return False
+
+
 def filter_path(p: str | Path) -> str:
     """Escape a filesystem path for use inside an ffmpeg filter argument
     (subtitles/ass/sendcmd filenames) — Windows drive colons and backslashes."""

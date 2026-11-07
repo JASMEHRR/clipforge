@@ -604,6 +604,93 @@ EDIT_PRESET = {
     "additionalProperties": False,
 }
 
+# --- Create mode (create.py): original kids fact Shorts from scratch -------
+
+# Animated backgrounds animate.py can draw (single source of truth: animate.py
+# imports this tuple).
+KIDS_SCENES = ("space", "ocean", "sky", "meadow", "snow", "desert", "body")
+
+# A narrated line: `text` is spoken; `icons` are 1-3 emoji drawn on screen in
+# animated mode; `visual` is the stock-footage search query in footage mode.
+KIDS_LINE_MAX_CHARS = 220          # create.apply_fact_check enforces it on fixes too
+_KIDS_LINE = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": KIDS_LINE_MAX_CHARS},
+        "icons": {"type": "array",
+                  "items": {"type": "string", "minLength": 1, "maxLength": 16},
+                  "minItems": 1, "maxItems": 3},
+        "visual": {"type": "string", "minLength": 1, "maxLength": 80},
+    },
+    "required": ["text", "icons", "visual"],
+    "additionalProperties": False,
+}
+
+_KIDS_SCENE = {"type": "string", "enum": list(KIDS_SCENES)}
+
+_KIDS_HASHTAGS = {
+    "type": "array",
+    "items": {"type": "string", "pattern": "^#[A-Za-z0-9_]+$"},
+    "minItems": 8,
+    "maxItems": 12,
+}
+
+# LLM output: one long-form kids explainer. Every chapter is self-contained
+# (opens with its own hook question) because each chapter is ALSO rendered as
+# a vertical Short. `facts` lists each chapter's factual claims so the
+# per-chapter fact-check can audit them. title/hashtags follow CLIP_METADATA's
+# limits so metadata.json is accepted by the existing Library / upload code.
+KIDS_LONG_SCRIPT = {
+    "type": "object",
+    "properties": {
+        "topic": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 60},
+        "description": {"type": "string", "minLength": 1},
+        "hashtags": _KIDS_HASHTAGS,
+        "scene": _KIDS_SCENE,       # intro + outro background
+        "intro": {"type": "array", "items": _KIDS_LINE, "minItems": 1,
+                  "maxItems": 6},
+        "chapters": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "scene": _KIDS_SCENE,
+                    "lines": {"type": "array", "items": _KIDS_LINE,
+                              "minItems": 3, "maxItems": 16},
+                    "facts": {"type": "array",
+                              "items": {"type": "string", "minLength": 1},
+                              "minItems": 1},
+                },
+                "required": ["title", "scene", "lines", "facts"],
+                "additionalProperties": False,
+            },
+            "minItems": 3,
+            "maxItems": 12,
+        },
+        "outro": {"type": "array", "items": _KIDS_LINE, "minItems": 1,
+                  "maxItems": 6},
+    },
+    "required": ["topic", "title", "description", "hashtags", "scene", "intro",
+                 "chapters", "outro"],
+    "additionalProperties": False,
+}
+
+# LLM output: independent audit of one chapter. "fix" must return one
+# corrected string per chapter line (same order); "reject" drops the chapter.
+FACT_CHECK = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["pass", "fix", "reject"]},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "corrected_lines": {"type": "array", "items": {"type": "string",
+                                                        "minLength": 1}},
+    },
+    "required": ["verdict", "issues"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -622,6 +709,8 @@ SCHEMAS: dict[str, dict] = {
     "viral_events": VIRAL_EVENTS,
     "event_timeline": EVENT_TIMELINE,
     "edit_preset": EDIT_PRESET,
+    "kids_long_script": KIDS_LONG_SCRIPT,
+    "fact_check": FACT_CHECK,
 }
 
 

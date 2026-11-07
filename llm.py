@@ -127,7 +127,7 @@ _GEMINI_TIMEOUT_MS = 45_000  # a stalled SDK call must surface as a retryable
                              # error, not hang the pipeline indefinitely
 
 
-def _gemini_client():
+def _gemini_client(timeout_ms: int = _GEMINI_TIMEOUT_MS):
     try:
         from google import genai  # lazy: SDK optional
         from google.genai import types
@@ -138,7 +138,7 @@ def _gemini_client():
     if not key:
         raise LLMError("gemini selected but GEMINI_API_KEY is not set")
     return genai.Client(api_key=key,
-                        http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS))
+                        http_options=types.HttpOptions(timeout=int(timeout_ms)))
 
 
 _RETRYABLE_TOKENS = ("503", "500", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
@@ -166,9 +166,17 @@ def _classify_gemini_error(e: Exception) -> LLMError:
 
 
 def _gemini_complete(schema, prompt, cfg, media=None):
-    client = _gemini_client()
+    # llm.gemini_timeout_s (optional): long generations such as Create mode's
+    # full video script need more than the 45s default.
+    timeout_s = cfg["llm"].get("gemini_timeout_s")
+    client = _gemini_client(int(float(timeout_s) * 1000) if timeout_s
+                            else _GEMINI_TIMEOUT_MS)
+    # llm.gemini_strip_keys (optional): extra schema keywords to keep out of the
+    # response_schema. Nested minItems/maxItems make Gemini reject the whole
+    # request (400 INVALID_ARGUMENT) - Create mode's long script drops them.
+    extra = tuple(cfg["llm"].get("gemini_strip_keys") or ())
     config = {"response_mime_type": "application/json",
-              "response_schema": _strip_unsupported(schema)}
+              "response_schema": _strip_unsupported(schema, extra)}
     contents = prompt
     if media:
         from google.genai import types  # lazy, same SDK as above
@@ -300,13 +308,16 @@ def _ollama_complete(schema, prompt, cfg):
     return r.json()["response"]
 
 
-def _strip_unsupported(schema):
-    """Remove JSON-schema keywords some providers reject (pattern, etc.)."""
+def _strip_unsupported(schema, extra: tuple = ()):
+    """Remove JSON-schema keywords some providers reject (pattern, etc.), plus
+    any `extra` keys. The full schema is still enforced by validate() on the
+    reply, so a dropped constraint only moves the check client-side."""
+    drop = ("pattern", "additionalProperties", *extra)
     if isinstance(schema, dict):
-        return {k: _strip_unsupported(v) for k, v in schema.items()
-                if k not in ("pattern", "additionalProperties")}
+        return {k: _strip_unsupported(v, extra) for k, v in schema.items()
+                if k not in drop}
     if isinstance(schema, list):
-        return [_strip_unsupported(x) for x in schema]
+        return [_strip_unsupported(x, extra) for x in schema]
     return schema
 
 
@@ -377,7 +388,49 @@ def _mock_complete(task, schema, prompt, context):
         # complete_json("niche", ...) calls deterministic instead of letting
         # synthesize_from_schema invent a non-taxonomy string.
         return {"niche": "other"}
+    if task == "kids_long_script" and context.get("topic"):
+        return _mock_kids_long_script(str(context["topic"]),
+                                      int(context.get("chapters", 5)))
+    if task == "fact_check":
+        # Keyless runs exercise the full render path; the mock never edits facts.
+        return {"verdict": "pass", "issues": []}
     return synthesize_from_schema(schema, seed=task)
+
+
+def _mock_kids_long_script(topic: str, chapters: int) -> dict:
+    """Deterministic, schema-valid long-form kids script for keyless runs."""
+    from schemas import KIDS_SCENES
+    word = re.sub(r"[^A-Za-z0-9]+", "", topic.title()) or "Facts"
+    n = max(3, min(int(chapters), 12))
+    icons = (["⭐"], ["💡", "🔍"], ["🌍", "🔭", "🚀"], ["❤️"], ["🌈", "☀️"], ["🧠"])
+    chs = []
+    for k in range(1, n + 1):
+        chs.append({
+            "title": f"{topic.title()} fact {k}"[:60],
+            "scene": KIDS_SCENES[(k - 1) % len(KIDS_SCENES)],
+            "lines": [
+                {"text": f"Did you know fact number {k} about {topic}?",
+                 "icons": icons[k % len(icons)], "visual": topic},
+                {"text": f"This is a mock line that explains fact {k} simply.",
+                 "icons": icons[(k + 1) % len(icons)], "visual": f"{topic} close up"},
+                {"text": f"Now you know something new about {topic}!",
+                 "icons": icons[(k + 2) % len(icons)], "visual": f"{topic} nature"},
+            ],
+            "facts": [f"mock fact {k} about {topic}"],
+        })
+    return {
+        "topic": topic,
+        "title": f"Amazing Facts About {topic.title()}"[:60],
+        "description": f"mock: fun facts about {topic} for curious kids.",
+        "hashtags": [f"#{word}"[:40], "#KidsLearning", "#FunFacts", "#Science",
+                     "#ForKids", "#Learning", "#DidYouKnow", "#Education"],
+        "scene": "sky",
+        "intro": [{"text": f"Hello friends! Today we are learning about {topic}.",
+                   "icons": ["👋", "😀"], "visual": topic}],
+        "chapters": chs,
+        "outro": [{"text": "Thanks for watching, see you next time!",
+                   "icons": ["👋"], "visual": f"{topic} sunset"}],
+    }
 
 
 def synthesize_from_schema(schema: dict, seed: str = "x"):

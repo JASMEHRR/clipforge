@@ -352,6 +352,84 @@ upload:
     text: "ClipForge"            # wordmark on the end card (Doto brand font)
     duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
+create:                          # Create mode (create.py): original kids explainer videos from scratch
+  audience: "children aged 5 to 9"
+  chapters: 10                   # chapters per long video; 14 lines x ~9 words each => ~7.5 min
+                                 # (measured: the model writes exactly the line count asked, ~9 words/line)
+  min_long_s: 300                # a shorter long video gets a job note (script came back short)
+  min_chapters: 5                # fewer surviving the fact-check -> try another topic
+  max_topic_attempts: 3          # topics tried per video before giving up
+  line_gap_s: 0.25               # silence between narrated lines
+  chapter_gap_s: 0.7             # silence between chapters (long video)
+  whisper_model: small           # word timings only (text is known) -> small is plenty, ~10x faster
+  gemini_models:                 # tried in order; first to answer wins (free tier: flash is often
+    - gemini-flash-latest        #   overloaded at ~100s/reply while lite answers in seconds)
+    - gemini-flash-lite-latest
+  llm_timeout_s: 120             # per request (clipping keeps llm.* 45s)
+  llm_max_retries: 1             # per model; then the next model in gemini_models
+  llm_backoff_s: 5
+  long:
+    enabled: true
+    width: 1920
+    height: 1080
+    captions: true               # bottom subtitles on the long video
+    caption_preset: karaoke-pop  # bold karaoke reads better for kids than clean-minimal
+  shorts:
+    enabled: true                # each chapter also rendered as a vertical Short
+    max_per_video: 10           # one Short per chapter
+    width: 1080
+    height: 1920
+    caption_preset: karaoke-pop
+    caption_anchor: 0.60         # caption block center (clamped to the 0.52-0.66 band)
+  fps: 30
+  visual_style: animated         # animated (cartoon: mascot + emoji + scenes, animate.py) | footage (stock clips)
+  animation:
+    emoji_url: https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/png/512/{name}  # Apache-2.0
+    title_s: 3.0                 # intro title card on screen
+    banner_s: 2.6                # chapter banner on screen
+    crossfade_s: 0.5             # background cross-fade when the scene changes
+  music_mood: "happy upbeat fun"  # matched against assets/music moods
+  music_volume_db: -22           # quieter than clipping mode: narration must stay clear
+  made_for_kids: true            # YouTube selfDeclaredMadeForKids on upload
+  virality_score: 60             # fixed score so the upload queue's min_virality gate admits
+                                 # reviewed Create clips (there is no source video to rate)
+  topics:                        # rotated without repeats (cache/create_topics_used.json)
+    - "octopuses"
+    - "the planet Saturn"
+    - "honeybees"
+    - "the human heart"
+    - "blue whales"
+    - "volcanoes"
+    - "penguins"
+    - "the Moon"
+    - "chameleons"
+    - "rainbows"
+    - "sloths"
+    - "the human brain"
+    - "sharks"
+    - "lightning"
+    - "elephants"
+    - "the Sun"
+    - "butterflies"
+    - "dinosaur fossils"
+    - "giraffes"
+    - "snowflakes"
+  voice:
+    engine: kokoro               # local, free (kokoro-onnx; model auto-downloads ~340MB once)
+    voice: af_heart              # kokoro v1.0 voice id
+    speed: 0.95                  # slightly slower than default for young listeners
+    lang: en-us
+    model_dir: cache/models/kokoro
+    model_url: https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+    voices_url: https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+  footage:
+    providers: [pexels, pixabay, nasa]   # tried in order; keys: PEXELS_API_KEY, PIXABAY_API_KEY (.env). NASA needs none.
+    search_cache_hours: 24       # Pixabay's API terms require caching searches for 24h
+    min_height: 720              # skip clips smaller than this (after orientation)
+    max_download_mb: 60          # skip files larger than this
+    timeout_s: 30
+    card_colors: ["0x1E88E5", "0x43A047", "0xFB8C00", "0x8E24AA", "0xE53935", "0x00ACC1"]
+
 ui:
   auto_open: true               # open the UI automatically when ClipForge starts
   window_mode: app              # app = chromeless --app window (Edge/Chrome); tab = normal browser tab

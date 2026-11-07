@@ -223,11 +223,14 @@ def approval_ok(meta: dict, cfg: dict) -> bool:
     """Whether the owner allows this clip to upload. Rejected clips never
     upload. With upload.require_approval on, only explicitly approved clips
     may (pending = not reviewed yet); with it off, pending clips stay
-    eligible — the pre-approval fully-automatic behavior."""
+    eligible - the pre-approval fully-automatic behavior. A clip whose own
+    metadata sets upload.require_approval (Create-mode kids videos) always
+    needs an explicit approve, whatever the global setting."""
     state = approval_state(meta)
     if state == "rejected":
         return False
-    if cfg.get("upload", {}).get("require_approval", False):
+    if cfg.get("upload", {}).get("require_approval", False) or \
+            (meta.get("upload") or {}).get("require_approval"):
         return state == "approved"
     return True
 
@@ -324,11 +327,13 @@ def cap_warning(cfg: dict, log_data: dict, requested_count: int) -> str | None:
 # ============================================================
 # Title / description / hashtags
 # ============================================================
-def clean_hashtags(raw: list, max_hashtags: int = 5) -> list[str]:
+def clean_hashtags(raw: list, max_hashtags: int = 5,
+                   shorts: bool = True) -> list[str]:
     """Upload-time cap: the best `max_hashtags` topic tags plus #shorts, using
     the same junk filter as metadata (metadata.clean_tag) so there's one
     policy. Input is already topic-first from metadata.topic_hashtags, so the
-    leading `max_hashtags` are the strongest tags."""
+    leading `max_hashtags` are the strongest tags. `shorts=False` (Create-mode
+    long-form videos) leaves #shorts off."""
     from metadata import clean_tag
     tags: list[str] = []
     for t in raw or []:
@@ -337,22 +342,27 @@ def clean_hashtags(raw: list, max_hashtags: int = 5) -> list[str]:
             tags.append(word)
         if len(tags) >= max_hashtags:
             break
-    tags.append("shorts")  # always present, always last
+    if shorts:
+        tags.append("shorts")  # present on every Short, always last
     return ["#" + t for t in tags]
 
 
 def build_snippet(meta: dict) -> dict:
     """Clean title/description/hashtags from ClipMetadata, ready to merge
     into youtube_upload.build_request_body's metadata argument."""
-    title = (meta.get("title") or "Untitled Short").strip()
+    is_long = meta.get("format") == "long"   # Create-mode long-form video
+    title = (meta.get("title") or ("Untitled video" if is_long
+                                   else "Untitled Short")).strip()
     if len(title) > 90:  # keep headroom under YouTube's 100-char limit
         title = title[:87] + "..."
-    hashtags = clean_hashtags(meta.get("hashtags"))
+    hashtags = clean_hashtags(meta.get("hashtags"), shorts=not is_long)
     return {"title": title, "description": (meta.get("description") or "").strip(),
             "hashtags": hashtags,
             # avatar-host clips: youtube_upload sets the altered/synthetic
             # content disclosure from this flag
-            "synthetic": bool((meta.get("upload") or {}).get("synthetic"))}
+            "synthetic": bool((meta.get("upload") or {}).get("synthetic")),
+            # Create-mode kids content -> status.selfDeclaredMadeForKids
+            "made_for_kids": bool(meta.get("made_for_kids"))}
 
 
 # ============================================================
