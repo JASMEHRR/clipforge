@@ -8,7 +8,11 @@ narration and footage:
   → Kokoro narration per line (voice.py) → timeline + voice.wav
   → Whisper word timings (transcribe.py, for captions)
   → visuals, per create.visual_style:
-      animated (default): cartoon track drawn by animate.py - owl mascot with
+      illustrated (default): a local AI cartoon picture per ~8 s beat (art.py,
+        drawn BEFORE Whisper so the two never share the 4 GB GPU), cut into a
+        character + background and animated by animate.py with camera moves,
+        parallax, cross-fades, the owl host and banners
+      animated: cartoon track drawn by animate.py - owl mascot with
         lip-flap, emoji illustrations, animated scene backgrounds, banners
       footage: stock shots per line (footage.py: Pexels → Pixabay → NASA →
         colour card), concatenated
@@ -38,6 +42,7 @@ import uuid
 from pathlib import Path
 
 import animate
+import art
 import footage
 import llm
 import music
@@ -109,6 +114,16 @@ def pick_topic(topics: list[str], used: list[str], rng: random.Random,
 def script_prompt(topic: str, cfg: dict) -> str:
     c = _ccfg(cfg)
     n = int(c.get("chapters", 8))
+    if c.get("visual_style", "illustrated") == "illustrated":
+        visual_rule = ("a 6-14 word description of ONE cartoon picture for the line: the "
+                       "main animal or object first, what it is doing, then where (for "
+                       "example 'a smiling orange octopus changing colour on a coral "
+                       "reef'). One clear main subject per picture; no words or numbers "
+                       "in the picture; no people or children.")
+    else:
+        visual_rule = ("a 2-5 word stock-footage search query using concrete nouns (for "
+                       "example 'octopus swimming coral reef'); never ask for footage of "
+                       "children.")
     return (
         f"Write a narrated educational YouTube video for {c.get('audience', 'young children')} "
         f"about: {topic}.\n\n"
@@ -134,9 +149,7 @@ def script_prompt(topic: str, cfg: dict) -> str:
         "For every line give `icons`: 1-3 emoji characters (the emoji itself, for "
         "example \"🐙\", \"❤️\", \"🌊\") showing what the line is about. They are drawn "
         "big on screen, so prefer concrete animals and objects; common emoji only, no "
-        "flags, no skin-tone or gender variants. Also give `visual`: a 2-5 word "
-        "stock-footage search query using concrete nouns (for example 'octopus "
-        "swimming coral reef'); never ask for footage of children.\n\n"
+        f"flags, no skin-tone or gender variants. Also give `visual`: {visual_rule}\n\n"
         "scene (for the intro and outro) and every chapter's own `scene`: the animated "
         "background, one of space, ocean, sky, meadow, snow, desert, body. Pick the "
         "setting that fits: planets and stars -> space, sea life -> ocean, insects and "
@@ -508,12 +521,14 @@ def _virality(cfg: dict) -> dict:
     return v
 
 
-def _credits(assets: list[dict | None], music_attr: str,
-             animated: bool = False) -> str:
+def _credits(assets: list[dict | None], music_attr: str, style: str = "") -> str:
     providers = sorted({a["provider"] for a in assets if a})
     names = {"pexels": "Pexels", "pixabay": "Pixabay", "nasa": "NASA"}
     parts = []
-    if animated:
+    if style == "illustrated":
+        parts.append("Illustrations: AI-generated on our own computer (DreamShaper 8, "
+                     "CreativeML OpenRAIL-M). Animation and owl mascot: original.")
+    if style == "animated":
         parts.append("Illustrations: Noto Emoji by Google (Apache License 2.0). "
                      "Animation and mascot: original.")
     if providers:
@@ -585,10 +600,10 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
         raise CreateError("both the long video and the Shorts are disabled")
     resolved = llm.resolve_provider(cfg, provider)
     fps = int(c.get("fps", 30))
-    visual_style = str(c.get("visual_style", "animated"))
-    if visual_style not in ("animated", "footage"):
-        raise CreateError(f"create.visual_style must be 'animated' or 'footage', "
-                          f"not '{visual_style}'", retryable=False)
+    visual_style = str(c.get("visual_style", "illustrated"))
+    if visual_style not in ("illustrated", "animated", "footage"):
+        raise CreateError("create.visual_style must be 'illustrated', 'animated' or "
+                          f"'footage', not '{visual_style}'", retryable=False)
 
     _benched.clear()            # each video gives every model a fresh chance
     job_dir = new_job_dir(cfg, f"create-{topic or 'auto'}")
@@ -634,6 +649,32 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
                              f"(target >= {min_long:.0f}s): the script came back short")
                 log.warning("%s", notes[-1])
 
+        seed = rng.randrange(1_000_000)
+        lines = timeline["lines"]
+        layers: list[dict] = []     # illustrated mode: one picture per beat
+        line_shot: list[int] = []   # timeline line -> beat index
+        if visual_style == "illustrated":
+            # before Whisper: the drawing model needs ~3.1 GB of the 4 GB GPU
+            with stage_timer(log, "art", timings):
+                acfg = c.get("art", {})
+                beats = art.plan_beats(lines, float(acfg.get("beat_s", 8.0)))
+                prompts = [art.art_prompt(b["visual"], sections[b["section"]]["scene"],
+                                          str(acfg.get("style", "")))
+                           for b in beats]
+                pics = art.draw_images([(pr, seed + k) for k, pr in enumerate(prompts)],
+                                       cfg)
+                layers = [art.cutout(pic, cfg) for pic in pics]
+                for k, b in enumerate(beats):
+                    line_shot += [k] * (b["last"] - b["first"] + 1)
+                (job_dir / "art.json").write_text(json.dumps(
+                    [{**b, "prompt": pr, "image": str(pic), **ly}
+                     for b, pr, pic, ly in zip(beats, prompts, pics, layers)], indent=2),
+                    encoding="utf-8")
+                no_cut = sum(1 for ly in layers if ly["fg"] is None)
+                if no_cut:
+                    notes.append(f"{no_cut}/{len(layers)} pictures had no clear main "
+                                 "subject to cut out (camera move only)")
+
         with stage_timer(log, "transcribe", timings):
             # The text is already known (we wrote it); Whisper only supplies
             # word timings, so a small English model is plenty and many times
@@ -643,12 +684,10 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
                                                                    "small"))}}
             words = transcribe.transcribe(voice_wav, wcfg)["words"]
 
-        lines = timeline["lines"]
         starts = [0.0] + [ln["start"] for ln in lines[1:]]
         ends = starts[1:] + [timeline["total"]]
         shots: list[dict] = []      # footage mode: one stock shot per line
-        scenes: list[dict] = []     # animated mode: one cartoon scene per line
-        seed = rng.randrange(1_000_000)
+        scenes: list[dict] = []     # animated/illustrated: one cartoon scene per line
         if visual_style == "footage":
             with stage_timer(log, "footage", timings):
                 used: set = set()
@@ -663,6 +702,8 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
                                  "(no matching footage / no API key)")
         else:
             scenes = build_scenes(sections, script["title"])
+            for i, sid in enumerate(line_shot):
+                scenes[i]["art"] = {**layers[sid], "shot": sid}
 
         music_path, music_attr = None, ""
         try:
@@ -674,7 +715,7 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
             log.warning("no background music: %s", e)
         music_db = float(c.get("music_volume_db", -22))
         assets = [s["asset"] for s in shots]
-        credits = _credits(assets, music_attr, animated=visual_style == "animated")
+        credits = _credits(assets, music_attr, style=visual_style)
         sources = _sources(assets)
         virality = _virality(cfg)
         made_for_kids = bool(c.get("made_for_kids", True))
@@ -684,7 +725,7 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
             with stage_timer(log, "render_long", timings):
                 lc = c.get("long", {})
                 w, h = int(lc.get("width", 1920)), int(lc.get("height", 1080))
-                if visual_style == "animated":
+                if visual_style != "footage":
                     track_path = animate.render_track(
                         scenes, starts + [timeline["total"]], w, h, fps, voice_wav,
                         job_dir / "work_long" / "track.mp4", cfg, seed)
@@ -727,7 +768,7 @@ def create_video(cfg: dict, provider: str | None = None, topic: str | None = Non
                         idxs = range(sec["first"], sec["last"] + 1)
                         bounds = [cs] + [starts[i] for i in idxs][1:] + [ce]
                         work = job_dir / f"work_short_{k:02d}"
-                        if visual_style == "animated":
+                        if visual_style != "footage":
                             sub = [dict(scenes[i]) for i in idxs]
                             # a Short stands alone: banner without "Chapter N"
                             sub[0]["banner"] = {"kind": "chapter", "text": sec["title"],

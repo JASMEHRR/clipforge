@@ -240,3 +240,71 @@ def test_fact_check_fix_must_fit_the_schema():
     too_long = "x" * 221
     assert create.apply_fact_check(ch, {"verdict": "fix", "issues": [],
                                         "corrected_lines": [too_long]}) is None
+
+
+# ---------------------------------------------------------------- illustrated mode
+
+import art  # noqa: E402
+
+
+def _tl_lines(spec):
+    """spec = [(section, duration)] -> timeline-style lines with 0.25 s gaps."""
+    out, t = [], 0.0
+    for i, (sec, d) in enumerate(spec):
+        out.append({"section": sec, "visual": f"v{i}", "start": t, "end": t + d})
+        t += d + 0.25
+    return out
+
+
+def test_plan_beats_groups_lines_and_never_crosses_sections():
+    lines = _tl_lines([(0, 3), (0, 3), (0, 3), (0, 3), (1, 2), (1, 9), (1, 2)])
+    beats = art.plan_beats(lines, 8.0)
+    assert [(b["first"], b["last"]) for b in beats] == [(0, 2), (3, 3), (4, 5), (6, 6)]
+    assert beats[2]["visual"] == "v4" and beats[2]["section"] == 1
+    covered = [i for b in beats for i in range(b["first"], b["last"] + 1)]
+    assert covered == list(range(len(lines)))                      # every line once
+    with pytest.raises(art.ArtError):
+        art.plan_beats(lines, 0)
+
+
+def test_art_prompt_and_cache_key():
+    p = art.art_prompt(" a smiling octopus.", "ocean", "cartoon style")
+    assert p == "a smiling octopus, underwater in the bright blue ocean, cartoon style"
+    assert art.art_prompt("bee", "unknown-scene", "") == "bee"
+    acfg = {"model": "m", "steps": 6, "guidance": 1.0, "width": 768, "height": 432}
+    assert art.image_key(p, 1, acfg) == art.image_key(p, 1, dict(acfg))
+    assert art.image_key(p, 1, acfg) != art.image_key(p, 2, acfg)
+    assert art.image_key(p, 1, acfg) != art.image_key(p, 1, {**acfg, "steps": 8})
+
+
+def test_split_layers_cuts_the_subject_and_paints_it_out():
+    rgb = np.full((96, 160, 3), (40, 120, 220), np.uint8)          # blue sky
+    rgb[30:70, 60:100] = (250, 140, 20)                             # orange subject
+    alpha = np.zeros((96, 160), np.float32)
+    alpha[30:70, 60:100] = 1.0
+    alpha[2:4, 2:4] = 1.0                                           # speck: dropped
+    fg, box, bg = art.split_layers(rgb, alpha)
+    x, y, w, h = box
+    assert x <= 60 and y <= 30 and x + w >= 100 and y + h >= 70 and w < 60
+    assert fg.shape == (h, w, 4) and fg[..., 3].max() == 255
+    assert abs(int(bg[50, 80, 2]) - 220) < 40                       # subject painted out
+    none_fg, none_box, same = art.split_layers(rgb, np.zeros_like(alpha))
+    assert none_fg is None and none_box is None and same is rgb     # no subject
+
+
+def test_camera_moves_are_eased_and_bounded():
+    for move in animate.CAMERA_MOVES:
+        for p in (0.0, 0.3, 0.7, 1.0):
+            z, fx, fy = animate.camera(move, p)
+            assert 1.0 <= z <= 1 + animate.CAMERA_ZOOM + 1e-9
+            assert -1.0 <= fx <= 1.0 and -1.0 <= fy <= 1.0
+    assert animate.camera("zoom_in", 0)[0] == 1.0
+    assert animate.camera("pan_right", 0)[1] == -animate.camera("pan_right", 1)[1]
+    with pytest.raises(animate.AnimateError):
+        animate.camera("spin", 0.5)
+
+
+def test_shot_spans_follow_scene_bounds():
+    scenes = [{"art": {"shot": s}} for s in (0, 0, 1, 2, 2)]
+    spans = animate.shot_spans(scenes, [0, 1, 2, 4, 5, 7])
+    assert spans == {0: (0, 2, 0), 1: (2, 4, 2), 2: (4, 7, 3)}

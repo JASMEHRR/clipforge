@@ -15,10 +15,18 @@ Captions are NOT drawn here: create.finish_video burns them with the shared
 ASS pipeline. Sprites are kept premultiplied-alpha so scaling/rotating never
 leaves dark fringes.
 
+Illustrated style (create.visual_style: illustrated): when scenes carry "art",
+the procedural background and the emoji are replaced by AI pictures (art.py):
+ArtShot puts the painted-out background under an eased camera move (zoom in /
+out, pan) and the cut-out character on top with parallax, bob, sway and a
+pop-in; consecutive pictures cross-fade. Mascot and banners stay.
+
 Public API:
   render_track(scenes, bounds, w, h, fps, voice_wav, out_path, cfg, seed) -> Path
     scenes[i] = {"scene": str, "icons": [emoji, ...],
-                 "banner": None | {"kind": "title"|"chapter", "text", "label"}}
+                 "banner": None | {"kind": "title"|"chapter", "text", "label"},
+                 "art": {"shot": int, "bg": png, "fg": png|None, "box": [x,y,w,h]|None}
+                        (optional; all scenes or none)}
     bounds    = len(scenes)+1 absolute times (seconds) - scene i spans
                 [bounds[i], bounds[i+1]); frame k is at bounds[0] + k/fps.
 """
@@ -765,6 +773,144 @@ class Background:
                        cv2.LINE_AA)
 
 
+# ====================================================================== illustrations
+
+CAMERA_MOVES = ("zoom_in", "pan_right", "zoom_out", "pan_left")
+CAMERA_ZOOM = 0.10               # widest push-in over the cover fit (10%)
+
+
+def smoothstep(x: float) -> float:
+    x = clamp01(x)
+    return x * x * (3 - 2 * x)
+
+
+def camera(move: str, p: float, zoom: float = CAMERA_ZOOM) -> tuple[float, float, float]:
+    """Pure. Camera at shot progress p (0..1) -> (z, fx, fy): z = zoom over the
+    cover fit (1..1+zoom), (fx, fy) = window centre as a fraction of the free
+    travel on each axis (-1..1, 0 = centred). Eased so shots start and end
+    calm and cross-fades never jerk."""
+    e = smoothstep(p)
+    if move == "zoom_in":
+        return 1 + zoom * e, 0.0, -0.4 * e
+    if move == "zoom_out":
+        return 1 + zoom * (1 - e), 0.0, -0.4 * (1 - e)
+    if move == "pan_right":
+        return 1 + zoom * 0.6, -0.8 + 1.6 * e, 0.0
+    if move == "pan_left":
+        return 1 + zoom * 0.6, 0.8 - 1.6 * e, 0.0
+    raise AnimateError(f"unknown camera move '{move}'")
+
+
+class ArtShot:
+    """One illustration on screen (create.visual_style: illustrated).
+
+    The painted-out background sits under a slow camera move; the cut-out
+    character (art.cutout) rides on top with parallax (moves/zooms a little
+    more than the background), bobs, sways, breathes and pops in. Landscape
+    keeps the character where the picture drew it; portrait (Shorts) blurs
+    the background to cover the tall frame and stands the character in the
+    upper half, above the captions. With no cut-out, landscape is camera-only
+    and portrait shows the whole picture as the card."""
+
+    def __init__(self, art: dict, w: int, h: int, move: str, phase: float = 0.0):
+        import cv2
+        bgr = cv2.imread(str(art["bg"]), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise AnimateError(f"unreadable illustration {art['bg']}")
+        bg = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        self.sh, self.sw = bg.shape[:2]
+        self.w, self.h, self.move, self.phase = w, h, move, phase
+        self.portrait = h > w
+        self.base = max(w / self.sw, h / self.sh)        # cover fit at z = 1
+        # upscale once (Lanczos) to the largest zoom, so every per-frame warp
+        # only shrinks - sharp and cheap
+        self.s_big = self.base * (1 + CAMERA_ZOOM)
+        big = cv2.resize(bg, (math.ceil(self.sw * self.s_big), math.ceil(self.sh * self.s_big)),
+                         interpolation=cv2.INTER_LANCZOS4)
+        if self.portrait:     # ~4x upscale: blur it into a soft depth-of-field backdrop
+            big = cv2.GaussianBlur(big, (0, 0), sigmaX=0.008 * w)
+        self.big = big
+
+        self.fg, rgba, box = None, None, art.get("box")
+        if art.get("fg"):
+            raw = cv2.imread(str(art["fg"]), cv2.IMREAD_UNCHANGED)
+            if raw is not None and raw.ndim == 3 and raw.shape[2] == 4:
+                rgba = cv2.cvtColor(raw, cv2.COLOR_BGRA2RGBA)
+        if rgba is None and self.portrait:
+            rgba = np.dstack([bg, np.full(bg.shape[:2], 255, np.uint8)])
+            box = [0, 0, self.sw, self.sh]
+        if rgba is not None and box:
+            bx, by, bw, bh = box
+            if self.portrait:
+                k = min(0.88 * w / bw, 0.40 * h / bh)
+            else:
+                k = self.base * (1 + CAMERA_ZOOM / 2)
+            interp = cv2.INTER_LANCZOS4 if k > 1 else cv2.INTER_AREA
+            self.fg = cv2.resize(premultiply(rgba), (max(1, round(bw * k)), max(1, round(bh * k))),
+                                 interpolation=interp)
+            self.k_fg = k
+            self.box_c = (bx + bw / 2, by + bh / 2)
+        # portrait backdrop window (~1/3 of the picture's width): aim it at the
+        # side the character is NOT on, so its painted-out smudge stays off screen
+        self.port_cx = self.sw / 2
+        if self.portrait and art.get("fg") and box:
+            ww = w / self.base
+            left, right = ww / 2, self.sw - ww / 2
+            overlap = [max(0.0, min(c + ww / 2, box[0] + box[2]) - max(c - ww / 2, box[0]))
+                       for c in (left, right)]
+            self.port_cx = left if overlap[0] <= overlap[1] else right
+
+    def frame(self, t: float, start: float, end: float) -> np.ndarray:
+        import cv2
+        p = clamp01((t - start) / max(end - start, 1e-3))
+        z, fx, fy = camera(self.move, p)
+        scale = self.base * z                           # output px per source px
+        ww, wh = self.w / scale, self.h / scale         # visible window (source px)
+        if self.portrait:          # small drift around the chosen side, kept in frame
+            cx = min(max(self.port_cx + fx * 0.15 * ww, ww / 2), self.sw - ww / 2)
+        else:
+            cx = self.sw / 2 + fx * (self.sw - ww) / 2
+        cy = self.sh / 2 + fy * (self.sh - wh) / 2
+        k = scale / self.s_big
+        m = np.float32([[k, 0, -(cx - ww / 2) * scale], [0, k, -(cy - wh / 2) * scale]])
+        out = cv2.warpAffine(self.big, m, (self.w, self.h), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REFLECT)
+        if self.fg is None:
+            return out
+
+        age, ph = t - start, self.phase
+        pop = 0.85 + 0.15 * ease_out_back(age / 0.6)
+        breathe = 1 + 0.02 * math.sin(2 * math.pi * 0.7 * t + ph)
+        rot = 2.5 * math.sin(2 * math.pi * 0.3 * t + ph)
+        bob = math.sin(2 * math.pi * 0.45 * t + ph) * 0.012 * self.h
+        if self.portrait:
+            x, y = 0.5 * self.w, 0.31 * self.h
+            rel = 1 + (z - 1) * 0.5
+        else:
+            # parallax: the character travels 25% further than the background
+            # and zooms 30% faster, so it reads as closer to the camera
+            x = (self.box_c[0] - (cx - ww / 2)) * scale
+            y = (self.box_c[1] - (cy - wh / 2)) * scale
+            x += -(cx - self.sw / 2) * scale * 0.25
+            y += -(cy - self.sh / 2) * scale * 0.25
+            rel = self.base * (1 + (z - 1) * 1.3) / self.k_fg
+        blit(out, transform(self.fg, rel * breathe * pop, rot), x, y + bob)
+        return out
+
+
+def shot_spans(scenes: list[dict], bounds: list[float]) -> dict[int, tuple]:
+    """Pure. art shot id -> (start, end, first scene index): a shot spans the
+    consecutive scenes that carry it."""
+    spans: dict[int, list] = {}
+    for i, sc in enumerate(scenes):
+        sid = sc["art"]["shot"]
+        if sid in spans:
+            spans[sid][1] = bounds[i + 1]
+        else:
+            spans[sid] = [bounds[i], bounds[i + 1], i]
+    return {k: tuple(v) for k, v in spans.items()}
+
+
 # ====================================================================== render
 
 def _read_mono(path: Path) -> tuple[np.ndarray, int]:
@@ -792,15 +938,24 @@ def render_track(scenes: list[dict], bounds: list[float], w: int, h: int,
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    illustrated = "art" in scenes[0]
+    if any(("art" in sc) != illustrated for sc in scenes):
+        raise AnimateError("either every scene carries an illustration or none does")
     samples, sr = _read_mono(Path(voice_wav))
     mouth = mouth_levels(samples, sr, t0 + np.arange(n) / fps, fps)
     eyes = blink_states(n, fps, seed)
+    if illustrated and w >= h:     # smaller host so the pictures stay the star
+        lay["mascot_h"] *= 0.78
+        lay["mascot_x"] *= 0.80
     mascot = get_mascot(int(lay["mascot_h"]))
 
     # icons per scene: resolved, pre-sized to their slot, with a glow
     prepared, last = [], []
     baked: dict[tuple[int, int], np.ndarray] = {}   # (emoji sprite id, size) -> sprite
     for sc in scenes:
+        if illustrated:                 # the pictures replace the emoji
+            prepared.append(((), []))
+            continue
         sprites = [s for s in (icon_sprite(tok, cfg) for tok in sc.get("icons", [])[:3])
                    if s is not None]
         if not sprites:
@@ -850,6 +1005,30 @@ def render_track(scenes: list[dict], bounds: list[float], w: int, h: int,
             backgrounds[theme] = Background(theme, w, h, seed)
         return backgrounds[theme]
 
+    spans = shot_spans(scenes, bounds) if illustrated else {}
+    shots: dict[int, ArtShot] = {}
+
+    def shot(sid):
+        if sid not in shots:
+            for old in [k for k in shots if spans[k][1] < spans[sid][0]]:
+                del shots[old]          # finished shots: free their big buffers
+            first = spans[sid][2]
+            shots[sid] = ArtShot(scenes[first]["art"], w, h,
+                                 CAMERA_MOVES[(sid + seed) % len(CAMERA_MOVES)],
+                                 phase=sid * 1.3)
+        return shots[sid]
+
+    def art_frame(si, t):
+        sid = scenes[si]["art"]["shot"]
+        a, b, first = spans[sid]
+        out = shot(sid).frame(t, a, b)
+        if first > 0 and t - a < xfade:             # cross-fade from the previous picture
+            pid = scenes[first - 1]["art"]["shot"]
+            pa, pb, _ = spans[pid]
+            mix = clamp01((t - a) / xfade)
+            cv2.addWeighted(shot(pid).frame(t, pa, pb), 1 - mix, out, mix, 0, out)
+        return out
+
     xfade = float(acfg.get("crossfade_s", 0.5))
     log.info("animating %d frames (%dx%d @ %dfps, %d scenes)", n, w, h, fps,
              len(scenes))
@@ -862,8 +1041,12 @@ def render_track(scenes: list[dict], bounds: list[float], w: int, h: int,
             t = t0 + k / fps
             s0, s1 = bounds[si], bounds[si + 1]
             theme = scenes[si].get("scene", "sky")
-            frame = bg(theme).frame(t)
-            if si > 0 and scenes[si - 1].get("scene") != theme and t - s0 < xfade:
+            if illustrated:
+                frame = art_frame(si, t)
+            else:
+                frame = bg(theme).frame(t)
+            if (not illustrated and si > 0 and scenes[si - 1].get("scene") != theme
+                    and t - s0 < xfade):
                 a = clamp01((t - s0) / xfade)
                 cv2.addWeighted(bg(scenes[si - 1].get("scene")).frame(t), 1 - a,
                                 frame, a, 0, frame)

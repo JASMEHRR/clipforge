@@ -382,12 +382,22 @@ create:                          # Create mode (create.py): original kids explai
     caption_preset: karaoke-pop
     caption_anchor: 0.60         # caption block center (clamped to the 0.52-0.66 band)
   fps: 30
-  visual_style: animated         # animated (cartoon: mascot + emoji + scenes, animate.py) | footage (stock clips)
+  visual_style: illustrated      # illustrated (AI cartoon pictures, animated - art.py) | animated (mascot + emoji + scenes) | footage (stock clips)
   animation:
     emoji_url: https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/png/512/{name}  # Apache-2.0
     title_s: 3.0                 # intro title card on screen
     banner_s: 2.6                # chapter banner on screen
-    crossfade_s: 0.5             # background cross-fade when the scene changes
+    crossfade_s: 0.5             # background / picture cross-fade
+  art:                           # illustrated style - all local, free (art.py + art_worker.py)
+    python: .venv-art/Scripts/python.exe   # set up once: .venv/Scripts/python.exe art.py setup
+    model: Lykon/dreamshaper-8-lcm         # CreativeML OpenRAIL-M; ~4 GB into cache/models/art
+    steps: 6                     # LCM: 4-8 steps
+    guidance: 1.0                # <= 1 skips classifier-free guidance: 2x faster (~20 s/picture on a GTX 1650)
+    width: 768                   # multiples of 8; upscaled per frame (portrait Shorts blur the backdrop)
+    height: 432
+    beat_s: 8.0                  # a new picture about every 8 s of narration (never across chapters)
+    style: "cute cartoon illustration for children, 3d pixar style, bright cheerful colors, soft lighting, friendly, high quality"
+    cutout_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx  # Apache-2.0, sha256-pinned in art.py
   music_mood: "happy upbeat fun"  # matched against assets/music moods
   music_volume_db: -22           # quieter than clipping mode: narration must stay clear
   made_for_kids: true            # YouTube selfDeclaredMadeForKids on upload

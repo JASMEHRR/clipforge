@@ -1,0 +1,9 @@
+# Create mode illustrations (art_worker.py) - installed ONLY into .venv-art,
+# never the main venv (torch pins conflict). Set up with:
+#   .venv/Scripts/python.exe art.py setup
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+diffusers==0.42.1
+transformers==5.22.2
+accelerate==1.15.0
+safetensors==0.8.0
