@@ -394,7 +394,46 @@ def _mock_complete(task, schema, prompt, context):
     if task == "fact_check":
         # Keyless runs exercise the full render path; the mock never edits facts.
         return {"verdict": "pass", "issues": []}
+    if task == "explainer_script" and context.get("topic"):
+        return _mock_explainer_script(str(context["topic"]))
     return synthesize_from_schema(schema, seed=task)
+
+
+def _mock_explainer_script(topic: str) -> dict:
+    """Deterministic, schema-valid explainer (one slide per layout) for keyless runs."""
+    def item(label, cue, obj="", value=0, unit="none", detail=""):
+        return {"label": label, "detail": detail, "object": obj, "icon": "",
+                "value": value, "unit": unit, "cue": cue}
+    slides = [
+        {"layout": "title", "heading": topic.title()[:48],
+         "lines": ["Today we compare three ways to pay for a car."],
+         "items": [item("Card", "three", "credit card"), item("Lease", "ways", "car keys"),
+                   item("Loan", "car", "bank building")]},
+        {"layout": "compare", "heading": "Three options",
+         "lines": ["You can pay with a card, sign a lease, or take a loan."],
+         "items": [item("Card", "card"), item("Lease", "lease"), item("Loan", "loan")]},
+        {"layout": "big_number", "heading": "Typical price",
+         "lines": ["A new car can cost around thirty thousand dollars."],
+         "items": [item("New car", "thirty", "car", 30000, "$")]},
+        {"layout": "flow", "heading": "How a loan works",
+         "lines": ["The bank pays the dealer, then you repay the bank."],
+         "items": [item("Bank", "bank"), item("Dealer", "dealer"), item("You", "you")]},
+        {"layout": "bars", "heading": "Monthly cost",
+         "lines": ["A lease is often cheaper per month than a loan."],
+         "items": [item("Lease", "lease", value=350, unit="$"),
+                   item("Loan", "loan", value=550, unit="$")]},
+        {"layout": "list", "heading": "Recap",
+         "lines": ["Cards are expensive, leases are flexible, loans build ownership."],
+         "items": [item("Card: high interest", "cards"), item("Lease: flexible", "leases"),
+                   item("Loan: you own it", "loans")]},
+    ]
+    for s in slides:
+        s["facts"] = ["mock fact"]
+    return {"topic": topic, "title": f"{topic.title()} Explained"[:60],
+            "description": f"mock: {topic} explained simply.",
+            "hashtags": ["#Money", "#PersonalFinance", "#Cars", "#Finance", "#Loans",
+                         "#Budget", "#Explained", "#MoneyTips"],
+            "slides": slides}
 
 
 def _mock_kids_long_script(topic: str, chapters: int) -> dict:

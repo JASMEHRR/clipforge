@@ -352,6 +352,24 @@ upload:
     text: "ClipForge"            # wordmark on the end card (Doto brand font)
     duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
+explain:                         # explain.py - PPT-style money explainers synced to narration (second channel)
+  slides: 12                     # ~4-6 min; the AI writes 1-4 lines per slide
+  width: 1920
+  height: 1080
+  fps: 30
+  line_gap_s: 0.2
+  slide_gap_s: 0.6
+  whisper_model: small
+  captions: false                # the slides already show the key words
+  caption_preset: clean-minimal
+  music_mood: "chill neutral background"
+  music_volume_db: -24
+  voice:                         # overrides create.voice for this channel
+    voice: af_bella
+    speed: 1.0
+  object_px: 512                 # square flat object pictures (art.py; cached per object name)
+  object_style: "flat vector illustration, simple bold shapes, bright clean colors, centered, isolated on a plain white background, no text"
+
 create:                          # Create mode (create.py): original kids explainer videos from scratch
   audience: "children aged 5 to 9"
   chapters: 10                   # chapters per long video; 14 lines x ~9 words each => ~7.5 min

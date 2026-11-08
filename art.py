@@ -109,12 +109,15 @@ def _worker_python(acfg: dict) -> Path:
     return py
 
 
-def draw_images(items: list[tuple[str, int]], cfg: dict) -> list[Path]:
+def draw_images(items: list[tuple[str, int]], cfg: dict,
+                size: tuple[int, int] | None = None) -> list[Path]:
     """Render (prompt, seed) pairs; returns one PNG path per item, in order.
-    Cached pictures are reused; the rest go to one art_worker.py run (the
-    model loads once). Raises ArtError if any picture is still missing."""
+    `size` (w, h) overrides create.art width/height (explainer objects are
+    square). Cached pictures are reused; the rest go to one art_worker.py run
+    (the model loads once). Raises ArtError if any picture is still missing."""
     acfg = _acfg(cfg)
-    w, h = int(acfg.get("width", 768)), int(acfg.get("height", 432))
+    w, h = size or (int(acfg.get("width", 768)), int(acfg.get("height", 432)))
+    acfg = {**acfg, "width": w, "height": h}          # the cache key sees the real size
     if w % 8 or h % 8:
         raise ArtError("create.art width/height must be multiples of 8", retryable=False)
     img_dir = _cache(cfg, "art", "images")
@@ -269,7 +272,7 @@ def split_layers(rgb: np.ndarray, alpha: np.ndarray, min_area: float = 0.02,
     return fg, (int(x0), int(y0), int(x1 - x0), int(y1 - y0)), bg
 
 
-def cutout(img_path: Path, cfg: dict) -> dict:
+def cutout(img_path: Path, cfg: dict, max_area: float = 0.55) -> dict:
     """{"bg": png, "fg": png | None, "box": [x, y, w, h] | None} for a drawn
     picture, cached next to the pictures (cache/art/layers)."""
     import cv2
@@ -283,7 +286,7 @@ def cutout(img_path: Path, cfg: dict) -> dict:
     if bgr is None:
         raise ArtError(f"unreadable picture {img_path}")
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    fg, box, bg = split_layers(rgb, matte(rgb, cfg))
+    fg, box, bg = split_layers(rgb, matte(rgb, cfg), max_area=max_area)
     d.mkdir(parents=True, exist_ok=True)
     bg_p = d / f"{img_path.stem}_bg.png"
     cv2.imwrite(str(bg_p), cv2.cvtColor(bg, cv2.COLOR_RGB2BGR))

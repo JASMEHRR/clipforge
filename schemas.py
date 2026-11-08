@@ -691,6 +691,63 @@ FACT_CHECK = {
     "additionalProperties": False,
 }
 
+# --- Explainer mode (explain.py): PPT-style money explainers ---------------
+
+# Slide layouts slides.py can draw (single source of truth).
+EXPLAIN_LAYOUTS = ("title", "compare", "list", "big_number", "flow", "bars")
+
+# One thing on a slide. `cue` is a word/phrase copied from the slide's
+# narration: the item pops in the moment it is spoken (Whisper word timings).
+# `object` = a big physical thing drawn as an AI illustration (car, house);
+# `icon` = one emoji shown as a 3D Fluent / Noto icon. Neither = text only.
+_EXPLAIN_ITEM = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 28},
+        "detail": {"type": "string", "maxLength": 60},
+        "object": {"type": "string", "maxLength": 40},
+        "icon": {"type": "string", "maxLength": 16},       # one emoji, or ""
+        "value": {"type": "number"},
+        "unit": {"type": "string", "enum": ["none", "$", "%"]},   # Gemini rejects an empty enum value
+        "cue": {"type": "string", "minLength": 1, "maxLength": 40},
+    },
+    "required": ["label", "detail", "object", "icon", "value", "unit", "cue"],
+    "additionalProperties": False,
+}
+
+EXPLAINER_SCRIPT = {
+    "type": "object",
+    "properties": {
+        "topic": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 60},
+        "description": {"type": "string", "minLength": 1},
+        "hashtags": _KIDS_HASHTAGS,
+        "slides": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "layout": {"type": "string", "enum": list(EXPLAIN_LAYOUTS)},
+                    "heading": {"type": "string", "minLength": 1, "maxLength": 48},
+                    "lines": {"type": "array",
+                              "items": {"type": "string", "minLength": 1,
+                                        "maxLength": KIDS_LINE_MAX_CHARS},
+                              "minItems": 1, "maxItems": 6},
+                    "items": {"type": "array", "items": _EXPLAIN_ITEM,
+                              "minItems": 1, "maxItems": 4},
+                    "facts": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["layout", "heading", "lines", "items", "facts"],
+                "additionalProperties": False,
+            },
+            "minItems": 3,
+            "maxItems": 40,
+        },
+    },
+    "required": ["topic", "title", "description", "hashtags", "slides"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -711,6 +768,7 @@ SCHEMAS: dict[str, dict] = {
     "edit_preset": EDIT_PRESET,
     "kids_long_script": KIDS_LONG_SCRIPT,
     "fact_check": FACT_CHECK,
+    "explainer_script": EXPLAINER_SCRIPT,
 }
 
 
