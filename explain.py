@@ -28,6 +28,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import numpy as np
+
 import art
 import create
 import music
@@ -71,7 +73,13 @@ def script_prompt(topic: str, slides: int) -> str:
         "bar chart; every bar the SAME kind of amount, e.g. the monthly cost of each "
         "option, never a per-mile fee next to a total). The first slide is title, the "
         "last is a list recap. Use a variety.\n"
+        "- kicker: a 1-3 word label shown in a pill above the heading (for example "
+        "'OPTION 1', 'THE CATCH', 'RECAP').\n"
         "- heading: at most 6 words.\n"
+        "- highlight: 1-3 words copied exactly from the heading, the key idea, shown "
+        "with a marker highlight.\n"
+        "- sticker: a short punchy reaction of at most 3 words (for example 'Ouch!', "
+        "'Hidden cost!', 'You own it!') on about every third slide; otherwise \"\".\n"
         "- lines: 1-4 narration lines of 8-20 words, spoken in order.\n"
         "- items: what appears on screen (big_number: exactly 1; others: 1-4). Each item:\n"
         "  label: 1-4 words shown big; detail: a short supporting phrase (may be empty);\n"
@@ -272,6 +280,64 @@ def draw_objects(names: list[str], cfg: dict) -> dict[str, str | None]:
     return out
 
 
+# ------------------------------------------------------------------ sound effects
+
+def synth_sfx(kind: str, sr: int) -> np.ndarray:
+    """Pure + deterministic. Soft UI sounds synthesised here (no audio files,
+    no licences): 'pop' = a quick pitch-dropping blip, 'whoosh' = band-passed
+    noise swell, 'chime' = two-note bell."""
+    if kind == "pop":
+        t = np.arange(int(sr * 0.09)) / sr
+        freq = 260 + 520 * np.exp(-t * 18)
+        return 0.20 * np.sin(2 * np.pi * np.cumsum(freq) / sr) * np.exp(-t / 0.028)
+    if kind == "whoosh":
+        n = int(sr * 0.42)
+        noise = np.random.default_rng(7).standard_normal(n + 64)
+        band = (np.convolve(noise, np.ones(5) / 5, "same")
+                - np.convolve(noise, np.ones(48) / 48, "same"))[:n]
+        env = np.sin(np.pi * np.arange(n) / n) ** 2
+        return 0.16 * band * env / max(1e-9, float(np.abs(band).max()))
+    if kind == "chime":
+        t = np.arange(int(sr * 0.55)) / sr
+        tone = np.sin(2 * np.pi * 880 * t) + 0.6 * np.sin(2 * np.pi * 1320 * t)
+        return 0.10 * tone * np.exp(-t / 0.13) * np.minimum(1.0, t / 0.005)
+    raise ExplainError(f"unknown sound effect '{kind}'")
+
+
+def sfx_cues(plan: list[dict], bounds: list[float]) -> list[tuple[float, str]]:
+    """Pure. A whoosh on every slide change, a pop as each item lands, a
+    chime when a sticker slams down."""
+    cues = []
+    for i, s in enumerate(plan):
+        if i > 0:
+            cues.append((bounds[i] - 0.05, "whoosh"))
+        cues += [(float(it["at"]) + 0.03, "pop") for it in s["items"]]
+        if s.get("sticker", "").strip():
+            cues.append((slide_render.sticker_time(s["items"], bounds[i], bounds[i + 1]),
+                         "chime"))
+    return sorted(cues)
+
+
+def mix_sfx(voice_wav: Path, cues: list[tuple[float, str]], out: Path,
+            gain_db: float = 0.0) -> Path:
+    import soundfile as sf
+    data, sr = sf.read(str(voice_wav), dtype="float32", always_2d=False)
+    mono = data.mean(axis=1) if data.ndim > 1 else data
+    mix = mono.astype(np.float64).copy()
+    g = 10 ** (gain_db / 20)
+    sounds = {k: synth_sfx(k, sr) for k in ("pop", "whoosh", "chime")}
+    for t, kind in cues:
+        a = int(max(0.0, t) * sr)
+        snd = sounds[kind][: max(0, len(mix) - a)]
+        mix[a:a + len(snd)] += g * snd
+    peak = float(np.abs(mix).max())
+    if peak > 0.98:
+        mix *= 0.98 / peak
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out), mix.astype(np.float32), sr)
+    return out
+
+
 # ------------------------------------------------------------------ one video
 
 def make_video(cfg: dict, topic: str, n_slides: int | None = None,
@@ -330,6 +396,8 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
         for i, s in enumerate(slides):
             times = cue_times(words, bounds[i], bounds[i + 1], [it["cue"] for it in s["items"]])
             plan.append({"layout": s["layout"], "heading": s["heading"],
+                         "kicker": s["kicker"], "highlight": s["highlight"],
+                         "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
                          "items": [{**it, "at": t,
                                     "picture": (pictures.get(it["object"].strip().lower())
                                                 or icon_png(it["icon"], cfg))}
@@ -340,13 +408,19 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
             track = slide_render.render_track(plan, bounds, w, h, fps,
                                               job_dir / "work" / "track.mp4", cfg)
             music_path, music_attr = None, ""
-            try:
-                tr = music.pick_track_by_mood(str(e.get("music_mood", "")))
-                music_path, music_attr = music.ensure_track(tr), music.attribution_for(tr)
-            except music.MusicError as err:
-                notes.append(f"no background music: {err.message}")
+            if e.get("music", False):
+                try:
+                    tr = music.pick_track_by_mood(str(e.get("music_mood", "")))
+                    music_path, music_attr = music.ensure_track(tr), music.attribution_for(tr)
+                except music.MusicError as err:
+                    notes.append(f"no background music: {err.message}")
+            audio = voice_wav
+            if e.get("sfx", True):
+                audio = mix_sfx(voice_wav, sfx_cues(plan, bounds),
+                                job_dir / "work" / "voice_sfx.wav",
+                                float(e.get("sfx_db", 0.0)))
             clip_dir = job_dir / "clip_00"
-            final = create.finish_video(track, voice_wav, words, clip_dir, cfg,
+            final = create.finish_video(track, audio, words, clip_dir, cfg,
                                         captions=bool(e.get("captions", False)),
                                         preset=str(e.get("caption_preset", "clean-minimal")),
                                         anchor=None, music_path=music_path,

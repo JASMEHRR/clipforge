@@ -362,8 +362,11 @@ explain:                         # explain.py - PPT-style money explainers synce
   whisper_model: small
   captions: false                # the slides already show the key words
   caption_preset: clean-minimal
+  music: false                   # PJ: the bundled tracks sound cheap; drop a better one in assets/music and set true
   music_mood: "chill neutral background"
   music_volume_db: -24
+  sfx: true                      # synthesised pop / whoosh / chime timed to the slides (explain.synth_sfx)
+  sfx_db: 0.0
   voice:                         # overrides create.voice for this channel
     voice: af_bella
     speed: 1.0

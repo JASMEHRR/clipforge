@@ -42,3 +42,24 @@ def test_mock_explainer_is_schema_valid_and_object_seed_is_stable():
     validate(llm._mock_explainer_script("paying for a car"), "explainer_script")
     assert explain.object_seed("Car ") == explain.object_seed("car")
     assert explain.object_seed("car") != explain.object_seed("house")
+
+
+def test_highlight_span_and_sticker_time():
+    assert slides.highlight_span("Two meetings, one new direction", "ONE NEW direction") == (14, 31)
+    h = "Paying for a car"
+    a, b = slides.highlight_span(h, "not in heading")
+    assert h[a:b] == "car"                                       # falls back to last word
+    items = [{"at": 2.0}, {"at": 5.0}]
+    assert slides.sticker_time(items, 1.0, 9.0) == 5.8
+    assert slides.sticker_time(items, 1.0, 6.0) == 5.3           # stays inside the slide
+
+
+def test_sfx_cues_and_sounds():
+    plan = [{"items": [{"at": 1.0}], "sticker": ""},
+            {"items": [{"at": 4.0}, {"at": 5.0}], "sticker": "Ouch!"}]
+    cues = explain.sfx_cues(plan, [0.0, 3.0, 9.0])
+    assert [k for _, k in cues] == ["pop", "whoosh", "pop", "pop", "chime"]
+    for kind in ("pop", "whoosh", "chime"):
+        snd = explain.synth_sfx(kind, 24000)
+        assert 0 < abs(snd).max() <= 0.25                       # quiet under the voice
+        assert (snd == explain.synth_sfx(kind, 24000)).all()    # deterministic

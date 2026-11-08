@@ -427,8 +427,9 @@ def _mock_explainer_script(topic: str) -> dict:
          "items": [item("Card: high interest", "cards"), item("Lease: flexible", "leases"),
                    item("Loan: you own it", "loans")]},
     ]
-    for s in slides:
-        s["facts"] = ["mock fact"]
+    for k, s in enumerate(slides):
+        s.update(facts=["mock fact"], kicker=f"Part {k + 1}",
+                 highlight=s["heading"].split()[-1], sticker="Big deal!" if k == 2 else "")
     return {"topic": topic, "title": f"{topic.title()} Explained"[:60],
             "description": f"mock: {topic} explained simply.",
             "hashtags": ["#Money", "#PersonalFinance", "#Cars", "#Finance", "#Loans",
