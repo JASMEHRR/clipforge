@@ -368,8 +368,8 @@ explain:                         # explain.py - PPT-style money explainers synce
   sfx: true                      # synthesised pop / whoosh / chime timed to the slides (explain.synth_sfx)
   sfx_db: 0.0
   voice:                         # overrides create.voice for this channel
-    voice: af_bella
-    speed: 1.0
+    voice: am_michael            # male, fast-talking storyteller (af_bella = clearer female option)
+    speed: 1.08
   object_px: 512                 # square flat object pictures (art.py; cached per object name)
   object_style: "flat vector illustration, simple bold shapes, bright clean colors, centered, isolated on a plain white background, no text"
 

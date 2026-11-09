@@ -1,29 +1,37 @@
-"""Deck renderer for explainer videos (explain.py), in the GLOOD deck style.
+"""Deck renderer for explainer videos (explain.py) - "money noir" look.
 
-Look: Bricolage Grotesque ExtraBold headings + Figtree body (both OFL, in
-assets/fonts), navy ink outlines, lime / sky / kraft / peach fills, a white
-slide frame with a thick navy border and a hard offset shadow on a soft
-lime-to-sky backdrop with diagonal ribbons, a navy pill kicker, a lime marker
-highlight behind the key words of the heading, and a tilted sticker.
+PJ's brief: fun, swaggering, crime-comedy / Wall-Street-party energy (all
+original - no film names, characters, logos or quotes). The look:
 
-Motion is driven by the narration: every item appears when its cue word is
-spoken (explain.cue_times). Cards pop, list rows slide in, numbers count up,
-bars grow, flow arrows draw, the highlight sweeps in, the sticker slams down,
-and the slide content pushes left on a change. Frames stream into the encoder
-(ffutil.RawVideoWriter).
+  backdrop  warm near-black with a vignette, live film grain, gold Art Deco
+            corner ornaments, a gold progress line
+  type      Anton (condensed caps) headings in cream with the key words in
+            gold + a gold underline swipe; Special Elite typewriter kicker
+            "FILE 03 // THE CATCH"; Inter body text (all OFL / Apache-2.0,
+            bundled)
+  items     taped-on Polaroid / evidence cards (slightly tilted) that pop in
+            on their cue word; "rap sheet" rows for lists; gold-bar charts;
+            gold arrows for flows; a giant gold count-up for big numbers with
+            a burst of falling dollar bills
+  stamp     the slide's `sticker` slams down as a red rubber stamp
+  motion    whip-pan between slides (content slides with motion blur)
+
+Every item appears when its cue word is spoken (explain.cue_times). Frames
+stream into the encoder (ffutil.RawVideoWriter).
 
 Public API:
   render_track(slides, bounds, w, h, fps, out_path, cfg) -> Path
     slides[i] = {"layout", "kicker", "heading", "highlight", "sticker",
                  "items": [{"label", "detail", "object", "value", "unit",
                             "picture": png | None, "at": seconds}]}
-    bounds    = len(slides)+1 absolute times; slide i shows [bounds[i], bounds[i+1]).
-  sticker_time(items, start, end) -> float   (also used for its sound effect)
+  sticker_time(items, start, end) -> float   (also times its sound effect)
+  money_time(slide) -> float | None          (big-number landing, for 'kaching')
 Landscape (16:9) only for now.
 """
 from __future__ import annotations
 
 import math
+import random
 from functools import lru_cache
 from pathlib import Path
 
@@ -38,20 +46,23 @@ from schemas import EXPLAIN_LAYOUTS
 
 log = get_logger("slides")
 
-INK = (15, 35, 64)
-LIME = (200, 245, 58)
-SKY = (154, 211, 255)
-KRAFT = (242, 223, 184)
-PEACH = (255, 177, 153)
-BLUE = (31, 111, 209)
-WHITE = (255, 255, 255)
-FILLS = (SKY, LIME, KRAFT, PEACH)
-PUSH_S = 0.5                     # content push between slides
-POP_S = 0.45                     # item pop-in
-_FONT_DIR = ROOT / "assets" / "fonts"
-_FAMILIES = {   # variable fonts: axes in the order the font declares them
-    "display": ("BricolageGrotesque.ttf", lambda wt: [96, wt, 92]),   # opsz, wght, wdth
-    "body": ("Figtree.ttf", lambda wt: [wt]),
+GOLD = (226, 179, 60)
+GOLD_HI = (252, 222, 130)
+GOLD_DK = (150, 108, 28)
+CREAM = (243, 233, 210)
+PAPER = (241, 233, 214)
+PAPER_DK = (226, 214, 186)
+INK = (27, 24, 20)
+RED = (210, 36, 52)
+MUTED = (184, 172, 150)
+ROW = (34, 30, 25)
+PUSH_S = 0.42                    # whip-pan between slides
+POP_S = 0.42                     # item pop-in
+TILTS = (-2.5, 2.0, -1.5, 3.0)
+_FAMILIES = {   # file, variable-font axes (None = static font)
+    "head": (ROOT / "assets" / "fonts" / "Anton.ttf", None),
+    "type": (ROOT / "assets" / "fonts" / "SpecialElite.ttf", None),
+    "body": (ROOT / "web" / "fonts" / "Inter-Variable.ttf", lambda wt: [28, wt]),
 }
 
 
@@ -60,9 +71,10 @@ _FAMILIES = {   # variable fonts: axes in the order the font declares them
 @lru_cache(maxsize=128)
 def font(family: str, weight: int, px: int):
     from PIL import ImageFont
-    file, axes = _FAMILIES[family]
-    f = ImageFont.truetype(str(_FONT_DIR / file), max(8, int(px)))
-    f.set_variation_by_axes(axes(weight))
+    path, axes = _FAMILIES[family]
+    f = ImageFont.truetype(str(path), max(8, int(px)))
+    if axes:
+        f.set_variation_by_axes(axes(weight))
     return f
 
 
@@ -94,8 +106,10 @@ def wrap(text: str, family: str, weight: int, px: int, max_w: float,
 
 
 def draw_block(img, x: float, y: float, text: str, family: str, weight: int, px: int,
-               color: tuple, max_w: float, max_lines: int, leading: float = 1.15) -> float:
-    """Left-aligned wrapped text on a PIL image; returns the y below it."""
+               color: tuple, max_w: float, max_lines: int, leading: float = 1.15,
+               anchor: str = "la") -> float:
+    """Wrapped text on a PIL image (x = left for 'la', centre for 'ma');
+    returns the y below it."""
     from PIL import ImageDraw
     if not text.strip():
         return y
@@ -103,7 +117,7 @@ def draw_block(img, x: float, y: float, text: str, family: str, weight: int, px:
     d = ImageDraw.Draw(img)
     f = font(family, weight, px)
     for ln in lines:
-        d.text((x, y), ln, font=f, fill=color + (255,), anchor="la")
+        d.text((x, y), ln, font=f, fill=color + (255,), anchor=anchor)
         y += px * leading
     return y
 
@@ -143,9 +157,16 @@ def highlight_span(heading: str, phrase: str) -> tuple[int, int]:
 
 
 def sticker_time(items: list[dict], start: float, end: float) -> float:
-    """Pure. The sticker lands after the last item, inside the slide."""
+    """Pure. The stamp lands after the last item, inside the slide."""
     last = max((float(it["at"]) for it in items), default=start)
     return max(start + 0.8, min(last + 0.8, end - 0.7))
+
+
+def money_time(slide: dict) -> float | None:
+    """Pure. When a big number lands (its bills start falling), else None."""
+    if slide.get("layout") != "big_number" or not slide.get("items"):
+        return None
+    return float(slide["items"][0]["at"]) + POP_S * 0.5 + 1.0
 
 
 # ====================================================================== sprites
@@ -163,161 +184,161 @@ def _picture(path: str | None, max_w: int, max_h: int):
                       Image.LANCZOS)
 
 
-def _icon_box(path: str | None, side: int, u: float, number: int | None = None):
-    """White rounded square with a navy border holding an icon (GLOOD style),
-    or the item's number when it has no icon."""
+def card_content(item: dict, w: int, u: float):
+    """Polaroid / evidence-card content on paper (PIL image, used height,
+    y of the count-up number or None)."""
     from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, side - 1, side - 1), int(side * 0.22), fill=WHITE + (255,),
-                        outline=INK + (255,), width=max(2, int(4 * u)))
-    pic = _picture(path, int(side * 0.74), int(side * 0.74))
-    if pic is not None:
-        img.alpha_composite(pic, ((side - pic.width) // 2, (side - pic.height) // 2))
-    elif number is not None:
-        d.text((side / 2, side / 2), str(number), font=font("display", 800, int(side * 0.55)),
-               fill=INK + (255,), anchor="mm")
-    return img
-
-
-def card_content(item: dict, w: int, u: float, wide_pic: bool):
-    """Card content (transparent PIL image, used height, y of the count-up
-    number or None). AI drawings get a big picture area; icons sit in a
-    small white box like GLOOD's."""
-    from PIL import Image
-    pad = int(34 * u)
-    img = Image.new("RGBA", (w, int(1400 * u)), (0, 0, 0, 0))
+    pad = int(26 * u)
+    img = Image.new("RGBA", (w, int(1400 * u)), PAPER + (255,))
     y = pad
     if item.get("picture"):
-        if item.get("object") and wide_pic:
-            pic = _picture(item["picture"], w - 2 * pad, int(250 * u))
-            if pic is not None:
-                img.alpha_composite(pic, ((w - pic.width) // 2, y))
-                y += pic.height + int(18 * u)
-        else:
-            box = _icon_box(item["picture"], int(118 * u), u)
-            img.alpha_composite(box, (pad, y))
-            y += box.height + int(20 * u)
+        ph = int(230 * u if item.get("object") else 170 * u)
+        ImageDraw.Draw(img).rectangle((pad, y, w - pad, y + ph), fill=PAPER_DK + (255,))
+        pic = _picture(item["picture"], w - 2 * pad - int(20 * u), ph - int(20 * u))
+        if pic is not None:
+            img.alpha_composite(pic, ((w - pic.width) // 2, y + (ph - pic.height) // 2))
+        y += ph + int(18 * u)
     num_y = None
     if has_value(item):
         num_y = y
-        y += int(112 * u)
-    big = not item.get("picture") and num_y is None      # text-only: let the words carry it
-    y = draw_block(img, pad, y, item["label"], "display", 800, int((68 if big else 52) * u),
-                   INK, w - 2 * pad, 3 if big else 2, 1.05)
-    y = draw_block(img, pad, y + int(8 * u), item.get("detail", ""), "body", 500,
-                   int(31 * u), INK, w - 2 * pad, 3, 1.3)
+        y += int(104 * u)
+    big = not item.get("picture") and num_y is None      # text-only: the words carry it
+    y = draw_block(img, pad, y, item["label"].upper(), "head", 400,
+                   int((74 if big else 52) * u), INK, w - 2 * pad, 3 if big else 2, 1.08)
+    y = draw_block(img, pad, y + int(6 * u), item.get("detail", ""), "body", 500,
+                   int(29 * u), (70, 62, 52), w - 2 * pad, 3, 1.3)
     return img, int(y + pad), num_y
 
 
-def card_sprite(content, w: int, h: int, fill: tuple, u: float) -> np.ndarray:
-    from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(img).rounded_rectangle((0, 0, w - 1, h - 1), int(26 * u),
-                                          fill=fill + (255,), outline=INK + (255,),
-                                          width=max(2, int(4 * u)))
-    img.alpha_composite(content.crop((0, 0, w, min(h, content.height))), (0, 0))
-    return pil_to_sprite(img)
+def _dress(card, angle: float, u: float) -> np.ndarray:
+    """Soft shadow + a strip of tape, then the tilt; returns a sprite."""
+    from PIL import Image, ImageDraw, ImageFilter
+    m = int(34 * u)
+    w, h = card.size
+    out = Image.new("RGBA", (w + 2 * m, h + 2 * m), (0, 0, 0, 0))
+    sh = Image.new("RGBA", out.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).rectangle((m + int(8 * u), m + int(12 * u), m + w + int(8 * u),
+                                  m + h + int(12 * u)), fill=(0, 0, 0, 150))
+    out = Image.alpha_composite(out, sh.filter(ImageFilter.GaussianBlur(12 * u)))
+    out.alpha_composite(card, (m, m))
+    tape = Image.new("RGBA", (int(w * 0.34), int(38 * u)), (236, 224, 186, 190))
+    tape = tape.rotate(-4, expand=True, resample=Image.BICUBIC)
+    out.alpha_composite(tape, (m + (w - tape.width) // 2, m - tape.height // 2))
+    if abs(angle) > 0.05:
+        out = out.rotate(angle, expand=True, resample=Image.BICUBIC)
+    return pil_to_sprite(out)
 
 
-def row_sprite(item: dict, w: int, h: int, fill: tuple, u: float,
-               number: int | None = None) -> np.ndarray:
+def card_sprite(content, w: int, h: int, angle: float, u: float) -> np.ndarray:
+    return _dress(content.crop((0, 0, w, h)), angle, u)
+
+
+def row_sprite(item: dict, w: int, h: int, number: int, u: float) -> np.ndarray:
+    """'Rap sheet' row: dark slab, gold edge, gold #01, icon, caps label."""
     from PIL import Image, ImageDraw
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(img).rounded_rectangle((0, 0, w - 1, h - 1), int(24 * u),
-                                          fill=fill + (255,), outline=INK + (255,),
-                                          width=max(2, int(4 * u)))
-    side = int(min(h * 0.72, 110 * u))
-    pad = int(28 * u)
-    img.alpha_composite(_icon_box(item.get("picture"), side, u, number),
-                        (pad, (h - side) // 2))
-    tx = pad + side + int(28 * u)
+    img = Image.new("RGBA", (w, h), ROW + (235,))
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, int(8 * u), h), fill=GOLD + (255,))
+    pad = int(30 * u)
+    num = f"#{number:02d}"
+    d.text((pad + int(8 * u), h / 2), num, font=font("head", 400, int(64 * u)),
+           fill=GOLD + (255,), anchor="lm")
+    x = pad + int(8 * u) + int(_measure(num, font("head", 400, int(64 * u)))) + int(26 * u)
+    pic = _picture(item.get("picture"), int(h * 0.62), int(h * 0.62))
+    if pic is not None:
+        img.alpha_composite(pic, (x, (h - pic.height) // 2))
+        x += pic.width + int(24 * u)
     has_detail = bool(item.get("detail", "").strip())
-    y = h / 2 - (int(48 * u) if has_detail else int(26 * u))
-    y = draw_block(img, tx, y, item["label"], "display", 800, int(48 * u), INK,
-                   w - tx - pad, 1)
-    draw_block(img, tx, y + int(2 * u), item.get("detail", ""), "body", 500, int(30 * u),
-               INK, w - tx - pad, 1)
+    y = h / 2 - (int(46 * u) if has_detail else int(28 * u))
+    y = draw_block(img, x, y, item["label"].upper(), "head", 400, int(50 * u), CREAM,
+                   w - x - pad, 1)
+    draw_block(img, x, y + int(2 * u), item.get("detail", ""), "body", 500, int(29 * u),
+               MUTED, w - x - pad, 1)
     return pil_to_sprite(img)
 
 
-def pill_sprite(text: str, u: float) -> np.ndarray:
-    """Navy kicker pill with lime caps."""
+def stamp_sprite(text: str, u: float, seed: int) -> np.ndarray:
+    """Red rubber stamp: double border, caps, ink speckle, tilted."""
     from PIL import Image, ImageDraw
-    f = font("body", 800, int(27 * u))
-    t = text.upper()
+    t = text.upper().strip()
+    f = font("head", 400, int(70 * u))
     tw = _measure(t, f)
-    px, py = int(24 * u), int(11 * u)
-    hgt = int(27 * u * 1.25) + 2 * py
-    img = Image.new("RGBA", (int(tw) + 2 * px, hgt), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, img.width - 1, hgt - 1), hgt // 2, fill=INK + (255,))
-    d.text((px, hgt / 2), t, font=f, fill=LIME + (255,), anchor="lm")
-    return pil_to_sprite(img)
-
-
-def sticker_sprite(text: str, u: float) -> np.ndarray:
-    """Tilted white pill with a navy outline and hard shadow ('John agreed!')."""
-    from PIL import Image, ImageDraw
-    f = font("display", 800, int(46 * u))
-    tw = _measure(text, f)
-    px, py, sh = int(30 * u), int(16 * u), int(8 * u)
-    hgt = int(46 * u * 1.2) + 2 * py
+    px, py, b1, b2, gap = int(34 * u), int(14 * u), int(7 * u), int(3 * u), int(9 * u)
+    hgt = int(70 * u * 1.25) + 2 * py
     wid = int(tw) + 2 * px
-    img = Image.new("RGBA", (wid + sh + 2, hgt + sh + 2), (0, 0, 0, 0))
+    img = Image.new("RGBA", (wid, hgt), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((sh, sh, sh + wid, sh + hgt), hgt // 2, fill=INK + (255,))
-    d.rounded_rectangle((0, 0, wid, hgt), hgt // 2, fill=WHITE + (255,),
-                        outline=INK + (255,), width=max(2, int(5 * u)))
-    d.text((px, hgt / 2), text, font=f, fill=INK + (255,), anchor="lm")
-    return transform(pil_to_sprite(img), 1.0, 6.0)
+    d.rounded_rectangle((0, 0, wid - 1, hgt - 1), int(10 * u), outline=RED + (255,), width=b1)
+    d.rounded_rectangle((b1 + gap, b1 + gap, wid - 1 - b1 - gap, hgt - 1 - b1 - gap),
+                        int(6 * u), outline=RED + (255,), width=b2)
+    d.text((wid / 2, hgt / 2), t, font=f, fill=RED + (255,), anchor="mm")
+    arr = np.asarray(img).copy()
+    rng = np.random.default_rng(seed)
+    holes = rng.random(arr.shape[:2]) < 0.16                 # worn ink
+    arr[..., 3] = np.where(holes, arr[..., 3] // 4, (arr[..., 3] * 0.92).astype(np.uint8))
+    return transform(pil_to_sprite(Image.fromarray(arr)), 1.0, 11.0)
 
 
 # ====================================================================== page
 
 class Page:
-    """Static backdrop + slide frame, and the frame's geometry."""
+    """Backdrop (gradient + vignette), the overlay drawn on top of every frame
+    (gold Art Deco corners) and the film-grain frames."""
 
     def __init__(self, w: int, h: int):
-        from PIL import Image, ImageDraw
+        import cv2
         self.w, self.h = w, h
         self.u = u = h / 1080
-        self.fx0, self.fx1 = int(0.065 * w), int(0.935 * w)
-        self.fy0, self.fy1 = int(0.045 * h), int(0.925 * h)
-        self.border = max(3, int(6 * u))
-        self.pad = int(70 * u)
-        # backdrop: lime tint top-left to sky tint bottom-right
+        self.mx = int(0.075 * w)
+        self.cx0, self.cx1 = self.mx, w - self.mx
+        self.cy0, self.cy1 = int(0.31 * h), int(0.90 * h)
         yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-        t = np.clip((xx / w * 0.6 + yy / h * 0.4), 0, 1)[..., None]
-        a, b = np.array((232, 246, 206), np.float32), np.array((206, 229, 251), np.float32)
-        img = Image.fromarray((a * (1 - t) + b * t).astype(np.uint8)).convert("RGBA")
-        d = ImageDraw.Draw(img)
-        band = int(0.075 * h)
-        for (x0, y0, x1, y1), cap in (((-0.05 * w, 0.16 * h, 0.25 * w, 0.27 * h), (0.02, 0.215, 0.11, 0.235)),
-                                      ((0.78 * w, 0.60 * h, 1.05 * w, 0.73 * h), (0.90, 0.66, 0.99, 0.69))):
-            d.line((x0, y0, x1, y1), fill=(206, 240, 120, 255), width=band)
-            cx0, cy0, cx1, cy1 = cap[0] * w, cap[1] * h, cap[2] * w, cap[3] * h
-            r = int(0.03 * h)
-            d.line((cx0, cy0, cx1, cy1), fill=BLUE + (255,), width=2 * r)
-            for cx, cy in ((cx0, cy0), (cx1, cy1)):
-                d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=BLUE + (255,))
-        rad, so = int(46 * u), (int(18 * u), int(22 * u))
-        d.rounded_rectangle((self.fx0 + so[0], self.fy0 + so[1], self.fx1 + so[0],
-                             self.fy1 + so[1]), rad, fill=INK + (255,))
-        d.rounded_rectangle((self.fx0, self.fy0, self.fx1, self.fy1), rad,
-                            fill=WHITE + (255,), outline=INK + (255,), width=self.border)
-        self.base = np.ascontiguousarray(np.asarray(img.convert("RGB")))
-        # content may move inside this rect (pushes are clipped to it)
-        inset = rad // 2
-        self.inner = (self.fx0 + inset, self.fy0 + inset, self.fx1 - inset, self.fy1 - inset)
-        self.cx0, self.cx1 = self.fx0 + self.pad, self.fx1 - self.pad
-        self.cy0, self.cy1 = int(self.fy0 + 0.25 * h), int(self.fy1 - 0.05 * h)
+        r = np.sqrt(((xx - w * 0.5) / (w * 0.62)) ** 2 + ((yy - h * 0.42) / (h * 0.75)) ** 2)
+        t = np.clip(r, 0, 1)[..., None] ** 1.4
+        inner, outer = np.array((44, 38, 31), np.float32), np.array((9, 8, 7), np.float32)
+        self.base = np.ascontiguousarray((inner * (1 - t) + outer * t).astype(np.uint8))
+        # gold Art Deco corners: double L + a small diamond, kept still on top
+        ov = np.zeros((h, w, 4), np.uint8)
+        g = GOLD + (255,)
+        L, m, th = int(150 * u), int(34 * u), max(1, int(3 * u))
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            ox = m if sx > 0 else w - 1 - m
+            oy = m if sy > 0 else h - 1 - m
+            for k in (0, int(12 * u)):
+                x0, y0 = ox + sx * k, oy + sy * k
+                cv2.line(ov, (x0, y0), (x0 + sx * (L - k), y0), g, th, cv2.LINE_AA)
+                cv2.line(ov, (x0, y0), (x0, y0 + sy * (L - k)), g, th, cv2.LINE_AA)
+            dx, dy = ox + sx * int(30 * u), oy + sy * int(30 * u)
+            s = int(7 * u)
+            cv2.fillConvexPoly(ov, np.array([[dx, dy - s], [dx + s, dy], [dx, dy + s],
+                                             [dx - s, dy]]), g, cv2.LINE_AA)
+        from animate import premultiply
+        c = m + L + int(10 * u)                      # the ornaments live in 4 corner squares
+        self.corners = [(x0 + c / 2, y0 + c / 2, premultiply(ov[y0:y0 + c, x0:x0 + c]))
+                        for x0 in (0, w - c) for y0 in (0, h - c)]
+        rng = np.random.default_rng(3)
+        self.grain = []
+        for _ in range(6):                   # (add, sub) pairs, 3-channel
+            n = rng.normal(0, 5.0, (h // 2, w // 2)).astype(np.float32)
+            n = cv2.resize(n, (w, h), interpolation=cv2.INTER_LINEAR)
+            pos = np.clip(n, 0, 255).astype(np.uint8)
+            neg = np.clip(-n, 0, 255).astype(np.uint8)
+            self.grain.append((cv2.merge((pos, pos, pos)), cv2.merge((neg, neg, neg))))
+
+    def finish(self, frame: np.ndarray, k: int) -> np.ndarray:
+        import cv2
+        for cx, cy, spr in self.corners:
+            blit(frame, spr, cx, cy)
+        pos, neg = self.grain[(k // 2) % len(self.grain)]
+        cv2.add(frame, pos, frame)
+        cv2.subtract(frame, neg, frame)
+        return frame
 
 
 class Slide:
     """Pre-built sprites + geometry for one slide; draw(frame, t) animates it."""
 
-    def __init__(self, spec: dict, page: Page, index: int, total: int):
+    def __init__(self, spec: dict, page: Page, index: int, bill: np.ndarray | None):
         if spec["layout"] not in EXPLAIN_LAYOUTS:
             raise AnimateError(f"unknown slide layout '{spec['layout']}'")
         self.spec, self.p, self.index = spec, page, index
@@ -325,170 +346,215 @@ class Slide:
         self.u = u
         self.layout = spec["layout"]
         self.items = spec["items"]
+        self.bill = bill
         n = max(1, len(self.items))
         cw = p.cx1 - p.cx0
-        self.number = text_sprite(f"{index + 1:02d}", "body", 800, int(34 * u), BLUE)
-        self.kicker = pill_sprite(spec.get("kicker") or self.layout, u)
-        # heading: one line, shrunk to fit; highlight span measured in that font
-        heading = spec["heading"]
-        px = int((132 if self.layout == "title" else 112) * u)
-        while px > 40 * u and _measure(heading, font("display", 800, px)) > cw:
+        self.kicker = text_sprite(f"FILE {index + 1:02d} // {(spec.get('kicker') or '').upper()}",
+                                  "type", 400, int(42 * u), RED)
+        # heading: caps, cream with the key words in gold, shrunk to one line
+        heading = spec["heading"].upper()
+        a, b = highlight_span(heading, spec.get("highlight", "").upper())
+        px = int((150 if self.layout == "title" else 118) * u)
+        while px > 40 * u and _measure(heading, font("head", 400, px)) > cw:
             px = int(px * 0.94)
-        f = font("display", 800, px)
-        self.heading = text_sprite(heading, "display", 800, px, INK)
-        a, b = highlight_span(heading, spec.get("highlight", ""))
-        self.hl = (_measure(heading[:a], f), _measure(heading[:b], f))
-        self.head_x0 = p.cx0
-        self.head_y = p.fy0 + p.pad + self.kicker.shape[0] + int(20 * u)
-        self.sticker = sticker_sprite(spec["sticker"], u) if spec.get("sticker", "").strip() \
+        self.heading, self.hl = self._heading(heading, a, b, px)
+        self.head_y = int(0.085 * p.h) + self.kicker.shape[0] + int(14 * u)
+        self.stamp = stamp_sprite(spec["sticker"], u, index) if spec.get("sticker", "").strip() \
             else None
-        self.parts: list[tuple] = []      # (sprite, cx, cy, at, style, number spot | None, item)
+        self.parts: list[tuple] = []   # (sprite, cx, cy, at, style, number spot | None, item)
 
         if self.layout in ("title", "compare", "flow"):
-            gap = int((96 if self.layout == "flow" else 30) * u)
+            gap = int((110 if self.layout == "flow" else 46) * u)
             w_card = int((cw - gap * (n - 1)) / n)
-            wide = any(it.get("object") for it in self.items)
-            built = [card_content(it, w_card, u, wide) for it in self.items]
+            built = [card_content(it, w_card, u) for it in self.items]
             avail = p.cy1 - p.cy0
             need = max(hh for _, hh, _ in built)
-            floor = (0.45 if self.layout == "flow" else 0.62) * avail   # no thin strips
-            h_card = int(min(avail, max(need, floor)))
-            top = p.cy0 + (avail - h_card) / 2 if self.layout == "flow" else p.cy0
+            floor = (0.50 if self.layout == "flow" else 0.66) * avail
+            h_card = int(min(avail - 40 * u, max(need, floor)))
+            top = p.cy0 + (avail - h_card) / 2
             self.centres = []
             for k, (it, (content, _, num_y)) in enumerate(zip(self.items, built)):
                 x = p.cx0 + k * (w_card + gap)
-                spr = card_sprite(content, w_card, h_card, FILLS[(index + k) % len(FILLS)], u)
-                spot = (x + int(34 * u), top + num_y) if num_y is not None else None
-                self.parts.append((spr, x + w_card / 2, top + h_card / 2, it["at"], "pop", spot, it))
+                tilt = 0.0 if num_y is not None else TILTS[(index + k) % len(TILTS)]
+                spr = card_sprite(content, w_card, h_card, tilt, u)
+                spot = (x + int(26 * u), top + num_y) if num_y is not None else None
+                self.parts.append((spr, x + w_card / 2, top + h_card / 2, it["at"], "pop",
+                                   spot, it))
                 self.centres.append((x, x + w_card))
             self.mid_y = top + h_card / 2
         elif self.layout == "list":
-            gap = int(22 * u)
+            gap = int(20 * u)
             avail = p.cy1 - p.cy0
-            rh = int(min(150 * u, (avail - gap * (n - 1)) / n))
+            rh = int(min(140 * u, (avail - gap * (n - 1)) / n))
             for k, it in enumerate(self.items):
-                spr = row_sprite(it, cw, rh, FILLS[(index + k) % len(FILLS)], u, k + 1)
+                spr = row_sprite(it, cw, rh, k + 1, u)
                 self.parts.append((spr, p.cx0 + cw / 2, p.cy0 + rh / 2 + k * (rh + gap),
                                    it["at"], "slide", None, it))
         elif self.layout == "big_number":
             it = self.items[0]
             has_pic = bool(it.get("picture"))
-            w_num = int(cw * (0.60 if has_pic else 1.0))
-            h_box = p.cy1 - p.cy0
-            from PIL import Image
-            content = Image.new("RGBA", (w_num, h_box), (0, 0, 0, 0))
-            pad = int(44 * u)
-            y = draw_block(content, pad, pad, it["label"], "display", 800, int(60 * u), INK,
-                           w_num - 2 * pad, 2, 1.05)
-            self.num_spot = (p.cx0 + pad, p.cy0 + y + int(10 * u))
-            draw_block(content, pad, y + int(270 * u), it.get("detail", ""), "body", 500,
-                       int(36 * u), INK, w_num - 2 * pad, 3, 1.3)
-            spr = card_sprite(content, w_num, h_box, LIME, u)
-            self.parts.append((spr, p.cx0 + w_num / 2, p.cy0 + h_box / 2, it["at"], "pop", None, it))
+            self.num_x = p.cx0
+            self.num_w = int(cw * (0.58 if has_pic else 1.0))
+            self.big_label = text_sprite(it["label"].upper(), "type", 400, int(46 * u), MUTED)
+            self.big_detail = None
+            if it.get("detail", "").strip():
+                from PIL import Image
+                im = Image.new("RGBA", (self.num_w, int(200 * u)), (0, 0, 0, 0))
+                draw_block(im, 0, 0, it["detail"], "body", 500, int(38 * u), CREAM,
+                           self.num_w, 3, 1.3)
+                self.big_detail = pil_to_sprite(im)
             if has_pic:
-                w_pic = cw - w_num - int(30 * u)
-                box = Image.new("RGBA", (w_pic, h_box), (0, 0, 0, 0))
-                pic = _picture(it["picture"], int(w_pic * 0.8), int(h_box * 0.8))
-                if pic is not None:
-                    box.alpha_composite(pic, ((w_pic - pic.width) // 2, (h_box - pic.height) // 2))
-                spr2 = card_sprite(box, w_pic, h_box, SKY, u)
-                self.parts.append((spr2, p.cx1 - w_pic / 2, p.cy0 + h_box / 2,
-                                   it["at"] + 0.15, "pop", None, it))
+                w_pic = int(cw * 0.36)
+                content, _, _ = card_content({**it, "label": "", "detail": "",
+                                              "unit": "none"}, w_pic, u)
+                h_pic = int(min(p.cy1 - p.cy0 - 60 * u, w_pic * 1.05))
+                spr = card_sprite(content, w_pic, h_pic, 3.0, u)
+                self.parts.append((spr, p.cx1 - w_pic / 2, p.cy0 + (p.cy1 - p.cy0) / 2,
+                                   it["at"] + 0.2, "pop", None, it))
         elif self.layout == "bars":
             self.max_v = max((abs(float(it["value"])) for it in self.items), default=1) or 1
-            chart_w = cw * (0.8 if self.sticker is not None else 1.0)   # sticker corner stays free
+            chart_w = cw * (0.8 if self.stamp is not None else 1.0)   # stamp corner stays free
             self.chart_x1 = int(p.cx0 + chart_w)
-            self.bar_w = int(min(0.16 * p.w, chart_w / n * 0.5))
+            self.bar_w = int(min(0.15 * p.w, chart_w / n * 0.48))
             self.bar_x = [p.cx0 + chart_w * (k + 0.5) / n for k in range(n)]
-            self.base_y = p.cy1 - int(64 * u)
-            self.bar_h = self.base_y - (p.cy0 + int(80 * u))
-            self.bar_labels = [text_sprite(it["label"], "body", 700, int(34 * u), INK)
+            self.base_y = p.cy1 - int(60 * u)
+            self.bar_h = self.base_y - (p.cy0 + int(90 * u))
+            self.bar_labels = [text_sprite(it["label"].upper(), "head", 400, int(40 * u), CREAM)
                                for it in self.items]
+
+    def _heading(self, text: str, a: int, b: int, px: int):
+        """Heading sprite with the highlight drawn in gold; returns (sprite,
+        (x0, x1) of the highlight)."""
+        from PIL import Image, ImageDraw
+        f = font("head", 400, px)
+        d = ImageDraw.Draw(Image.new("L", (1, 1)))
+        l, t, r, bt = d.textbbox((0, 0), text, font=f)
+        img = Image.new("RGBA", (max(1, r - l + 8), max(1, bt - t + 8)), (0, 0, 0, 0))
+        dd = ImageDraw.Draw(img)
+        x = 4 - l
+        for part, col in ((text[:a], CREAM), (text[a:b], GOLD), (text[b:], CREAM)):
+            if part:
+                dd.text((x, 4 - t), part, font=f, fill=col + (255,))
+                x += _measure(part, f)
+        return pil_to_sprite(img), (4 - l + _measure(text[:a], f), 4 - l + _measure(text[:b], f))
 
     # ------------------------------------------------------------------ draw
     def draw(self, frame: np.ndarray, t: float, start: float, end: float) -> None:
         import cv2
         p, u = self.p, self.u
-        blit(frame, self.number, p.fx1 - p.pad * 0.7 - self.number.shape[1] / 2,
-             p.fy0 + p.pad * 0.75)
-        e = ease_out_cubic((t - start) / 0.4)
-        ky = p.fy0 + p.pad + self.kicker.shape[0] / 2
-        blit(frame, self.kicker, self.head_x0 + self.kicker.shape[1] / 2, ky + (1 - e) * 20 * u)
-        hh = self.heading.shape[0]
-        hy = self.head_y + hh / 2 + (1 - e) * 30 * u
-        # lime marker sweeps in behind the key words
-        sweep = ease_out_cubic((t - start - 0.35) / 0.5)
-        if sweep > 0:
-            x0, x1 = self.head_x0 + self.hl[0] - 8 * u, self.head_x0 + self.hl[1] + 8 * u
-            cv2.rectangle(frame, (int(x0), int(hy - hh * 0.02)),
-                          (int(x0 + (x1 - x0) * sweep), int(hy + hh * 0.46)), LIME, -1)
-        blit(frame, self.heading, self.head_x0 + self.heading.shape[1] / 2, hy)
+        e = ease_out_cubic((t - start) / 0.45)
+        kx = p.cx0 + self.kicker.shape[1] / 2
+        blit(frame, self.kicker, kx, int(0.085 * p.h) + self.kicker.shape[0] / 2)
+        hh, hw = self.heading.shape[:2]
+        hy = self.head_y + hh / 2 + (1 - e) * 40 * u
+        blit(frame, self.heading, p.cx0 + hw / 2, hy)
+        sweep = ease_out_cubic((t - start - 0.4) / 0.5)
+        if sweep > 0:                                # gold underline under the key words
+            x0, x1 = p.cx0 + self.hl[0], p.cx0 + self.hl[1]
+            y = int(hy + hh / 2 + 6 * u)
+            cv2.rectangle(frame, (int(x0), y), (int(x0 + (x1 - x0) * sweep), y + int(9 * u)),
+                          GOLD, -1)
 
         if self.layout == "flow":
             for k in range(1, len(self.centres)):
                 q = clamp01((t - (self.items[k]["at"] - 0.35)) / 0.35)
                 if q <= 0:
                     continue
-                xa = self.centres[k - 1][1] + 14 * u
-                xb = self.centres[k][0] - 14 * u
+                xa = self.centres[k - 1][1] + 16 * u
+                xb = self.centres[k][0] - 16 * u
                 xe = xa + (xb - xa) * q
                 y = int(self.mid_y)
-                cv2.arrowedLine(frame, (int(xa), y), (int(xe), y), INK, max(4, int(9 * u)),
-                                cv2.LINE_AA, tipLength=min(0.7, 34 * u / max(1.0, xe - xa)))
+                cv2.arrowedLine(frame, (int(xa), y), (int(xe), y), GOLD, max(4, int(9 * u)),
+                                cv2.LINE_AA, tipLength=min(0.7, 36 * u / max(1.0, xe - xa)))
 
         for spr, cx, cy, at, style, _spot, _it in self.parts:
             age = t - at
             if age < 0:
                 continue
-            if style == "pop":
+            if style == "pop":                       # tossed onto the table
                 s = ease_out_back(age / POP_S)
-                blit(frame, transform(spr, 0.3 + 0.7 * s, 0.0), cx, cy)
+                blit(frame, transform(spr, 0.3 + 0.7 * s, (1 - clamp01(age / POP_S)) * 14),
+                     cx, cy)
             else:
                 q = ease_out_cubic(age / POP_S)
-                blit(frame, spr, cx - (1 - q) * 0.7 * p.w, cy)
+                blit(frame, spr, cx - (1 - q) * 0.8 * p.w, cy)
 
-        for _spr, _cx, _cy, at, _style, spot, it in self.parts:   # count-ups in cards
+        for _spr, _cx, _cy, at, _style, spot, it in self.parts:   # count-ups on cards
             if spot is not None and t - at > POP_S * 0.6:
-                self._number(frame, it, t - at - POP_S * 0.6, spot, int(100 * u))
+                self._number(frame, it, t - at - POP_S * 0.6, spot, int(96 * u), INK)
 
         if self.layout == "big_number":
             it = self.items[0]
-            if t - it["at"] > POP_S * 0.5:
-                self._number(frame, it, t - it["at"] - POP_S * 0.5, self.num_spot, int(230 * u))
+            age = t - it["at"]
+            if age >= 0:
+                y = p.cy0 + int(20 * u)
+                blit(frame, self.big_label, self.num_x + self.big_label.shape[1] / 2,
+                     y + self.big_label.shape[0] / 2)
+                y += self.big_label.shape[0] + int(10 * u)
+                spr = self._number(frame, it, age - POP_S * 0.3, (self.num_x, y), int(260 * u),
+                                   GOLD) if age > POP_S * 0.3 else None
+                if self.big_detail is not None and spr is not None:
+                    yd = y + spr.shape[0] + int(24 * u)
+                    blit(frame, self.big_detail, self.num_x + self.big_detail.shape[1] / 2,
+                         yd + self.big_detail.shape[0] / 2)
         elif self.layout == "bars":
             cv2.rectangle(frame, (p.cx0, int(self.base_y)),
-                          (self.chart_x1, int(self.base_y + 6 * u)), INK, -1)
+                          (self.chart_x1, int(self.base_y + 4 * u)), CREAM, -1)
             for k, it in enumerate(self.items):
                 cx = self.bar_x[k]
-                blit(frame, self.bar_labels[k], cx, self.base_y + 42 * u)
+                blit(frame, self.bar_labels[k], cx, self.base_y + 46 * u)
                 age = t - it["at"]
                 if age < 0:
                     continue
                 g = ease_out_cubic(age / 0.8)
                 bh = int(self.bar_h * abs(float(it["value"])) / self.max_v * g)
-                if bh > 0:
+                if bh > 0:                           # a stack of gold
                     bx0, bx1 = int(cx - self.bar_w / 2), int(cx + self.bar_w / 2)
-                    cv2.rectangle(frame, (bx0, int(self.base_y - bh)), (bx1, int(self.base_y)),
-                                  FILLS[k % len(FILLS)], -1)
-                    cv2.rectangle(frame, (bx0, int(self.base_y - bh)), (bx1, int(self.base_y)),
-                                  INK, max(2, int(4 * u)), cv2.LINE_AA)
+                    top = int(self.base_y - bh)
+                    cv2.rectangle(frame, (bx0, top), (bx1, int(self.base_y)), GOLD, -1)
+                    cv2.rectangle(frame, (bx0, top), (bx1, top + int(12 * u)), GOLD_HI, -1)
+                    cv2.rectangle(frame, (bx1 - int(14 * u), top), (bx1, int(self.base_y)),
+                                  GOLD_DK, -1)
                 val = text_sprite(fmt_value(float(it["value"]) * g, it["unit"],
-                                            float(it["value"])), "display", 800, int(60 * u), INK)
-                blit(frame, val, cx, self.base_y - bh - 40 * u)
+                                            float(it["value"])), "head", 400, int(66 * u), GOLD)
+                blit(frame, val, cx, self.base_y - bh - 44 * u)
 
-        if self.sticker is not None:
-            ts = sticker_time(self.items, start, end)
-            age = t - ts
+        mt = money_time(self.spec)
+        if mt is not None and self.bill is not None and 0 <= t - mt < 3.2:
+            self._money(frame, t - mt)
+
+        if self.stamp is not None:
+            age = t - sticker_time(self.items, start, end)
             if age >= 0:
-                s = 1 + 0.8 * (1 - ease_out_cubic(age / 0.28))     # slams down
-                sh, sw = self.sticker.shape[:2]
-                blit(frame, transform(self.sticker, s, 0.0), p.cx1 - sw / 2 + 20 * u,
+                s = 1 + 1.4 * (1 - ease_out_cubic(age / 0.2))      # slams down
+                sh, sw = self.stamp.shape[:2]
+                blit(frame, transform(self.stamp, s, 0.0), p.cx1 - sw / 2,
                      p.cy1 - sh / 2 + 10 * u)
 
-    def _number(self, frame, it: dict, age: float, spot: tuple, px: int) -> None:
-        v = float(it["value"]) * ease_out_cubic(age / 1.1)
-        spr = text_sprite(fmt_value(v, it["unit"], float(it["value"])), "display", 800, px, INK)
+    def _number(self, frame, it: dict, age: float, spot: tuple, px: int, color: tuple):
+        v = float(it["value"]) * ease_out_cubic(age / 1.0)
+        spr = text_sprite(fmt_value(v, it["unit"], float(it["value"])), "head", 400, px, color)
         blit(frame, spr, spot[0] + spr.shape[1] / 2, spot[1] + spr.shape[0] / 2)
+        return spr
+
+    def _money(self, frame, age: float) -> None:
+        """A burst of dollar bills tumbling down after a big number lands."""
+        rng = random.Random(self.index)
+        p, u = self.p, self.u
+        for _ in range(16):
+            x0 = rng.uniform(0.05, 0.95) * p.w
+            delay = rng.uniform(0, 0.5)
+            speed = rng.uniform(420, 720) * u
+            spin = rng.uniform(-200, 200)
+            size = rng.uniform(0.55, 0.9)
+            a = age - delay
+            if a < 0:
+                continue
+            y = -120 * u + speed * a
+            if y > p.h + 120 * u:
+                continue
+            x = x0 + math.sin(a * 3 + x0) * 50 * u
+            blit(frame, transform(self.bill, size, spin * a), x, y)
 
 
 # ====================================================================== render
@@ -496,6 +562,8 @@ class Slide:
 def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: int,
                  out_path: str | Path, cfg: dict) -> Path:
     """Draw and encode the silent deck track (see module docstring)."""
+    import cv2
+    from explain import icon_png          # lazy: explain imports this module
     if w < h:
         raise AnimateError("slides.render_track is landscape-only for now")
     if len(bounds) != len(slides) + 1 or not slides:
@@ -506,14 +574,18 @@ def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: i
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     page = Page(w, h)
-    rx0, ry0, rx1, ry1 = page.inner
+    bill = None
+    bill_png = icon_png("💵", cfg)
+    if bill_png:
+        pic = _picture(bill_png, int(120 * page.u), int(120 * page.u))
+        bill = pil_to_sprite(pic) if pic is not None else None
     built: dict[int, Slide] = {}
 
     def slide(i: int) -> Slide:
         if i not in built:
             for old in [k for k in built if k < i - 1]:
                 del built[old]
-            built[i] = Slide(slides[i], page, i, len(slides))
+            built[i] = Slide(slides[i], page, i, bill)
         return built[i]
 
     def draw(i: int, t: float) -> np.ndarray:
@@ -521,7 +593,7 @@ def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: i
         slide(i).draw(frame, t, bounds[i], bounds[i + 1])
         return frame
 
-    bar = max(6, int(10 * h / 1080))
+    bar = max(4, int(6 * h / 1080))
     log.info("rendering %d slides, %d frames (%dx%d @ %dfps)", len(slides), n, w, h, fps)
     si = 0
     with RawVideoWriter(out_path, w, h, fps, video_encode_args(cfg)) as wr:
@@ -531,13 +603,18 @@ def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: i
             t = t0 + k / fps
             frame = draw(si, t)
             age = t - bounds[si]
-            if si > 0 and age < PUSH_S:          # content pushes left inside the frame
+            if si > 0 and age < PUSH_S:             # whip-pan: old slides out, new in
                 old = draw(si - 1, t)
-                rw = rx1 - rx0
-                x = int(smoothstep(age / PUSH_S) * rw)
-                frame[ry0:ry1, rx0:rx1] = np.concatenate(
-                    [old[ry0:ry1, rx0 + x:rx1], frame[ry0:ry1, rx0:rx0 + x]], axis=1)
-            frame[h - bar:, : int(w * (k + 1) / n)] = LIME
-            frame[h - bar:h - bar + max(2, bar // 4), : int(w * (k + 1) / n)] = INK
+                q = smoothstep(age / PUSH_S)
+                x = int(q * w)
+                if 0 < x < w:
+                    frame = np.concatenate([old[:, x:], frame[:, :x]], axis=1)
+                    blur = int(90 * math.sin(math.pi * q)) | 1
+                    if blur > 3:
+                        frame = cv2.blur(frame, (blur, 1))
+                elif x <= 0:
+                    frame = old
+            frame = page.finish(frame, k)
+            frame[h - bar:, : int(w * (k + 1) / n)] = GOLD
             wr.write(np.ascontiguousarray(frame))
     return out_path

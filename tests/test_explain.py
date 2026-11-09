@@ -55,11 +55,11 @@ def test_highlight_span_and_sticker_time():
 
 
 def test_sfx_cues_and_sounds():
-    plan = [{"items": [{"at": 1.0}], "sticker": ""},
-            {"items": [{"at": 4.0}, {"at": 5.0}], "sticker": "Ouch!"}]
+    plan = [{"layout": "big_number", "items": [{"at": 1.0}], "sticker": ""},
+            {"layout": "list", "items": [{"at": 4.0}, {"at": 5.0}], "sticker": "BUSTED"}]
     cues = explain.sfx_cues(plan, [0.0, 3.0, 9.0])
-    assert [k for _, k in cues] == ["pop", "whoosh", "pop", "pop", "chime"]
-    for kind in ("pop", "whoosh", "chime"):
+    assert [k for _, k in cues] == ["slap", "kaching", "whoosh", "slap", "slap", "stamp"]
+    for kind in explain.SFX_KINDS:
         snd = explain.synth_sfx(kind, 24000)
         assert 0 < abs(snd).max() <= 0.25                       # quiet under the voice
         assert (snd == explain.synth_sfx(kind, 24000)).all()    # deterministic

@@ -63,9 +63,18 @@ def script_prompt(topic: str, slides: int) -> str:
         f"{topic}.\n\n"
         "The video is a slideshow that plays itself: each slide stays on screen while its "
         "lines are spoken, and every item on the slide pops up at the exact moment the "
-        "narrator says its cue. Think of a smart friend explaining money with a "
-        "whiteboard: concrete examples, a running example person or situation, no "
-        "jargon without a one-line explanation.\n\n"
+        "narrator says its cue.\n\n"
+        "TONE - this is the whole point: a fast-talking, swaggering, funny narrator who "
+        "talks straight to the viewer, like a charming hustler in a crime comedy or a "
+        "wild Wall Street party story. Tell it as a STORY with a small invented crew (2-3 "
+        "original characters with nicknames, for example 'Big Tony', 'Lucky Lou', "
+        "'Vinnie Two-Cards') who make the money moves: one plays it smart, one gets "
+        "burned. Short punchy sentences, dramatic one-liners, playful asides ('and that, "
+        "my friend, is where the bank gets you'), money-as-the-mob metaphors (interest is "
+        "'the vig', the bank 'always gets its cut'). Keep it clean: no swearing, no real "
+        "people, no movie or show titles, no quotes from films, and nobody breaks the "
+        "law - the gangster flavour is only a joke about how money works. Every joke "
+        "still teaches the real idea; no jargon without a one-line explanation.\n\n"
         f"Return exactly {slides} slides. Each slide has:\n"
         "- layout: one of title (the opening hook: a big heading and 1-3 objects), "
         "compare (2-4 options side by side), list (2-4 points), big_number (one striking "
@@ -73,19 +82,21 @@ def script_prompt(topic: str, slides: int) -> str:
         "bar chart; every bar the SAME kind of amount, e.g. the monthly cost of each "
         "option, never a per-mile fee next to a total). The first slide is title, the "
         "last is a list recap. Use a variety.\n"
-        "- kicker: a 1-3 word label shown in a pill above the heading (for example "
-        "'OPTION 1', 'THE CATCH', 'RECAP').\n"
-        "- heading: at most 6 words.\n"
+        "- kicker: a 1-3 word case-file label shown above the heading (for example "
+        "'THE SETUP', 'THE CATCH', 'THE VIG', 'THE VERDICT').\n"
+        "- heading: at most 6 words, punchy.\n"
         "- highlight: 1-3 words copied exactly from the heading, the key idea, shown "
-        "with a marker highlight.\n"
-        "- sticker: a short punchy reaction of at most 3 words (for example 'Ouch!', "
-        "'Hidden cost!', 'You own it!') on about every third slide; otherwise \"\".\n"
+        "in gold.\n"
+        "- sticker: a red rubber stamp of 1-2 words (for example 'DENIED', 'APPROVED', "
+        "'BUSTED', 'PAID IN FULL', 'RIP-OFF') on about every third slide; otherwise "
+        "\"\".\n"
         "- lines: 1-4 narration lines of 8-20 words, spoken in order.\n"
         "- items: what appears on screen (big_number: exactly 1; others: 1-4). Each item:\n"
         "  label: 1-4 words shown big; detail: a short supporting phrase (may be empty);\n"
         "  object: only when the item IS a big concrete physical thing that makes a "
-        "good illustration (car, house, bank building, piggy bank, truck); otherwise "
-        "\"\" (a credit card or a loan is not a building). Never a person;\n"
+        "good illustration (car, house, bank building, piggy bank, truck, briefcase of "
+        "cash); otherwise \"\" (a credit card or a loan is not a building). Never a "
+        "person;\n"
         "  icon: one common emoji for the item (for example 💳 📄 🪙 📅 🔑 💰 📈 🏦), "
         "used when object is empty; \"\" if none fits;\n"
         "  value + unit: the number for big_number and bars (unit \"$\" or \"%\"), "
@@ -99,7 +110,7 @@ def script_prompt(topic: str, slides: int) -> str:
         "never present today's rates or prices as facts. No brand names. This is "
         "education, not financial advice: explain trade-offs, never tell the viewer what "
         "to buy.\n\n"
-        "title: at most 60 characters, curiosity-driven but honest. description: 2-3 "
+        "title: at most 60 characters, bold and curiosity-driven but honest. description: 2-3 "
         "sentences. hashtags: 8-12 tags like #PersonalFinance (letters and digits only).\n"
         "Return only JSON matching the schema."
     )
@@ -114,7 +125,9 @@ def fact_check_prompt(topic: str, slide: dict) -> str:
         f"Slide heading: {slide['title']}\nLines:\n{lines}\nClaimed facts:\n{facts}\n\n"
         "Rules:\n"
         '- verdict "pass": accurate (simplifying is fine; clearly illustrative example '
-        "numbers are fine).\n"
+        "numbers are fine). The narration is deliberately playful: invented characters, "
+        "jokes and gangster metaphors ('the vig', 'the bank gets its cut') are fine - "
+        "judge only the money facts behind them.\n"
         '- verdict "fix": something is wrong or misleading but fixable. Return '
         f"corrected_lines with exactly {len(slide['lines'])} strings, same order and "
         "style, changing only what is wrong.\n"
@@ -282,39 +295,57 @@ def draw_objects(names: list[str], cfg: dict) -> dict[str, str | None]:
 
 # ------------------------------------------------------------------ sound effects
 
+SFX_KINDS = ("slap", "whoosh", "stamp", "kaching")
+
+
 def synth_sfx(kind: str, sr: int) -> np.ndarray:
-    """Pure + deterministic. Soft UI sounds synthesised here (no audio files,
-    no licences): 'pop' = a quick pitch-dropping blip, 'whoosh' = band-passed
-    noise swell, 'chime' = two-note bell."""
-    if kind == "pop":
-        t = np.arange(int(sr * 0.09)) / sr
-        freq = 260 + 520 * np.exp(-t * 18)
-        return 0.20 * np.sin(2 * np.pi * np.cumsum(freq) / sr) * np.exp(-t / 0.028)
+    """Pure + deterministic. Sounds synthesised here (no audio files, no
+    licences): 'slap' = a card tossed on the table, 'whoosh' = whip-pan swell,
+    'stamp' = rubber-stamp thud, 'kaching' = cash-register bell."""
+    rng = np.random.default_rng(7)
+    if kind == "slap":
+        t = np.arange(int(sr * 0.07)) / sr
+        noise = rng.standard_normal(len(t))
+        hi = noise - np.convolve(noise, np.ones(8) / 8, "same")      # papery top end
+        body = np.sin(2 * np.pi * 180 * t) * np.exp(-t / 0.012)
+        return 0.13 * (0.8 * hi * np.exp(-t / 0.010) + 0.5 * body)
     if kind == "whoosh":
         n = int(sr * 0.42)
-        noise = np.random.default_rng(7).standard_normal(n + 64)
+        noise = rng.standard_normal(n + 64)
         band = (np.convolve(noise, np.ones(5) / 5, "same")
                 - np.convolve(noise, np.ones(48) / 48, "same"))[:n]
         env = np.sin(np.pi * np.arange(n) / n) ** 2
         return 0.16 * band * env / max(1e-9, float(np.abs(band).max()))
-    if kind == "chime":
-        t = np.arange(int(sr * 0.55)) / sr
-        tone = np.sin(2 * np.pi * 880 * t) + 0.6 * np.sin(2 * np.pi * 1320 * t)
-        return 0.10 * tone * np.exp(-t / 0.13) * np.minimum(1.0, t / 0.005)
+    if kind == "stamp":
+        t = np.arange(int(sr * 0.28)) / sr
+        freq = 55 + 90 * np.exp(-t * 30)
+        thump = np.sin(2 * np.pi * np.cumsum(freq) / sr) * np.exp(-t / 0.07)
+        knock = rng.standard_normal(len(t)) * np.exp(-t / 0.008)
+        return 0.22 * (thump + 0.35 * knock) / 1.35
+    if kind == "kaching":
+        t = np.arange(int(sr * 0.75)) / sr
+        ka = rng.standard_normal(len(t)) * np.exp(-t / 0.006)          # the drawer latch
+        late = np.clip(t - 0.06, 0, None)
+        bell = (np.sin(2 * np.pi * 2093 * late) + 0.7 * np.sin(2 * np.pi * 2637 * late)
+                + 0.3 * np.sin(2 * np.pi * 4186 * late)) * np.exp(-late / 0.22) * (t >= 0.06)
+        return 0.12 * (0.6 * ka + bell) / 2.0
     raise ExplainError(f"unknown sound effect '{kind}'")
 
 
 def sfx_cues(plan: list[dict], bounds: list[float]) -> list[tuple[float, str]]:
-    """Pure. A whoosh on every slide change, a pop as each item lands, a
-    chime when a sticker slams down."""
+    """Pure. A whoosh on every slide change, a slap as each card lands, a
+    ka-ching when a big number finishes counting, a thud for every stamp."""
     cues = []
     for i, s in enumerate(plan):
         if i > 0:
             cues.append((bounds[i] - 0.05, "whoosh"))
-        cues += [(float(it["at"]) + 0.03, "pop") for it in s["items"]]
+        cues += [(float(it["at"]) + 0.03, "slap") for it in s["items"]]
+        mt = slide_render.money_time(s)
+        if mt is not None:
+            cues.append((mt, "kaching"))
         if s.get("sticker", "").strip():
-            cues.append((slide_render.sticker_time(s["items"], bounds[i], bounds[i + 1]),
-                         "chime"))
+            cues.append((slide_render.sticker_time(s["items"], bounds[i], bounds[i + 1])
+                         + 0.12, "stamp"))
     return sorted(cues)
 
 
@@ -325,7 +356,7 @@ def mix_sfx(voice_wav: Path, cues: list[tuple[float, str]], out: Path,
     mono = data.mean(axis=1) if data.ndim > 1 else data
     mix = mono.astype(np.float64).copy()
     g = 10 ** (gain_db / 20)
-    sounds = {k: synth_sfx(k, sr) for k in ("pop", "whoosh", "chime")}
+    sounds = {k: synth_sfx(k, sr) for k in SFX_KINDS}
     for t, kind in cues:
         a = int(max(0.0, t) * sr)
         snd = sounds[kind][: max(0, len(mix) - a)]

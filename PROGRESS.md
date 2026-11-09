@@ -12,7 +12,8 @@ Second channel (PJ: global English, US $ examples). A slideshow that plays itsel
 - [x] Found live: Gemini rejects an empty string in a response_schema enum (400 "enum[0]: cannot be empty") - unit uses "none".
 - [x] Verified: tests/test_explain.py (cue sync, formatting, mock) + keyless mock run; live sample "buying a car: credit card vs lease vs loan" (8/8 slides passed fact-check, 1:34; script 379 s because free-tier flash timed out twice, voice 75 s, pictures 28 s, Whisper 12 s, render 39 s).
 - [x] Restyled to PJ's GLOOD decks (first sample rejected: 'does not look that good', 'shitty background music'): see CLAUDE.md Explainer mode. Slide script gained kicker / highlight / sticker; plan saves each slide's start/end. Music off, synthesised SFX on.
-- [ ] PJ verdict on the restyled sample. Then: vertical Shorts layout, nightly schedule, topic list for the money channel.
+- [x] 2026-11-09 PJ: 'not same fonts ... like wolf of wall street, hangover, mafia boys, fun' -> "money noir" look + swagger narration with an invented crew (all original, no film references), male voice, slap/whoosh/stamp/kaching SFX. See CLAUDE.md Explainer mode.
+- [ ] PJ verdict on the money-noir sample. Then: vertical Shorts layout, nightly schedule, topic list for the money channel.
 
 ## Phase CM - Create mode: original kids explainer videos (branch feature/create-mode, 2026-11-07) [x code+verified / ~ scheduling, UI]
 - [x] 2026-11-08 illustrated style (default; PJ rejected emoji-only visuals): see CLAUDE.md Create mode. Live run "butterflies": 51 pictures (~20 s each), long + 10 Shorts in ~46 min.
