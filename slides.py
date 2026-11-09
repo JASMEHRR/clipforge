@@ -316,10 +316,14 @@ class Page:
         c = m + L + int(10 * u)                      # the ornaments live in 4 corner squares
         self.corners = [(x0 + c / 2, y0 + c / 2, premultiply(ov[y0:y0 + c, x0:x0 + c]))
                         for x0 in (0, w - c) for y0 in (0, h - c)]
+        drng = random.Random(5)
+        self.dust = [(drng.uniform(0, w), drng.uniform(0, h), drng.uniform(12, 40) * u,
+                      max(1, int(drng.uniform(1.2, 3.0) * u)), drng.uniform(0, 6.28))
+                     for _ in range(34)]
         rng = np.random.default_rng(3)
         self.grain = []
         for _ in range(6):                   # (add, sub) pairs, 3-channel
-            n = rng.normal(0, 5.0, (h // 2, w // 2)).astype(np.float32)
+            n = rng.normal(0, 3.0, (h // 3, w // 3)).astype(np.float32)
             n = cv2.resize(n, (w, h), interpolation=cv2.INTER_LINEAR)
             pos = np.clip(n, 0, 255).astype(np.uint8)
             neg = np.clip(-n, 0, 255).astype(np.uint8)
@@ -329,7 +333,13 @@ class Page:
         import cv2
         for cx, cy, spr in self.corners:
             blit(frame, spr, cx, cy)
-        pos, neg = self.grain[(k // 2) % len(self.grain)]
+        pos, neg = self.grain[(k // 3) % len(self.grain)]
+        t = k / 30.0                                 # gold dust drifting up
+        for j, (x0, y0, sp, r, ph) in enumerate(self.dust):
+            y = (y0 - sp * t) % self.h
+            x = x0 + 18 * self.u * math.sin(0.6 * t + ph)
+            if math.sin(2.2 * t + ph) > -0.3:
+                cv2.circle(frame, (int(x), int(y)), r, GOLD_HI, -1, cv2.LINE_AA)
         cv2.add(frame, pos, frame)
         cv2.subtract(frame, neg, frame)
         return frame
@@ -348,14 +358,22 @@ class Slide:
         self.items = spec["items"]
         self.bill = bill
         n = max(1, len(self.items))
-        cw = p.cx1 - p.cx0
+        self.figure = None
+        self.x0 = p.cx0
+        fig_path = spec.get("figure")
+        if fig_path:                         # the cast member stands bottom-left
+            pic = _picture(fig_path, int(0.24 * p.w), int(0.62 * p.h))
+            if pic is not None:
+                self.figure = pil_to_sprite(pic)
+                self.x0 = p.cx0 + int(0.22 * p.w)
+        cw = p.cx1 - self.x0
         self.kicker = text_sprite(f"FILE {index + 1:02d} // {(spec.get('kicker') or '').upper()}",
                                   "type", 400, int(42 * u), RED)
         # heading: caps, cream with the key words in gold, shrunk to one line
         heading = spec["heading"].upper()
         a, b = highlight_span(heading, spec.get("highlight", "").upper())
         px = int((150 if self.layout == "title" else 118) * u)
-        while px > 40 * u and _measure(heading, font("head", 400, px)) > cw:
+        while px > 40 * u and _measure(heading, font("head", 400, px)) > p.cx1 - p.cx0:
             px = int(px * 0.94)
         self.heading, self.hl = self._heading(heading, a, b, px)
         self.head_y = int(0.085 * p.h) + self.kicker.shape[0] + int(14 * u)
@@ -374,7 +392,7 @@ class Slide:
             top = p.cy0 + (avail - h_card) / 2
             self.centres = []
             for k, (it, (content, _, num_y)) in enumerate(zip(self.items, built)):
-                x = p.cx0 + k * (w_card + gap)
+                x = self.x0 + k * (w_card + gap)
                 tilt = 0.0 if num_y is not None else TILTS[(index + k) % len(TILTS)]
                 spr = card_sprite(content, w_card, h_card, tilt, u)
                 spot = (x + int(26 * u), top + num_y) if num_y is not None else None
@@ -388,14 +406,19 @@ class Slide:
             rh = int(min(140 * u, (avail - gap * (n - 1)) / n))
             for k, it in enumerate(self.items):
                 spr = row_sprite(it, cw, rh, k + 1, u)
-                self.parts.append((spr, p.cx0 + cw / 2, p.cy0 + rh / 2 + k * (rh + gap),
+                self.parts.append((spr, self.x0 + cw / 2, p.cy0 + rh / 2 + k * (rh + gap),
                                    it["at"], "slide", None, it))
         elif self.layout == "big_number":
             it = self.items[0]
             has_pic = bool(it.get("picture"))
-            self.num_x = p.cx0
+            self.num_x = self.x0
             self.num_w = int(cw * (0.58 if has_pic else 1.0))
             self.big_label = text_sprite(it["label"].upper(), "type", 400, int(46 * u), MUTED)
+            final = fmt_value(float(it["value"]), it["unit"], float(it["value"]))
+            self.num_px = int(260 * u)               # the final number must fit its column
+            while (self.num_px > 60 * u and
+                   _measure(final, font("head", 400, self.num_px)) > self.num_w - 30 * u):
+                self.num_px = int(self.num_px * 0.93)
             self.big_detail = None
             if it.get("detail", "").strip():
                 from PIL import Image
@@ -405,18 +428,22 @@ class Slide:
                 self.big_detail = pil_to_sprite(im)
             if has_pic:
                 w_pic = int(cw * 0.36)
-                content, _, _ = card_content({**it, "label": "", "detail": "",
-                                              "unit": "none"}, w_pic, u)
+                from PIL import Image as _Im
                 h_pic = int(min(p.cy1 - p.cy0 - 60 * u, w_pic * 1.05))
+                content = _Im.new("RGBA", (w_pic, h_pic), PAPER + (255,))
+                pic = _picture(it["picture"], int(w_pic * 0.78), int(h_pic * 0.78))
+                if pic is not None:                  # fill the photo, icons included
+                    content.alpha_composite(pic, ((w_pic - pic.width) // 2,
+                                                  (h_pic - pic.height) // 2))
                 spr = card_sprite(content, w_pic, h_pic, 3.0, u)
                 self.parts.append((spr, p.cx1 - w_pic / 2, p.cy0 + (p.cy1 - p.cy0) / 2,
                                    it["at"] + 0.2, "pop", None, it))
         elif self.layout == "bars":
             self.max_v = max((abs(float(it["value"])) for it in self.items), default=1) or 1
             chart_w = cw * (0.8 if self.stamp is not None else 1.0)   # stamp corner stays free
-            self.chart_x1 = int(p.cx0 + chart_w)
+            self.chart_x1 = int(self.x0 + chart_w)
             self.bar_w = int(min(0.15 * p.w, chart_w / n * 0.48))
-            self.bar_x = [p.cx0 + chart_w * (k + 0.5) / n for k in range(n)]
+            self.bar_x = [self.x0 + chart_w * (k + 0.5) / n for k in range(n)]
             self.base_y = p.cy1 - int(60 * u)
             self.bar_h = self.base_y - (p.cy0 + int(90 * u))
             self.bar_labels = [text_sprite(it["label"].upper(), "head", 400, int(40 * u), CREAM)
@@ -467,14 +494,28 @@ class Slide:
                 cv2.arrowedLine(frame, (int(xa), y), (int(xe), y), GOLD, max(4, int(9 * u)),
                                 cv2.LINE_AA, tipLength=min(0.7, 36 * u / max(1.0, xe - xa)))
 
-        for spr, cx, cy, at, style, _spot, _it in self.parts:
+        if self.figure is not None:                  # cast member: rises in, breathes, hops
+            fh, fw = self.figure.shape[:2]
+            q = ease_out_back((t - start - 0.15) / 0.55)
+            hop = 0.0
+            if self.stamp is not None:
+                ha = t - sticker_time(self.items, start, end) - 0.1
+                if 0 <= ha < 0.4:
+                    hop = math.sin(math.pi * ha / 0.4) * 46 * u
+            breathe = 1 + 0.012 * math.sin(2 * math.pi * 0.5 * t)
+            fx = p.cx0 + fw / 2 - 20 * u
+            fy = p.h * 0.985 - fh / 2 + (1 - q) * fh * 1.1 - hop
+            blit(frame, transform(self.figure, breathe, 1.5 * math.sin(1.3 * t)), fx, fy)
+
+        for k, (spr, cx, cy, at, style, _spot, _it) in enumerate(self.parts):
             age = t - at
             if age < 0:
                 continue
-            if style == "pop":                       # tossed onto the table
-                s = ease_out_back(age / POP_S)
-                blit(frame, transform(spr, 0.3 + 0.7 * s, (1 - clamp01(age / POP_S)) * 14),
-                     cx, cy)
+            if style == "pop":                       # flies in from below, spinning down
+                q = ease_out_back(age / 0.5)
+                spin = (1 - clamp01(age / 0.5)) * (22 if k % 2 else -22)
+                blit(frame, transform(spr, 0.85 + 0.15 * clamp01(q), spin),
+                     cx, cy + (1 - q) * 0.6 * p.h)
             else:
                 q = ease_out_cubic(age / POP_S)
                 blit(frame, spr, cx - (1 - q) * 0.8 * p.w, cy)
@@ -491,14 +532,14 @@ class Slide:
                 blit(frame, self.big_label, self.num_x + self.big_label.shape[1] / 2,
                      y + self.big_label.shape[0] / 2)
                 y += self.big_label.shape[0] + int(10 * u)
-                spr = self._number(frame, it, age - POP_S * 0.3, (self.num_x, y), int(260 * u),
+                spr = self._number(frame, it, age - POP_S * 0.3, (self.num_x, y), self.num_px,
                                    GOLD) if age > POP_S * 0.3 else None
                 if self.big_detail is not None and spr is not None:
                     yd = y + spr.shape[0] + int(24 * u)
                     blit(frame, self.big_detail, self.num_x + self.big_detail.shape[1] / 2,
                          yd + self.big_detail.shape[0] / 2)
         elif self.layout == "bars":
-            cv2.rectangle(frame, (p.cx0, int(self.base_y)),
+            cv2.rectangle(frame, (self.x0, int(self.base_y)),
                           (self.chart_x1, int(self.base_y + 4 * u)), CREAM, -1)
             for k, it in enumerate(self.items):
                 cx = self.bar_x[k]
@@ -528,8 +569,26 @@ class Slide:
             if age >= 0:
                 s = 1 + 1.4 * (1 - ease_out_cubic(age / 0.2))      # slams down
                 sh, sw = self.stamp.shape[:2]
-                blit(frame, transform(self.stamp, s, 0.0), p.cx1 - sw / 2,
-                     p.cy1 - sh / 2 + 10 * u)
+                sx, sy = p.cx1 - sw / 2, p.cy1 - sh / 2 + 10 * u
+                cards = [pt for pt in self.parts if pt[4] == "pop"]
+                if self.layout in ("title", "compare", "flow") and cards:
+                    # stamp the PHOTO of the last card (evidence-style), never its text
+                    spr, cx, cy = cards[-1][:3]
+                    sx = min(cx + spr.shape[1] * 0.10, p.cx1 - sw / 2)
+                    sy = cy - spr.shape[0] * 0.22
+                blit(frame, transform(self.stamp, s, 0.0), sx, sy)
+
+    def camera(self, t: float, start: float, end: float) -> tuple[float, float, float]:
+        """(zoom, dx, dy): a slow push-in across the slide, plus a short shake
+        when the stamp slams down."""
+        z = 1 + 0.035 * smoothstep((t - start) / max(0.1, end - start))
+        dx = dy = 0.0
+        if self.stamp is not None:
+            age = t - sticker_time(self.items, start, end) - 0.1
+            if 0 <= age < 0.35:
+                amp = 16 * self.u * math.exp(-age / 0.09)
+                dx, dy = amp * math.sin(age * 95), amp * math.cos(age * 77)
+        return z, dx, dy
 
     def _number(self, frame, it: dict, age: float, spot: tuple, px: int, color: tuple):
         v = float(it["value"]) * ease_out_cubic(age / 1.0)
@@ -541,7 +600,7 @@ class Slide:
         """A burst of dollar bills tumbling down after a big number lands."""
         rng = random.Random(self.index)
         p, u = self.p, self.u
-        for _ in range(16):
+        for _ in range(10):
             x0 = rng.uniform(0.05, 0.95) * p.w
             delay = rng.uniform(0, 0.5)
             speed = rng.uniform(420, 720) * u
@@ -590,13 +649,23 @@ def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: i
 
     def draw(i: int, t: float) -> np.ndarray:
         frame = page.base.copy()
-        slide(i).draw(frame, t, bounds[i], bounds[i + 1])
+        sl = slide(i)
+        sl.draw(frame, t, bounds[i], bounds[i + 1])
+        z, dx, dy = sl.camera(t, bounds[i], bounds[i + 1])
+        if z > 1.0005 or dx or dy:
+            m = np.float32([[z, 0, (1 - z) * w / 2 + dx], [0, z, (1 - z) * h / 2 + dy]])
+            frame = cv2.warpAffine(frame, m, (w, h), flags=cv2.INTER_LINEAR,
+                                   borderMode=cv2.BORDER_REFLECT)
         return frame
 
     bar = max(4, int(6 * h / 1080))
     log.info("rendering %d slides, %d frames (%dx%d @ %dfps)", len(slides), n, w, h, fps)
     si = 0
-    with RawVideoWriter(out_path, w, h, fps, video_encode_args(cfg)) as wr:
+    enc = video_encode_args(cfg)
+    cap = str((cfg.get("explain") or {}).get("max_bitrate", "")).strip()
+    if cap:          # grain + constant camera motion otherwise run ~13 Mbit/s
+        enc += ["-maxrate", cap, "-bufsize", cap.rstrip("Mk") + ("M" if cap.endswith("M") else "k")]
+    with RawVideoWriter(out_path, w, h, fps, enc) as wr:
         for k in range(n):
             while k >= marks[si + 1]:
                 si += 1

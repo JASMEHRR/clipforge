@@ -429,8 +429,11 @@ def _mock_explainer_script(topic: str) -> dict:
     ]
     for k, s in enumerate(slides):
         s.update(facts=["mock fact"], kicker=f"Part {k + 1}",
-                 highlight=s["heading"].split()[-1], sticker="Big deal!" if k == 2 else "")
+                 highlight=s["heading"].split()[-1], sticker="Big deal!" if k == 2 else "",
+                 actor=("Maya", "", "Jake")[k % 3], mood=("confident", "happy", "shocked")[k % 3])
     return {"topic": topic, "title": f"{topic.title()} Explained"[:60],
+            "cast": [{"name": "Maya", "look": "woman with curly dark hair, yellow sweater"},
+                     {"name": "Jake", "look": "man with messy blond hair, red hoodie"}],
             "description": f"mock: {topic} explained simply.",
             "hashtags": ["#Money", "#PersonalFinance", "#Cars", "#Finance", "#Loans",
                          "#Budget", "#Explained", "#MoneyTips"],

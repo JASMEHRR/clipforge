@@ -94,6 +94,46 @@ def _engine(model_path: Path, voices_path: Path):
         return _engine_cache[key]
 
 
+def _edge_lines(texts: list[str], out_dir: Path, v: dict) -> list[dict]:
+    """Microsoft neural voices through edge-tts (free, no key; it uses the Edge
+    Read Aloud service, which is unofficial and occasionally changes access -
+    callers fall back to Kokoro). Each line -> 24 kHz mono wav like Kokoro."""
+    import asyncio
+    try:
+        import edge_tts
+        import soundfile as sf
+    except ImportError as e:
+        raise VoiceError("edge-tts / soundfile not installed",
+                         detail="pip install -r requirements.txt") from e
+    from ffutil import run_ffmpeg
+    voice = str(v.get("voice", "en-US-AvaMultilingualNeural"))
+    rate = str(v.get("rate", "+0%"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log.info("tts: %d line(s) via edge-tts (voice=%s, rate=%s)", len(texts), voice, rate)
+
+    async def one(text: str, mp3: Path) -> None:
+        await edge_tts.Communicate(text, voice, rate=rate).save(str(mp3))
+
+    results = []
+    for i, text in enumerate(texts):
+        mp3, wav = out_dir / f"line_{i:02d}.mp3", out_dir / f"line_{i:02d}.wav"
+        for attempt in range(3):
+            try:
+                asyncio.run(one(text, mp3))
+                if mp3.stat().st_size > 0:
+                    break
+            except Exception as e:  # noqa: BLE001 - network / service errors vary
+                if attempt == 2:
+                    raise VoiceError(f"edge-tts failed on line {i}", detail=str(e)[:300]) from e
+        else:
+            raise VoiceError(f"edge-tts returned no audio for line {i}")
+        run_ffmpeg(["-i", mp3, "-ac", "1", "-ar", "24000", wav])
+        mp3.unlink(missing_ok=True)
+        info = sf.info(str(wav))
+        results.append({"path": str(wav), "duration_s": round(info.frames / info.samplerate, 3)})
+    return results
+
+
 def synthesize_lines(lines: list[str], out_dir: str | Path,
                      cfg: dict | None = None) -> list[dict]:
     """Synthesize each line to `out_dir/line_NN.wav`.
@@ -106,6 +146,16 @@ def synthesize_lines(lines: list[str], out_dir: str | Path,
     if not texts or any(not t for t in texts):
         raise VoiceError("synthesize_lines needs a non-empty text for every line")
     v = _vcfg(cfg)
+    if str(v.get("engine", "kokoro")) == "edge":
+        try:
+            return _edge_lines(texts, Path(out_dir), v)
+        except VoiceError as e:
+            # the whole batch falls back, so one video never mixes two voices
+            log.warning("edge voice failed (%s) - using local Kokoro '%s' instead",
+                        e, v.get("fallback_voice", "af_heart"))
+            v = {**v, "engine": "kokoro", "voice": v.get("fallback_voice", "af_heart"),
+                 "speed": v.get("fallback_speed", 1.0)}
+            cfg = {**cfg, "create": {**cfg["create"], "voice": v}}
     voice = str(v.get("voice", "af_heart"))
     speed = float(v.get("speed", 1.0))
     lang = str(v.get("lang", "en-us"))

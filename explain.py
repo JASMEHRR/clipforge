@@ -64,17 +64,27 @@ def script_prompt(topic: str, slides: int) -> str:
         "The video is a slideshow that plays itself: each slide stays on screen while its "
         "lines are spoken, and every item on the slide pops up at the exact moment the "
         "narrator says its cue.\n\n"
-        "TONE - this is the whole point: a fast-talking, swaggering, funny narrator who "
-        "talks straight to the viewer, like a charming hustler in a crime comedy or a "
-        "wild Wall Street party story. Tell it as a STORY with a small invented crew (2-3 "
-        "original characters with nicknames, for example 'Big Tony', 'Lucky Lou', "
-        "'Vinnie Two-Cards') who make the money moves: one plays it smart, one gets "
-        "burned. Short punchy sentences, dramatic one-liners, playful asides ('and that, "
-        "my friend, is where the bank gets you'), money-as-the-mob metaphors (interest is "
-        "'the vig', the bank 'always gets its cut'). Keep it clean: no swearing, no real "
-        "people, no movie or show titles, no quotes from films, and nobody breaks the "
-        "law - the gangster flavour is only a joke about how money works. Every joke "
-        "still teaches the real idea; no jargon without a one-line explanation.\n\n"
+        "TONE - this is the whole point: a confident, upbeat narrator who talks straight "
+        "to the viewer like a sharp friend who is good with money. The message running "
+        "through the video: money is easy to make and easy to keep when you are smart "
+        "about it, and easy to lose when you are careless. The content is serious and "
+        "useful - real numbers, real trade-offs - but it must be FUN to listen to, never "
+        "a textbook: open with a hook that names what is at stake ('Two people buy the "
+        "same car. One pays five thousand dollars more. Here is why.'), ask the viewer "
+        "quick questions, use vivid everyday comparisons ('that is a vacation, gone'), "
+        "drop 'here is the trick' moments, and end slides on a small cliffhanger that "
+        "pulls into the next one. Plain everyday words, energy and certainty, short "
+        "sentences. The fun comes from the situation and the stakes, not from jokes. NO "
+        "slang or nicknames for money things anywhere, on screen or spoken (never "
+        "'plastic', 'the vig', 'skinned', 'wheels'), no gangster talk, no swearing, no "
+        "movie references.\n"
+        "Make it concrete with a small cast of 2 ordinary example people with plain "
+        "first names (for example Maya, who makes the smart move, and Jake, who doesn't): "
+        "follow what each one does and what it costs them. Be fair to Jake - explain "
+        "his choice, never mock him. Jargon always gets a one-line plain explanation.\n\n"
+        "cast: those 2 people, each with name and look - a short visual description for "
+        "a cartoon figure (adult, hair, clothes and colours), clearly different from each "
+        "other; no real people.\n\n"
         f"Return exactly {slides} slides. Each slide has:\n"
         "- layout: one of title (the opening hook: a big heading and 1-3 objects), "
         "compare (2-4 options side by side), list (2-4 points), big_number (one striking "
@@ -82,14 +92,16 @@ def script_prompt(topic: str, slides: int) -> str:
         "bar chart; every bar the SAME kind of amount, e.g. the monthly cost of each "
         "option, never a per-mile fee next to a total). The first slide is title, the "
         "last is a list recap. Use a variety.\n"
-        "- kicker: a 1-3 word case-file label shown above the heading (for example "
-        "'THE SETUP', 'THE CATCH', 'THE VIG', 'THE VERDICT').\n"
-        "- heading: at most 6 words, punchy.\n"
+        "- kicker: a 1-3 word label shown above the heading (for example 'THE OPTIONS', "
+        "'THE CATCH', 'THE MATH', 'THE SMART MOVE').\n"
+        "- heading: at most 6 words, clear and confident.\n"
         "- highlight: 1-3 words copied exactly from the heading, the key idea, shown "
         "in gold.\n"
-        "- sticker: a red rubber stamp of 1-2 words (for example 'DENIED', 'APPROVED', "
-        "'BUSTED', 'PAID IN FULL', 'RIP-OFF') on about every third slide; otherwise "
-        "\"\".\n"
+        "- sticker: a red stamp of 1-2 words (for example 'SMART MOVE', 'COSTLY', "
+        "'PAID OFF', 'WATCH OUT') on about every third slide; otherwise \"\".\n"
+        "- actor: the cast member this slide is about (name exactly as in cast), or \"\" "
+        "for a general slide; mood: how they feel on this slide (happy, confident, "
+        "worried, shocked, sad, thinking; use thinking when actor is \"\").\n"
         "- lines: 1-4 narration lines of 8-20 words, spoken in order.\n"
         "- items: what appears on screen (big_number: exactly 1; others: 1-4). Each item:\n"
         "  label: 1-4 words shown big; detail: a short supporting phrase (may be empty);\n"
@@ -107,7 +119,8 @@ def script_prompt(topic: str, slides: int) -> str:
         "- facts: every factual claim the slide makes.\n\n"
         "Accuracy: only well-established, widely documented facts. Numbers are "
         "illustrative examples ('for example', 'around', 'can'), round and realistic; "
-        "never present today's rates or prices as facts. No brand names. This is "
+        "never present today's rates, averages or prices as facts (no 'average rate "
+        "today'; say 'say the loan is at 7 percent'). No brand names. This is "
         "education, not financial advice: explain trade-offs, never tell the viewer what "
         "to buy.\n\n"
         "title: at most 60 characters, bold and curiosity-driven but honest. description: 2-3 "
@@ -125,14 +138,17 @@ def fact_check_prompt(topic: str, slide: dict) -> str:
         f"Slide heading: {slide['title']}\nLines:\n{lines}\nClaimed facts:\n{facts}\n\n"
         "Rules:\n"
         '- verdict "pass": accurate (simplifying is fine; clearly illustrative example '
-        "numbers are fine). The narration is deliberately playful: invented characters, "
-        "jokes and gangster metaphors ('the vig', 'the bank gets its cut') are fine - "
+        "numbers are fine). Invented example people and confident, upbeat phrasing are "
+        "fine - "
         "judge only the money facts behind them.\n"
         '- verdict "fix": something is wrong or misleading but fixable. Return '
-        f"corrected_lines with exactly {len(slide['lines'])} strings, same order and "
-        "style, changing only what is wrong.\n"
+        f"corrected_lines with exactly {len(slide['lines'])} strings, same order, "
+        "changing only the words that are wrong - keep the original wording, hook, "
+        "energy and every other sentence exactly as written.\n"
         '- verdict "reject": the slide\'s main point is false or reads as personal '
         "financial advice.\n"
+        "- A number presented as today's rate, price or national average is a problem: "
+        'use "fix" to reword it as an example ("say the loan is at 7 percent").\n'
         "List every problem in issues (empty list if none).\n"
         "Return only JSON matching the schema."
     )
@@ -142,7 +158,15 @@ def checked_script(topic: str, n_slides: int, cfg: dict, provider: str | None) -
     """Script whose slides passed (or were fixed by) the fact-check. Rejected
     slides are dropped; more than a quarter rejected fails the video, since
     the remaining slides would no longer tell a coherent story."""
-    script = create.ask("explainer_script", script_prompt(topic, n_slides), cfg, provider,
+    e = _ecfg(cfg)
+    # the writer: free-tier flash models write far better copy than flash-lite but
+    # can take minutes when overloaded - this channel waits for them (night run)
+    wcfg = {**cfg, "create": {**cfg["create"],
+                              "gemini_models": e.get("writer_models")
+                              or cfg["create"].get("gemini_models"),
+                              "llm_timeout_s": e.get("writer_timeout_s",
+                                                     cfg["create"].get("llm_timeout_s", 120))}}
+    script = create.ask("explainer_script", script_prompt(topic, n_slides), wcfg, provider,
                         {"topic": topic, "slides": n_slides})
     script["topic"] = topic
     kept, report = [], []
@@ -293,6 +317,39 @@ def draw_objects(names: list[str], cfg: dict) -> dict[str, str | None]:
     return out
 
 
+MOOD_WORDS = {
+    "happy": "big happy smile",
+    "confident": "big confident grin, thumbs up",
+    "worried": "nervous and sweating, worried frown",
+    "shocked": "screaming in shock, mouth wide open, hands on head",
+    "sad": "sad face, shoulders slumped, empty pockets",
+    "thinking": "thinking hard, hand on chin, one eyebrow raised",
+}
+CAST_STYLE = ("oversized head, tiny body, vinyl toy style, isolated on pure white "
+              "background")
+CAST_PX = (448, 576)     # GTX 16xx: 512x640 gives NaN latents in fp16, this size does not
+
+
+def cast_prompt(look: str, mood: str) -> str:
+    """Chibi toy-figure style: unmistakably cartoon (no realistic AI people),
+    expressive, and the same seed per name keeps a face across moods."""
+    return (f"chibi 3d cartoon toy figure of a {look.strip().rstrip('.')}, "
+            f"{MOOD_WORDS.get(mood, MOOD_WORDS['thinking'])}, {CAST_STYLE}")
+
+
+def draw_cast(cast: list[dict], slides: list[dict], cfg: dict) -> dict[tuple, str]:
+    """(name, mood) -> cut-out PNG for every cast member a slide shows."""
+    looks = {c["name"].strip().lower(): c["look"] for c in cast}
+    need = sorted({(s["actor"].strip().lower(), s["mood"]) for s in slides
+                   if s.get("actor", "").strip().lower() in looks})
+    if not need:
+        return {}
+    pics = art.draw_images([(cast_prompt(looks[n], m), object_seed(n)) for n, m in need],
+                           cfg, size=CAST_PX)
+    return {key: art.cutout(pic, cfg, max_area=0.9)["fg"] or str(pic)
+            for key, pic in zip(need, pics)}
+
+
 # ------------------------------------------------------------------ sound effects
 
 SFX_KINDS = ("slap", "whoosh", "stamp", "kaching")
@@ -415,6 +472,7 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
 
         with stage_timer(log, "art", timings):     # before Whisper: GPU memory
             pictures = draw_objects([it["object"] for s in slides for it in s["items"]], cfg)
+            figures = draw_cast(script.get("cast", []), slides, cfg)
 
         with stage_timer(log, "transcribe", timings):
             wcfg = {**cfg, "whisper": {**cfg["whisper"], "language": "en",
@@ -429,6 +487,8 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
             plan.append({"layout": s["layout"], "heading": s["heading"],
                          "kicker": s["kicker"], "highlight": s["highlight"],
                          "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
+                         "figure": figures.get((s.get("actor", "").strip().lower(),
+                                                s.get("mood", ""))),
                          "items": [{**it, "at": t,
                                     "picture": (pictures.get(it["object"].strip().lower())
                                                 or icon_png(it["icon"], cfg))}

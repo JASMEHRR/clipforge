@@ -63,3 +63,12 @@ def test_sfx_cues_and_sounds():
         snd = explain.synth_sfx(kind, 24000)
         assert 0 < abs(snd).max() <= 0.25                       # quiet under the voice
         assert (snd == explain.synth_sfx(kind, 24000)).all()    # deterministic
+
+
+def test_cast_prompts_cover_every_mood():
+    from schemas import EXPLAIN_MOODS
+    assert set(explain.MOOD_WORDS) == set(EXPLAIN_MOODS)
+    p = explain.cast_prompt("man with a red hoodie.", "shocked")
+    assert p.startswith("chibi 3d cartoon toy figure of a man with a red hoodie,")
+    assert explain.MOOD_WORDS["shocked"] in p
+    assert explain.MOOD_WORDS["thinking"] in explain.cast_prompt("x", "unknown")

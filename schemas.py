@@ -695,6 +695,8 @@ FACT_CHECK = {
 
 # Slide layouts slides.py can draw (single source of truth).
 EXPLAIN_LAYOUTS = ("title", "compare", "list", "big_number", "flow", "bars")
+# How a cast member feels on a slide (explain.MOOD_WORDS draws each one).
+EXPLAIN_MOODS = ("happy", "confident", "worried", "shocked", "sad", "thinking")
 
 # One thing on a slide. `cue` is a word/phrase copied from the slide's
 # narration: the item pops in the moment it is spoken (Whisper word timings).
@@ -722,6 +724,14 @@ EXPLAINER_SCRIPT = {
         "title": {"type": "string", "minLength": 1, "maxLength": 60},
         "description": {"type": "string", "minLength": 1},
         "hashtags": _KIDS_HASHTAGS,
+        "cast": {   # example people drawn as cartoon figures
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 20},
+                                     "look": {"type": "string", "minLength": 1, "maxLength": 100}},
+                      "required": ["name", "look"], "additionalProperties": False},
+            "maxItems": 3,
+        },
         "slides": {
             "type": "array",
             "items": {
@@ -732,6 +742,8 @@ EXPLAINER_SCRIPT = {
                     "heading": {"type": "string", "minLength": 1, "maxLength": 48},
                     "highlight": {"type": "string", "maxLength": 32},
                     "sticker": {"type": "string", "maxLength": 22},
+                    "actor": {"type": "string", "maxLength": 20},      # cast name or ""
+                    "mood": {"type": "string", "enum": list(EXPLAIN_MOODS)},
                     "lines": {"type": "array",
                               "items": {"type": "string", "minLength": 1,
                                         "maxLength": KIDS_LINE_MAX_CHARS},
@@ -741,14 +753,14 @@ EXPLAINER_SCRIPT = {
                     "facts": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["layout", "kicker", "heading", "highlight", "sticker",
-                             "lines", "items", "facts"],
+                             "actor", "mood", "lines", "items", "facts"],
                 "additionalProperties": False,
             },
             "minItems": 3,
             "maxItems": 40,
         },
     },
-    "required": ["topic", "title", "description", "hashtags", "slides"],
+    "required": ["topic", "title", "description", "hashtags", "cast", "slides"],
     "additionalProperties": False,
 }
 
