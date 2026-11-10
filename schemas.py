@@ -717,6 +717,28 @@ _EXPLAIN_ITEM = {
     "additionalProperties": False,
 }
 
+_EXPLAIN_SLIDE = {
+    "type": "object",
+    "properties": {
+        "layout": {"type": "string", "enum": list(EXPLAIN_LAYOUTS)},
+        "kicker": {"type": "string", "minLength": 1, "maxLength": 24},
+        "heading": {"type": "string", "minLength": 1, "maxLength": 48},
+        "highlight": {"type": "string", "maxLength": 32},
+        "sticker": {"type": "string", "maxLength": 22},
+        "actor": {"type": "string", "maxLength": 20},      # cast name or ""
+        "mood": {"type": "string", "enum": list(EXPLAIN_MOODS)},
+        "lines": {"type": "array",
+                  "items": {"type": "string", "minLength": 1,
+                            "maxLength": KIDS_LINE_MAX_CHARS},
+                  "minItems": 1, "maxItems": 6},
+        "items": {"type": "array", "items": _EXPLAIN_ITEM, "minItems": 1, "maxItems": 4},
+        "facts": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["layout", "kicker", "heading", "highlight", "sticker",
+                 "actor", "mood", "lines", "items", "facts"],
+    "additionalProperties": False,
+}
+
 EXPLAINER_SCRIPT = {
     "type": "object",
     "properties": {
@@ -732,35 +754,31 @@ EXPLAINER_SCRIPT = {
                       "required": ["name", "look"], "additionalProperties": False},
             "maxItems": 3,
         },
-        "slides": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "layout": {"type": "string", "enum": list(EXPLAIN_LAYOUTS)},
-                    "kicker": {"type": "string", "minLength": 1, "maxLength": 24},
-                    "heading": {"type": "string", "minLength": 1, "maxLength": 48},
-                    "highlight": {"type": "string", "maxLength": 32},
-                    "sticker": {"type": "string", "maxLength": 22},
-                    "actor": {"type": "string", "maxLength": 20},      # cast name or ""
-                    "mood": {"type": "string", "enum": list(EXPLAIN_MOODS)},
-                    "lines": {"type": "array",
-                              "items": {"type": "string", "minLength": 1,
-                                        "maxLength": KIDS_LINE_MAX_CHARS},
-                              "minItems": 1, "maxItems": 6},
-                    "items": {"type": "array", "items": _EXPLAIN_ITEM,
-                              "minItems": 1, "maxItems": 4},
-                    "facts": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["layout", "kicker", "heading", "highlight", "sticker",
-                             "actor", "mood", "lines", "items", "facts"],
-                "additionalProperties": False,
-            },
-            "minItems": 3,
-            "maxItems": 40,
-        },
+        "slides": {"type": "array", "items": _EXPLAIN_SLIDE, "minItems": 3, "maxItems": 40},
     },
     "required": ["topic", "title", "description", "hashtags", "cast", "slides"],
+    "additionalProperties": False,
+}
+
+# LLM output: vertical Short teasers written FROM a checked explainer script
+# (same slide shape; facts are reused, never new). Each ends by sending the
+# viewer to the channel for the full video.
+EXPLAINER_SHORTS = {
+    "type": "object",
+    "properties": {
+        "shorts": {
+            "type": "array",
+            "items": {"type": "object",
+                      "properties": {
+                          "title": {"type": "string", "minLength": 1, "maxLength": 60},
+                          "slides": {"type": "array", "items": _EXPLAIN_SLIDE,
+                                     "minItems": 2, "maxItems": 5}},
+                      "required": ["title", "slides"], "additionalProperties": False},
+            "minItems": 1,
+            "maxItems": 4,
+        },
+    },
+    "required": ["shorts"],
     "additionalProperties": False,
 }
 
@@ -785,6 +803,7 @@ SCHEMAS: dict[str, dict] = {
     "kids_long_script": KIDS_LONG_SCRIPT,
     "fact_check": FACT_CHECK,
     "explainer_script": EXPLAINER_SCRIPT,
+    "explainer_shorts": EXPLAINER_SHORTS,
 }
 
 

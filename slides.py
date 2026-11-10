@@ -288,10 +288,16 @@ class Page:
     def __init__(self, w: int, h: int):
         import cv2
         self.w, self.h = w, h
-        self.u = u = h / 1080
+        self.portrait = h > w
+        self.u = u = min(w, h) / 1080        # 1.0 for both 1920x1080 and 1080x1920
         self.mx = int(0.075 * w)
         self.cx0, self.cx1 = self.mx, w - self.mx
-        self.cy0, self.cy1 = int(0.31 * h), int(0.90 * h)
+        if self.portrait:
+            # phone: heading 0.06-0.29h, content 0.30-0.60h, captions ~0.64h,
+            # the cast member standing at the bottom
+            self.cy0, self.cy1 = int(0.30 * h), int(0.60 * h)
+        else:
+            self.cy0, self.cy1 = int(0.31 * h), int(0.90 * h)
         yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
         r = np.sqrt(((xx - w * 0.5) / (w * 0.62)) ** 2 + ((yy - h * 0.42) / (h * 0.75)) ** 2)
         t = np.clip(r, 0, 1)[..., None] ** 1.4
@@ -361,7 +367,11 @@ class Slide:
         self.figure = None
         self.x0 = p.cx0
         fig_path = spec.get("figure")
-        if fig_path:                         # the cast member stands bottom-left
+        if fig_path and p.portrait:          # phone: big, standing under the captions
+            pic = _picture(fig_path, int(0.46 * p.w), int(0.30 * p.h))
+            if pic is not None:
+                self.figure = pil_to_sprite(pic)
+        elif fig_path:                       # the cast member stands bottom-left
             pic = _picture(fig_path, int(0.24 * p.w), int(0.62 * p.h))
             if pic is not None:
                 self.figure = pil_to_sprite(pic)
@@ -372,10 +382,16 @@ class Slide:
         # heading: caps, cream with the key words in gold, shrunk to one line
         heading = spec["heading"].upper()
         a, b = highlight_span(heading, spec.get("highlight", "").upper())
-        px = int((150 if self.layout == "title" else 118) * u)
-        while px > 40 * u and _measure(heading, font("head", 400, px)) > p.cx1 - p.cx0:
-            px = int(px * 0.94)
-        self.heading, self.hl = self._heading(heading, a, b, px)
+        if p.portrait:                       # phone: big words over up to 3 lines
+            self.heading = self._heading_wrap(heading, a, b, int(124 * u), p.cx1 - p.cx0,
+                                              3, int(0.29 * p.h) - int(0.085 * p.h)
+                                              - self.kicker.shape[0] - int(14 * u))
+            self.hl = None
+        else:
+            px = int((150 if self.layout == "title" else 118) * u)
+            while px > 40 * u and _measure(heading, font("head", 400, px)) > p.cx1 - p.cx0:
+                px = int(px * 0.94)
+            self.heading, self.hl = self._heading(heading, a, b, px)
         self.head_y = int(0.085 * p.h) + self.kicker.shape[0] + int(14 * u)
         self.stamp = stamp_sprite(spec["sticker"], u, index) if spec.get("sticker", "").strip() \
             else None
@@ -410,7 +426,7 @@ class Slide:
                                    it["at"], "slide", None, it))
         elif self.layout == "big_number":
             it = self.items[0]
-            has_pic = bool(it.get("picture"))
+            has_pic = bool(it.get("picture")) and not p.portrait   # phone: the number alone
             self.num_x = self.x0
             self.num_w = int(cw * (0.58 if has_pic else 1.0))
             self.big_label = text_sprite(it["label"].upper(), "type", 400, int(46 * u), MUTED)
@@ -465,6 +481,42 @@ class Slide:
                 x += _measure(part, f)
         return pil_to_sprite(img), (4 - l + _measure(text[:a], f), 4 - l + _measure(text[:b], f))
 
+    def _heading_wrap(self, text: str, a: int, b: int, px: int, max_w: int,
+                      max_lines: int, max_h: int) -> np.ndarray:
+        """Phone heading: word-wrapped over up to `max_lines`, shrunk until it
+        fits `max_h`; words inside the highlight span [a, b) are gold."""
+        from PIL import Image, ImageDraw
+        spans, pos = [], 0
+        for wd in text.split():
+            i = text.index(wd, pos)
+            spans.append((wd, GOLD if i < b and i + len(wd) > a else CREAM))
+            pos = i + len(wd)
+        while True:
+            f = font("head", 400, px)
+            space = _measure(" ", f)
+            lines, cur, cur_w = [], [], 0.0
+            for wd, col in spans:
+                ww = _measure(wd, f)
+                if cur and cur_w + space + ww > max_w:
+                    lines.append(cur)
+                    cur, cur_w = [], 0.0
+                cur.append((wd, col, ww))
+                cur_w += (space if len(cur) > 1 else 0) + ww
+            if cur:
+                lines.append(cur)
+            lead = int(px * 1.04)
+            if (len(lines) <= max_lines and lead * len(lines) <= max_h) or px <= 40:
+                break
+            px = int(px * 0.92)
+        img = Image.new("RGBA", (int(max_w), lead * len(lines) + 8), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        for row, line in enumerate(lines):
+            x = 0.0
+            for wd, col, ww in line:
+                d.text((x, row * lead), wd, font=f, fill=col + (255,))
+                x += ww + space
+        return pil_to_sprite(img)
+
     # ------------------------------------------------------------------ draw
     def draw(self, frame: np.ndarray, t: float, start: float, end: float) -> None:
         import cv2
@@ -476,7 +528,7 @@ class Slide:
         hy = self.head_y + hh / 2 + (1 - e) * 40 * u
         blit(frame, self.heading, p.cx0 + hw / 2, hy)
         sweep = ease_out_cubic((t - start - 0.4) / 0.5)
-        if sweep > 0:                                # gold underline under the key words
+        if sweep > 0 and self.hl:                    # gold underline under the key words
             x0, x1 = p.cx0 + self.hl[0], p.cx0 + self.hl[1]
             y = int(hy + hh / 2 + 6 * u)
             cv2.rectangle(frame, (int(x0), y), (int(x0 + (x1 - x0) * sweep), y + int(9 * u)),
@@ -503,7 +555,7 @@ class Slide:
                 if 0 <= ha < 0.4:
                     hop = math.sin(math.pi * ha / 0.4) * 46 * u
             breathe = 1 + 0.012 * math.sin(2 * math.pi * 0.5 * t)
-            fx = p.cx0 + fw / 2 - 20 * u
+            fx = p.w * 0.30 if p.portrait else p.cx0 + fw / 2 - 20 * u
             fy = p.h * 0.985 - fh / 2 + (1 - q) * fh * 1.1 - hop
             blit(frame, transform(self.figure, breathe, 1.5 * math.sin(1.3 * t)), fx, fy)
 
@@ -570,6 +622,9 @@ class Slide:
                 s = 1 + 1.4 * (1 - ease_out_cubic(age / 0.2))      # slams down
                 sh, sw = self.stamp.shape[:2]
                 sx, sy = p.cx1 - sw / 2, p.cy1 - sh / 2 + 10 * u
+                if p.portrait:                       # phone: beside the cast member, on screen
+                    sx = min(p.w * 0.70, p.w - sw / 2 - 24 * u)
+                    sy = p.h * 0.84
                 cards = [pt for pt in self.parts if pt[4] == "pop"]
                 if self.layout in ("title", "compare", "flow") and cards:
                     # stamp the PHOTO of the last card (evidence-style), never its text
@@ -623,8 +678,6 @@ def render_track(slides: list[dict], bounds: list[float], w: int, h: int, fps: i
     """Draw and encode the silent deck track (see module docstring)."""
     import cv2
     from explain import icon_png          # lazy: explain imports this module
-    if w < h:
-        raise AnimateError("slides.render_track is landscape-only for now")
     if len(bounds) != len(slides) + 1 or not slides:
         raise AnimateError(f"{len(slides)} slides need {len(slides) + 1} bounds")
     marks = frame_marks(bounds, fps)

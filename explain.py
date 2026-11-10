@@ -32,7 +32,6 @@ import numpy as np
 
 import art
 import create
-import music
 import slides as slide_render
 import voice
 from config import load_config
@@ -154,20 +153,65 @@ def fact_check_prompt(topic: str, slide: dict) -> str:
     )
 
 
-def checked_script(topic: str, n_slides: int, cfg: dict, provider: str | None) -> dict:
-    """Script whose slides passed (or were fixed by) the fact-check. Rejected
-    slides are dropped; more than a quarter rejected fails the video, since
-    the remaining slides would no longer tell a coherent story."""
+def writer_cfg(cfg: dict) -> dict:
+    """Config for the copy-writing calls: free-tier flash models write far better
+    than flash-lite but can take minutes when overloaded - this channel waits
+    for them (it runs at night). Fact-checks keep create.gemini_models."""
     e = _ecfg(cfg)
-    # the writer: free-tier flash models write far better copy than flash-lite but
-    # can take minutes when overloaded - this channel waits for them (night run)
-    wcfg = {**cfg, "create": {**cfg["create"],
+    return {**cfg, "create": {**cfg["create"],
                               "gemini_models": e.get("writer_models")
                               or cfg["create"].get("gemini_models"),
                               "llm_timeout_s": e.get("writer_timeout_s",
                                                      cfg["create"].get("llm_timeout_s", 120))}}
-    script = create.ask("explainer_script", script_prompt(topic, n_slides), wcfg, provider,
-                        {"topic": topic, "slides": n_slides})
+
+
+def write_shorts(script: dict, n: int, cfg: dict, provider: str | None) -> list[dict]:
+    """Short teasers for a checked script; [] when the writer fails (the long
+    video still ships)."""
+    try:
+        data = create.ask("explainer_shorts", shorts_prompt(script, n), writer_cfg(cfg),
+                          provider, {"topic": script.get("topic", ""), "shorts": n})
+    except LLMError as err:
+        log.warning("shorts script failed: %s", err)
+        return []
+    return data["shorts"][:n]
+
+
+def shorts_prompt(script: dict, n: int) -> str:
+    """Vertical Short teasers built ONLY from an already fact-checked script."""
+    slides = "\n".join(f"- [{s['layout']}] {s['heading']}: " + " ".join(s["lines"])
+                       for s in script["slides"])
+    cast = ", ".join(f"{c['name']} ({c['look']})" for c in script.get("cast", []))
+    return (
+        f"Below is the narration of a finished, fact-checked YouTube video titled "
+        f"\"{script['title']}\". Write {n} vertical YouTube Shorts (25-40 seconds each) "
+        "that tease it. Each Short takes a DIFFERENT angle (the most surprising number, a "
+        "costly mistake, a smart trick) and must make the viewer want the full video:\n"
+        "- slide 1 is the hook: a surprising number or a sharp question in the first "
+        "line, nothing generic;\n"
+        "- the middle gives 1-2 concrete facts with real numbers from the video;\n"
+        "- the LAST slide's last line sends them to the channel (for example 'The full "
+        "breakdown, with every number, is on our channel.') and its sticker is "
+        "'FULL VIDEO ON CHANNEL'.\n"
+        "2-4 slides per Short, 1-2 lines per slide, 6-16 words per line. Same tone as the "
+        "video: confident, upbeat, plain words, no slang. Use ONLY facts and numbers that "
+        "appear below - never add new ones. Phone screen: keep labels to 1-3 words, at "
+        "most 3 items per slide; compare and flow slides have 2-3 items.\n"
+        f"Cast you may use as actor: {cast or 'none'}.\n"
+        "Slide fields are the same as the video's: layout, kicker, heading (max 5 words), "
+        "highlight (words copied from the heading), sticker, actor, mood, lines, items "
+        "(label, detail, object, icon, value, unit, cue copied exactly from that slide's "
+        "lines), facts.\n\n"
+        f"Video:\n{slides}\n\nReturn only JSON matching the schema."
+    )
+
+
+def checked_script(topic: str, n_slides: int, cfg: dict, provider: str | None) -> dict:
+    """Script whose slides passed (or were fixed by) the fact-check. Rejected
+    slides are dropped; more than a quarter rejected fails the video, since
+    the remaining slides would no longer tell a coherent story."""
+    script = create.ask("explainer_script", script_prompt(topic, n_slides), writer_cfg(cfg),
+                        provider, {"topic": topic, "slides": n_slides})
     script["topic"] = topic
     kept, report = [], []
     for s in script["slides"]:
@@ -208,6 +252,22 @@ def _find(toks: list[str], cue: list[str], pos: int) -> int | None:
         if all(_same(toks[i + j], c) for j, c in enumerate(cue)):
             return i
     return None
+
+
+def join_number_pieces(words: list[dict]) -> list[dict]:
+    """Pure. Whisper splits numbers ('$30' + ',000.', '24' + '%'); glue a
+    piece that starts with ',', '.', '%' or a digit right after a number back
+    onto it, so captions read '$30,000.' and cue matching sees one token."""
+    out: list[dict] = []
+    for w in words:
+        txt = str(w["word"])
+        prev = str(out[-1]["word"]).strip() if out else ""
+        if out and not txt.startswith(" ") and txt[:1] in ",.%0123456789" \
+                and prev[-1:].isdigit():
+            out[-1] = {**out[-1], "word": out[-1]["word"] + txt, "end": w["end"]}
+        else:
+            out.append(dict(w))
+    return out
 
 
 def cue_times(words: list[dict], start: float, end: float, cues: list[str],
@@ -458,81 +518,61 @@ def next_topic(cfg: dict, rng) -> str:
     return create.pick_topic(list(_ecfg(cfg).get("topics") or []), load_used_topics(cfg), rng)
 
 
-# ------------------------------------------------------------------ shorts
-
-def short_ranges(bounds: list[float], min_s: float, max_s: float,
-                 max_n: int) -> list[tuple[int, int]]:
-    """Pure. Slide ranges [i, j) for vertical Shorts: from the first slide (the
-    hook) onward, each range takes as many whole slides as fit in max_s and is
-    kept when it lasts at least min_s. Ranges never overlap."""
-    out: list[tuple[int, int]] = []
-    n = len(bounds) - 1
-    i = 0
-    while i < n and len(out) < max_n:
-        j = i + 1
-        while j < n and bounds[j + 1] - bounds[i] <= max_s:
-            j += 1
-        if min_s <= bounds[j] - bounds[i] <= max_s:
-            out.append((i, j))
-            i = j
-        else:
-            i += 1
-    return out
-
-
-def _short_overlay(heading: str, w: int, h: int, path: Path) -> Path:
-    """Transparent 9:16 layer: the hook in big caps up top, a tagline below."""
-    from PIL import Image
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    u = w / 1080
-    y = slide_render.draw_block(img, 60 * u, 120 * u, heading.upper(), "head", 400,
-                                int(108 * u), slide_render.GOLD, w - 120 * u, 3, 1.05)
-    slide_render.draw_block(img, 60 * u, y + 40 * u, "WATCH TILL THE END", "type", 400,
-                            int(40 * u), slide_render.RED, w - 120 * u, 1)
-    slide_render.draw_block(img, w / 2, h - 150 * u, "FULL VIDEO ON THE CHANNEL", "head", 400,
-                            int(46 * u), slide_render.MUTED, w - 120 * u, 1, anchor="ma")
-    img.save(path)
-    return path
-
-
-def render_short(job_dir: Path, k: int, plan: list[dict], bounds: list[float],
-                 rng_ij: tuple[int, int], words: list[dict], track: Path, audio: Path,
-                 cfg: dict) -> Path:
-    """One vertical Short: the deck for slides [i, j) sits in the middle of a
-    dark 9:16 frame, the hook heading above it, karaoke captions below."""
-    from ffutil import run_ffmpeg, video_encode_args
+def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
+            size: tuple[int, int], cfg: dict, timings: dict, tag: str, *,
+            captions: bool, preset: str, anchor: float | None):
+    """Slides -> finished clip: narration, pictures, word timings, cue sync,
+    deck render (landscape or vertical by `size`), sound effects, mux.
+    Returns (final path, plan, bounds, words)."""
+    import transcribe
     e = _ecfg(cfg)
-    sc = e.get("shorts") or {}
-    i, j = rng_ij
-    a, b = bounds[i], bounds[j]
-    w, h = int(sc.get("width", 1080)), int(sc.get("height", 1920))
-    work = job_dir / "work" / f"short_{k:02d}"
-    work.mkdir(parents=True, exist_ok=True)
-    overlay = _short_overlay(plan[i]["heading"], w, h, work / "overlay.png")
-    # the deck is zoomed slightly (sides trimmed: only the frame ornaments sit
-    # in the outer 6%) so the slides read bigger on a phone
-    zoom = float(sc.get("deck_zoom", 1.15))
-    deck_w = int(round(w * zoom / 2)) * 2
-    deck_h = int(round(deck_w * 9 / 16 / 2)) * 2
-    y = int(h * float(sc.get("deck_center", 0.42)) - deck_h / 2)
-    enc = video_encode_args(cfg)
-    cap = str(e.get("max_bitrate", "")).strip()
-    if cap:
-        enc += ["-maxrate", cap, "-bufsize", cap]
-    portrait = work / "portrait.mp4"
-    run_ffmpeg(["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", track,
-                "-loop", "1", "-i", overlay,
-                "-filter_complex",
-                f"color=c=0x0e0c0a:s={w}x{h}:r={int(e.get('fps', 30))}[bg];"
-                f"[0:v]scale={deck_w}:{deck_h},crop={w}:{deck_h},setsar=1[d];"
-                f"[bg][d]overlay=0:{y}:shortest=1[v1];[v1][1:v]overlay=0:0:shortest=1[v]",
-                "-map", "[v]", "-t", f"{b - a:.3f}", "-an", *enc, portrait])
-    voice = create.slice_wav(audio, a, b, work / "voice.wav")
-    return create.finish_video(portrait, voice, create.slice_words(words, a, b),
-                               job_dir / f"clip_{k:02d}", cfg, captions=True,
-                               preset=str(sc.get("caption_preset", "karaoke-pop")),
-                               anchor=float(sc.get("caption_anchor", 0.64)),
-                               music_path=None, music_db=-24)
+    w, h = size
+    sections = [{"key": f"s{i}", "title": s["heading"],
+                 "lines": [{"text": t, "visual": ""} for t in s["lines"]]}
+                for i, s in enumerate(slides)]
+    texts = [t for s in slides for t in s["lines"]]
+    with stage_timer(log, f"voice_{tag}", timings):
+        vcfg = {**cfg, "create": {**cfg["create"],
+                                  "voice": {**cfg["create"]["voice"], **e.get("voice", {})}}}
+        synth = voice.synthesize_lines(texts, work / "voice_lines", vcfg)
+        timeline = create.build_timeline(sections, [r["duration_s"] for r in synth],
+                                         float(e.get("line_gap_s", 0.2)),
+                                         float(e.get("slide_gap_s", 0.6)))
+        voice_wav = create.assemble_voice([r["path"] for r in synth], timeline,
+                                          work / "voice.wav")
+    with stage_timer(log, f"art_{tag}", timings):          # before Whisper: GPU memory
+        pictures = draw_objects([it["object"] for s in slides for it in s["items"]], cfg)
+        figures = draw_cast(cast, slides, cfg)
+    with stage_timer(log, f"transcribe_{tag}", timings):
+        wcfg = {**cfg, "whisper": {**cfg["whisper"], "language": "en",
+                                   "model_override": str(e.get("whisper_model", "small"))}}
+        words = join_number_pieces(transcribe.transcribe(voice_wav, wcfg)["words"])
+    secs = timeline["sections"]
+    bounds = [0.0] + [s["start"] for s in secs[1:]] + [timeline["total"]]
+    plan = []
+    for i, s in enumerate(slides):
+        times = cue_times(words, bounds[i], bounds[i + 1], [it["cue"] for it in s["items"]])
+        plan.append({"layout": s["layout"], "heading": s["heading"],
+                     "kicker": s["kicker"], "highlight": s["highlight"],
+                     "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
+                     "figure": figures.get((s.get("actor", "").strip().lower(),
+                                            s.get("mood", ""))),
+                     "items": [{**it, "at": t,
+                                "picture": (pictures.get(it["object"].strip().lower())
+                                            or icon_png(it["icon"], cfg))}
+                               for it, t in zip(s["items"], times)]})
+    (work / "slides.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    with stage_timer(log, f"render_{tag}", timings):
+        track = slide_render.render_track(plan, bounds, w, h, int(e.get("fps", 30)),
+                                          work / "work" / "track.mp4", cfg)
+        audio = voice_wav
+        if e.get("sfx", True):
+            audio = mix_sfx(voice_wav, sfx_cues(plan, bounds), work / "work" / "voice_sfx.wav",
+                            float(e.get("sfx_db", 0.0)))
+        final = create.finish_video(track, audio, words, clip_dir, cfg, captions=captions,
+                                    preset=preset, anchor=anchor, music_path=None,
+                                    music_db=-24)
+    return final, plan, bounds, words
 
 
 # ------------------------------------------------------------------ one video
@@ -542,12 +582,10 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
     """One explainer video. Returns the job dir; job.json always written."""
     from pipeline import new_job_dir
     import llm
-    import transcribe
 
     e = _ecfg(cfg)
     n_slides = int(n_slides or e.get("slides", 12))
     resolved = llm.resolve_provider(cfg, provider)
-    fps = int(e.get("fps", 30))
     w, h = int(e.get("width", 1920)), int(e.get("height", 1080))
     create._benched.clear()
     job_dir = new_job_dir(cfg, f"explain-{topic}")
@@ -563,71 +601,15 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
         with stage_timer(log, "script", timings):
             script = checked_script(topic, n_slides, cfg, resolved)
         (job_dir / "script.json").write_text(json.dumps(script, indent=2), encoding="utf-8")
-        slides = script["slides"]
-        sections = [{"key": f"s{i}", "title": s["heading"],
-                     "lines": [{"text": t, "visual": ""} for t in s["lines"]]}
-                    for i, s in enumerate(slides)]
-        texts = [t for s in slides for t in s["lines"]]
-
-        with stage_timer(log, "voice", timings):
-            vcfg = {**cfg, "create": {**cfg["create"],
-                                      "voice": {**cfg["create"]["voice"], **e.get("voice", {})}}}
-            synth = voice.synthesize_lines(texts, job_dir / "voice_lines", vcfg)
-            timeline = create.build_timeline(sections, [r["duration_s"] for r in synth],
-                                             float(e.get("line_gap_s", 0.2)),
-                                             float(e.get("slide_gap_s", 0.6)))
-            voice_wav = create.assemble_voice([r["path"] for r in synth], timeline,
-                                              job_dir / "voice.wav")
-
-        with stage_timer(log, "art", timings):     # before Whisper: GPU memory
-            pictures = draw_objects([it["object"] for s in slides for it in s["items"]], cfg)
-            figures = draw_cast(script.get("cast", []), slides, cfg)
-
-        with stage_timer(log, "transcribe", timings):
-            wcfg = {**cfg, "whisper": {**cfg["whisper"], "language": "en",
-                                       "model_override": str(e.get("whisper_model", "small"))}}
-            words = transcribe.transcribe(voice_wav, wcfg)["words"]
-
-        secs = timeline["sections"]
-        bounds = [0.0] + [s["start"] for s in secs[1:]] + [timeline["total"]]
-        plan = []
-        for i, s in enumerate(slides):
-            times = cue_times(words, bounds[i], bounds[i + 1], [it["cue"] for it in s["items"]])
-            plan.append({"layout": s["layout"], "heading": s["heading"],
-                         "kicker": s["kicker"], "highlight": s["highlight"],
-                         "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
-                         "figure": figures.get((s.get("actor", "").strip().lower(),
-                                                s.get("mood", ""))),
-                         "items": [{**it, "at": t,
-                                    "picture": (pictures.get(it["object"].strip().lower())
-                                                or icon_png(it["icon"], cfg))}
-                                   for it, t in zip(s["items"], times)]})
-        (job_dir / "slides.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
-
-        with stage_timer(log, "render", timings):
-            track = slide_render.render_track(plan, bounds, w, h, fps,
-                                              job_dir / "work" / "track.mp4", cfg)
-            music_path, music_attr = None, ""
-            if e.get("music", False):
-                try:
-                    tr = music.pick_track_by_mood(str(e.get("music_mood", "")))
-                    music_path, music_attr = music.ensure_track(tr), music.attribution_for(tr)
-                except music.MusicError as err:
-                    notes.append(f"no background music: {err.message}")
-            audio = voice_wav
-            if e.get("sfx", True):
-                audio = mix_sfx(voice_wav, sfx_cues(plan, bounds),
-                                job_dir / "work" / "voice_sfx.wav",
-                                float(e.get("sfx_db", 0.0)))
-            clip_dir = job_dir / "clip_00"
-            final = create.finish_video(track, audio, words, clip_dir, cfg,
-                                        captions=bool(e.get("captions", False)),
-                                        preset=str(e.get("caption_preset", "clean-minimal")),
-                                        anchor=None, music_path=music_path,
-                                        music_db=float(e.get("music_volume_db", -24)))
         credits = ("Pictures: AI-generated on our own computer; icons: Microsoft Fluent "
                    "Emoji (MIT) and Google Noto Emoji (Apache 2.0). Narration: AI voice. "
-                   "For education only, not financial advice. " + music_attr).strip()
+                   "For education only, not financial advice.")
+        clip_dir = job_dir / "clip_00"
+        final, _, _, words = produce(script["slides"], script.get("cast", []), job_dir,
+                                     clip_dir, (w, h), cfg, timings, "long",
+                                     captions=bool(e.get("captions", False)),
+                                     preset=str(e.get("caption_preset", "clean-minimal")),
+                                     anchor=None)
         meta = {"title": script["title"], "description":
                 f"{script['description'].strip()}\n\n{credits}",
                 "hashtags": script["hashtags"], "format": "long", "made_for_kids": False,
@@ -639,27 +621,33 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
 
         sc = e.get("shorts") or {}
         if sc.get("enabled", True):
-            with stage_timer(log, "render_shorts", timings):
-                ranges = short_ranges(bounds, float(sc.get("min_s", 30)),
-                                      float(sc.get("max_s", 58)), int(sc.get("max", 3)))
-                for k, (i, j) in enumerate(ranges, 1):
-                    try:
-                        final_s = render_short(job_dir, k, plan, bounds, (i, j), words,
-                                               track, audio, cfg)
-                        smeta = {"title": plan[i]["heading"][:60] or script["title"],
-                                 "description": (f"{plan[i]['heading']}. From our video: "
-                                                 f"{script['title']}.\n\n{credits}"),
-                                 "hashtags": script["hashtags"], "format": "short",
-                                 "made_for_kids": False,
-                                 "create": {"topic": topic, "mode": "explain",
-                                            "slides": [i, j]}}
-                        job["clips"].append(create._write_clip(
-                            job_dir / f"clip_{k:02d}", k, final_s, smeta,
-                            create._virality(cfg), "finance", "short",
-                            mock=resolved == "mock"))
-                    except Exception as err:  # noqa: BLE001 - one bad Short never sinks the rest
-                        notes.append(f"short {k} failed: {err}")
-                        log.error("short %d failed: %s", k, err)
+            with stage_timer(log, "shorts_script", timings):
+                teasers = write_shorts(script, int(sc.get("max", 3)), cfg, resolved)
+            (job_dir / "shorts.json").write_text(json.dumps(teasers, indent=2),
+                                                 encoding="utf-8")
+            if not teasers:
+                notes.append("no Shorts: the teaser script could not be written")
+            for k, short in enumerate(teasers, 1):
+                try:
+                    sdir = job_dir / f"clip_{k:02d}"
+                    final_s, _, _, _ = produce(
+                        short["slides"], script.get("cast", []), job_dir / "work" / f"short_{k:02d}",
+                        sdir, (int(sc.get("width", 1080)), int(sc.get("height", 1920))), cfg,
+                        timings, f"short_{k}", captions=True,
+                        preset=str(sc.get("caption_preset", "karaoke-pop")),
+                        anchor=float(sc.get("caption_anchor", 0.64)))
+                    smeta = {"title": short["title"][:60],
+                             "description": (f"{short['title']}. Full video on the channel: "
+                                             f"{script['title']}.\n\n{credits}"),
+                             "hashtags": script["hashtags"], "format": "short",
+                             "made_for_kids": False,
+                             "create": {"topic": topic, "mode": "explain", "short": k}}
+                    job["clips"].append(create._write_clip(
+                        sdir, k, final_s, smeta, create._virality(cfg), "finance", "short",
+                        mock=resolved == "mock"))
+                except Exception as err:  # noqa: BLE001 - one bad Short never sinks the rest
+                    notes.append(f"short {k} failed: {err}")
+                    log.error("short %d failed: %s", k, err)
         if resolved != "mock":            # a keyless test must not use up a real topic
             mark_topic_used(topic, cfg)
         job["status"] = "done"

@@ -74,9 +74,15 @@ def test_cast_prompts_cover_every_mood():
     assert explain.MOOD_WORDS["thinking"] in explain.cast_prompt("x", "unknown")
 
 
-def test_short_ranges_take_whole_slides_within_limits():
-    # slides of 20, 15, 25, 70 (too long alone), 10, 30 s
-    b = [0, 20, 35, 60, 130, 140, 170]
-    assert explain.short_ranges(b, 30, 58, 3) == [(0, 2), (4, 6)]
-    assert explain.short_ranges(b, 30, 58, 1) == [(0, 2)]
-    assert explain.short_ranges([0, 10, 20], 30, 58, 3) == []          # too short overall
+def test_join_number_pieces():
+    w = [{"word": " costs", "start": 0.0, "end": 0.3},
+         {"word": " $30", "start": 0.3, "end": 0.6},
+         {"word": ",000.", "start": 0.6, "end": 0.9},
+         {"word": " at", "start": 1.0, "end": 1.1},
+         {"word": " 24", "start": 1.1, "end": 1.3},
+         {"word": "%", "start": 1.3, "end": 1.4}]
+    out = explain.join_number_pieces(w)
+    assert [x["word"] for x in out] == [" costs", " $30,000.", " at", " 24%"]
+    assert out[1]["start"] == 0.3 and out[1]["end"] == 0.9
+    assert explain.join_number_pieces([{"word": " a", "start": 0, "end": 1},
+                                       {"word": ".", "start": 1, "end": 2}])[1]["word"] == "."

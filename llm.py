@@ -396,6 +396,11 @@ def _mock_complete(task, schema, prompt, context):
         return {"verdict": "pass", "issues": []}
     if task == "explainer_script" and context.get("topic"):
         return _mock_explainer_script(str(context["topic"]))
+    if task == "explainer_shorts" and context.get("topic"):
+        s = _mock_explainer_script(str(context["topic"]))["slides"]
+        last = {**s[5], "sticker": "FULL VIDEO ON CHANNEL",
+                "lines": ["The full breakdown is on our channel."]}
+        return {"shorts": [{"title": "Mock short", "slides": [s[2], s[4], last]}]}
     return synthesize_from_schema(schema, seed=task)
 
 
