@@ -727,6 +727,13 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
                                                  encoding="utf-8")
             if not teasers:
                 notes.append("no Shorts: the teaser script could not be written")
+            # the judge reads every reel script first: weak ones are never rendered
+            verdicts = [judge_reel(t, "money", cfg, resolved) for t in teasers]
+            for t, v in zip(teasers, verdicts):
+                if not passes(v, cfg):
+                    notes.append(f"reel '{t['title']}' dropped: scored {v['score']:.0f}/100")
+            ratings = {id(t): rating(v, cfg) for t, v in zip(teasers, verdicts)}
+            teasers = [t for t, v in zip(teasers, verdicts) if passes(v, cfg)]
             for k, short in enumerate(teasers, 1):
                 try:
                     sdir = job_dir / f"clip_{k:02d}"
@@ -746,7 +753,7 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
                         social_captions(short["title"], script, str(e.get("youtube_url", ""))),
                         indent=2), encoding="utf-8")
                     job["clips"].append(create._write_clip(
-                        sdir, k, final_s, smeta, create._virality(cfg), "finance", "short",
+                        sdir, k, final_s, smeta, ratings[id(short)], "finance", "short",
                         mock=resolved == "mock"))
                 except Exception as err:  # noqa: BLE001 - one bad Short never sinks the rest
                     notes.append(f"short {k} failed: {err}")
@@ -770,6 +777,70 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
         remove_file_handler(fh)
     log.info("explain job %s: %s -> %s", job["job_id"], job["status"], job_dir)
     return job_dir
+
+
+# ------------------------------------------------------------------ judge
+
+JUDGE_WEIGHTS = {"hook": 3.5, "clarity": 2.5, "payoff": 2.0, "fun": 2.0}   # sums to 10
+
+
+def judge_prompt(reel: dict, kind: str) -> str:
+    text = "\n".join(f"[{s['heading']}] " + " ".join(s["lines"]) for s in reel["slides"])
+    return (
+        f"You are a tough short-video editor. Score this {kind} reel script (it is "
+        "narrated over animated slides, 30-60 seconds, for YouTube Shorts / Instagram "
+        "Reels). Most scripts are average: give 5-6 for average, 8+ only for genuinely "
+        "strong work.\n\n"
+        f"Title: {reel['title']}\n{text}\n\n"
+        "Score 0-10 each:\n"
+        "- hook: do the first 2 sentences stop the scroll (a concrete number, a sharp "
+        "question, a surprising claim)? Generic openers score 3 or less.\n"
+        "- clarity: one idea, plain words, a casual viewer follows every sentence.\n"
+        "- payoff: does the ending land (a punchline, a clear takeaway) and is watching "
+        "to the end rewarded?\n"
+        f"- fun: {'is it actually funny - wit, irony, timing' if kind == 'funny' else 'is it lively and enjoyable, not a textbook'}?\n"
+        "safe: false if it insults a real person, invents a quote or motive, gives "
+        "direct financial advice, or jokes about tragedy.\n"
+        "problems: the specific weak lines. fix: one sentence telling the writer what to "
+        "change. Return only JSON matching the schema."
+    )
+
+
+def judge_score(j: dict) -> float:
+    """Pure. 0-100 from the judge's sub-scores; an unsafe script scores 0."""
+    if not j.get("safe", True):
+        return 0.0
+    return round(sum(JUDGE_WEIGHTS[k] * float(j[k]) for k in JUDGE_WEIGHTS), 1)
+
+
+def judge_reel(reel: dict, kind: str, cfg: dict, provider: str | None) -> dict | None:
+    """{"score", ...sub-scores, "problems", "fix"} or None when the judge can't
+    run (mock provider, LLM down) - an unrated reel is kept and flagged, not
+    dropped."""
+    if provider == "mock":
+        return None
+    try:
+        j = create.ask("reel_judge", judge_prompt(reel, kind), cfg, provider,
+                       {"title": reel.get("title", "")})
+    except LLMError as err:
+        log.warning("judge unavailable: %s", err)
+        return None
+    return {**j, "score": judge_score(j)}
+
+
+def rating(j: dict | None, cfg: dict) -> dict:
+    """Pure. The clip's rating record (schema `virality`) from a judge result."""
+    if j is None:
+        return {**create._virality(cfg),
+                "reasons": ["Not rated: the script judge was unavailable - review by hand"]}
+    ok = j["score"] >= float((_ecfg(cfg).get("judge") or {}).get("min_score", 70))
+    return {"score": j["score"], "verdict": "post" if ok else "skip",
+            "reasons": [f"hook {j['hook']}/10, clarity {j['clarity']}/10, payoff "
+                        f"{j['payoff']}/10, fun {j['fun']}/10"] + list(j["problems"])[:3]}
+
+
+def passes(j: dict | None, cfg: dict) -> bool:
+    return j is None or rating(j, cfg)["verdict"] == "post"
 
 
 # ------------------------------------------------------------------ story reels
@@ -831,12 +902,28 @@ def make_story(cfg: dict, post: dict, context: str, provider: str | None = None,
            "settings": {"mode": "story", "provider": resolved},
            "stages": {}, "clips": [], "notes": notes}
     try:
+        verdict = None
         if script is None:
             with stage_timer(log, "script", timings):
-                data = create.ask("explainer_shorts", story_prompt(post, context),
-                                  writer_cfg(cfg), resolved,
-                                  {"topic": post["text"][:80], "shorts": 1})
-                script = data["shorts"][0]
+                ctx = {"topic": post["text"][:80], "shorts": 1}
+                prompt = story_prompt(post, context)
+                script = create.ask("explainer_shorts", prompt, writer_cfg(cfg), resolved,
+                                    ctx)["shorts"][0]
+                verdict = judge_reel(script, "funny", cfg, resolved)
+                if not passes(verdict, cfg):      # one rewrite with the editor's notes
+                    log.info("judge: %.0f/100 - rewriting (%s)", verdict["score"], verdict["fix"])
+                    again = create.ask(
+                        "explainer_shorts", prompt + "\n\nAn editor scored your last draft "
+                        f"{verdict['score']:.0f}/100. Problems: {'; '.join(verdict['problems'])}"
+                        f". Fix: {verdict['fix']} Write a clearly better version.",
+                        writer_cfg(cfg), resolved, ctx)["shorts"][0]
+                    v2 = judge_reel(again, "funny", cfg, resolved)
+                    if v2 is None or v2["score"] > verdict["score"]:
+                        script, verdict = again, v2
+            (job_dir / "judge.json").write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+            if not passes(verdict, cfg):          # not good enough: no render time spent
+                raise ExplainError(f"script scored {verdict['score']:.0f}/100, below the bar",
+                                   detail="; ".join(verdict["problems"])[:400], retryable=False)
         (job_dir / "script.json").write_text(json.dumps({"post": post, "context": context,
                                                          **script}, indent=2), encoding="utf-8")
         clip_dir = job_dir / "clip_00"
@@ -857,7 +944,7 @@ def make_story(cfg: dict, post: dict, context: str, provider: str | None = None,
             script["title"], {"title": script["title"], "description": meta["description"],
                               "hashtags": tags}, str(e.get("youtube_url", ""))), indent=2),
             encoding="utf-8")
-        job["clips"].append(create._write_clip(clip_dir, 0, final, meta, create._virality(cfg),
+        job["clips"].append(create._write_clip(clip_dir, 0, final, meta, rating(verdict, cfg),
                                                "news", "short", mock=resolved == "mock"))
         job["status"] = "done"
     except Exception as err:  # noqa: BLE001 - the job record must capture any failure

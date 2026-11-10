@@ -782,6 +782,37 @@ EXPLAINER_SHORTS = {
     "additionalProperties": False,
 }
 
+# LLM output (scout.py): which of today's stories make the best funny reels.
+STORY_PICKS = {
+    "type": "object",
+    "properties": {
+        "picks": {"type": "array",
+                  "items": {"type": "object",
+                            "properties": {"index": {"type": "integer", "minimum": 0},
+                                           "why": {"type": "string"}},
+                            "required": ["index", "why"], "additionalProperties": False},
+                  "minItems": 1},
+    },
+    "required": ["picks"],
+    "additionalProperties": False,
+}
+
+# LLM output (explain.judge_reel): a reel SCRIPT scored before any rendering.
+REEL_JUDGE = {
+    "type": "object",
+    "properties": {
+        "hook": {"type": "integer", "minimum": 0, "maximum": 10},
+        "clarity": {"type": "integer", "minimum": 0, "maximum": 10},
+        "payoff": {"type": "integer", "minimum": 0, "maximum": 10},
+        "fun": {"type": "integer", "minimum": 0, "maximum": 10},
+        "safe": {"type": "boolean"},
+        "problems": {"type": "array", "items": {"type": "string"}},
+        "fix": {"type": "string"},
+    },
+    "required": ["hook", "clarity", "payoff", "fun", "safe", "problems", "fix"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
@@ -804,6 +835,8 @@ SCHEMAS: dict[str, dict] = {
     "fact_check": FACT_CHECK,
     "explainer_script": EXPLAINER_SCRIPT,
     "explainer_shorts": EXPLAINER_SHORTS,
+    "story_picks": STORY_PICKS,
+    "reel_judge": REEL_JUDGE,
 }
 
 

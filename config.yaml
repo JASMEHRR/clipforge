@@ -352,6 +352,14 @@ upload:
     text: "ClipForge"            # wordmark on the end card (Doto brand font)
     duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
+scout:                           # scout.py - finds today's stories for the funny-reel channel (free sources only)
+  subreddits: [technology, nvidia, gaming, business, pcmasterrace]   # top-of-day Atom feeds
+  hacker_news: true
+  news_topics: [TECHNOLOGY, BUSINESS]   # Google News RSS
+  per_source: 8                  # best N from each source
+  shortlist: 30                  # candidates shown to the picker
+  spares: 2                      # extra picks, used when the judge rejects a script
+
 explain:                         # explain.py - PPT-style money explainers synced to narration (second channel)
   slides: 18                     # ~4.5 min (measured ~14.5 s per slide)
   workspace: money               # library + YouTube channel these videos go to (created on first run)
@@ -400,6 +408,8 @@ explain:                         # explain.py - PPT-style money explainers synce
     - gemini-flash-latest
     - gemini-flash-lite-latest   # fast but bland - last resort
   writer_timeout_s: 900
+  judge:                         # explain.judge_reel: every reel SCRIPT is scored before rendering
+    min_score: 70                # 0-100 (hook 35%, clarity 25%, payoff 20%, fun 20%); below = rewrite once, then drop
   first_item_s: 0.9              # no empty slides: the first item is on screen this soon after a slide starts
   max_item_gap_s: 4.5            # ...and no later item waits longer than this after the one before
   max_bitrate: 6M                # encoder cap (film grain + camera drift balloon constant-quality files)

@@ -104,3 +104,30 @@ def test_tighten_times_removes_dead_air_but_never_delays():
     # a pulled-forward first item drags a far-away second one to within max_gap
     assert explain.tighten_times([9.0, 9.1], 1.0, 0.35, 4.5) == pytest.approx([1.35, 5.85])
     assert explain.tighten_times([], 1.0, 0.9, 4.5) == []
+
+
+def test_judge_score_and_rating():
+    j = {"hook": 8, "clarity": 8, "payoff": 7, "fun": 6, "safe": True, "problems": ["weak end"],
+         "fix": "x"}
+    assert explain.judge_score(j) == 74.0                      # 28 + 20 + 14 + 12
+    assert explain.judge_score({**j, "safe": False}) == 0.0
+    cfg = {"explain": {"judge": {"min_score": 70}}, "create": {"virality_score": 60}}
+    good = explain.rating({**j, "score": 74.0}, cfg)
+    assert good["verdict"] == "post" and good["score"] == 74.0
+    validate(good, "virality")
+    assert explain.rating({**j, "score": 55.0}, cfg)["verdict"] == "skip"
+    assert explain.passes(None, cfg) and not explain.passes({**j, "score": 55.0}, cfg)
+
+
+def test_scout_rank_and_parsers():
+    import scout
+    a = [{"id": "a1", "title": "NVIDIA unveils new graphics card today", "source": "A"},
+         {"id": "a2", "title": "Used story", "source": "A"}]
+    b = [{"id": "b1", "title": "Nvidia unveils a new graphics card", "source": "B"},   # same story
+         {"id": "b2", "title": "Game studio delays big release again", "source": "B"}]
+    out = scout.rank([a, b], ["a2"], 10)
+    assert [c["id"] for c in out] == ["a1", "b2"]
+    assert scout.strip_html("<p>Hi <b>there</b></p><script>x()</script> &amp; you") == "Hi there & you"
+    hn = scout.parse_hn(b'{"hits": [{"objectID": "1", "title": "Low", "points": 5, "url": "u"},'
+                        b' {"objectID": "2", "title": "High", "points": 50}]}')
+    assert [h["title"] for h in hn] == ["High", "Low"]
