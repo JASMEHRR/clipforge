@@ -14,7 +14,8 @@ Second channel (PJ: global English, US $ examples). A slideshow that plays itsel
 - [x] Restyled to PJ's GLOOD decks (first sample rejected: 'does not look that good', 'shitty background music'): see CLAUDE.md Explainer mode. Slide script gained kicker / highlight / sticker; plan saves each slide's start/end. Music off, synthesised SFX on.
 - [x] 2026-11-09 PJ: 'not same fonts ... like wolf of wall street, hangover, mafia boys, fun' -> "money noir" look + swagger narration with an invented crew (all original, no film references), male voice, slap/whoosh/stamp/kaching SFX. See CLAUDE.md Explainer mode.
 - [x] PJ: still needs work on voice, characters, motion, script ('too much joking'). Done: Ava (edge-tts, Kokoro fallback; edge-tts pin 7.2.8 -> 7.3.1, the old one got 403 from Microsoft), confident plain-talk script with a chibi-figure cast, fly-ins / camera push-in / shake / gold dust, 6M bitrate cap. Found: DreamShaper humans skew photoreal (needs 'chibi toy figure' to stay cartoon); 512x640 fp16 -> NaN on the GTX 1650.
-- [ ] PJ verdict on this sample. Then: vertical Shorts layout, nightly schedule, topic list for the money channel.
+- [x] PJ approved the sample ('Yes, build it out'). Built: 18-slide videos, 24 rotating money topics, up to 3 vertical Shorts per video (deck zoomed into 9:16 + hook + karaoke captions), kids/money workspaces = separate libraries + YouTube accounts, nightly.bat. Verified: Shorts from the real car video; keyless run long + 2 Shorts in the money workspace.
+- [ ] PJ: register nightly.bat in Task Scheduler (blocked for Claude), connect the Kids and Money workspaces to their YouTube channels in the UI.
 
 ## Phase CM - Create mode: original kids explainer videos (branch feature/create-mode, 2026-11-07) [x code+verified / ~ scheduling, UI]
 - [x] 2026-11-08 illustrated style (default; PJ rejected emoji-only visuals): see CLAUDE.md Create mode. Live run "butterflies": 51 pictures (~20 s each), long + 10 Shorts in ~46 min.

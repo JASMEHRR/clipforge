@@ -844,10 +844,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-long", action="store_true", help="skip the long video")
     ap.add_argument("--no-shorts", action="store_true", help="skip chapter Shorts")
     ap.add_argument("--max-shorts", type=int, help="cap Shorts per video")
+    ap.add_argument("--workspace", help="library + YouTube channel (default create.workspace)")
     args = ap.parse_args(argv)
     if args.count < 1:
         ap.error("--count must be at least 1")
 
+    import config as config_mod
+    import workspaces
+    c = load_config().get("create") or {}
+    ws = args.workspace or str(c.get("workspace", "default"))
+    workspaces.ensure_workspace(ws, str(c.get("workspace_name", ws.title())))
+    config_mod.current_workspace.set(ws)   # paths.output_dir -> this workspace's library
     cfg = load_config()
     verify_ffmpeg(cfg)
     failed = 0

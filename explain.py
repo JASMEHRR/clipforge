@@ -426,6 +426,115 @@ def mix_sfx(voice_wav: Path, cues: list[tuple[float, str]], out: Path,
     return out
 
 
+# ------------------------------------------------------------------ topics
+
+def _used_path(cfg: dict) -> Path:
+    from config import ROOT
+    return ROOT / cfg["paths"]["cache_dir"] / "explain_topics_used.json"
+
+
+def load_used_topics(cfg: dict) -> list[str]:
+    p = _used_path(cfg)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [str(t) for t in data] if isinstance(data, list) else []
+
+
+def mark_topic_used(topic: str, cfg: dict) -> None:
+    used = load_used_topics(cfg)
+    if topic.lower() not in {t.lower() for t in used}:
+        used.append(topic)
+    p = _used_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(used, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+
+def next_topic(cfg: dict, rng) -> str:
+    """Next unused explain.topics entry (the rotation restarts when all are used)."""
+    return create.pick_topic(list(_ecfg(cfg).get("topics") or []), load_used_topics(cfg), rng)
+
+
+# ------------------------------------------------------------------ shorts
+
+def short_ranges(bounds: list[float], min_s: float, max_s: float,
+                 max_n: int) -> list[tuple[int, int]]:
+    """Pure. Slide ranges [i, j) for vertical Shorts: from the first slide (the
+    hook) onward, each range takes as many whole slides as fit in max_s and is
+    kept when it lasts at least min_s. Ranges never overlap."""
+    out: list[tuple[int, int]] = []
+    n = len(bounds) - 1
+    i = 0
+    while i < n and len(out) < max_n:
+        j = i + 1
+        while j < n and bounds[j + 1] - bounds[i] <= max_s:
+            j += 1
+        if min_s <= bounds[j] - bounds[i] <= max_s:
+            out.append((i, j))
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def _short_overlay(heading: str, w: int, h: int, path: Path) -> Path:
+    """Transparent 9:16 layer: the hook in big caps up top, a tagline below."""
+    from PIL import Image
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    u = w / 1080
+    y = slide_render.draw_block(img, 60 * u, 120 * u, heading.upper(), "head", 400,
+                                int(108 * u), slide_render.GOLD, w - 120 * u, 3, 1.05)
+    slide_render.draw_block(img, 60 * u, y + 40 * u, "WATCH TILL THE END", "type", 400,
+                            int(40 * u), slide_render.RED, w - 120 * u, 1)
+    slide_render.draw_block(img, w / 2, h - 150 * u, "FULL VIDEO ON THE CHANNEL", "head", 400,
+                            int(46 * u), slide_render.MUTED, w - 120 * u, 1, anchor="ma")
+    img.save(path)
+    return path
+
+
+def render_short(job_dir: Path, k: int, plan: list[dict], bounds: list[float],
+                 rng_ij: tuple[int, int], words: list[dict], track: Path, audio: Path,
+                 cfg: dict) -> Path:
+    """One vertical Short: the deck for slides [i, j) sits in the middle of a
+    dark 9:16 frame, the hook heading above it, karaoke captions below."""
+    from ffutil import run_ffmpeg, video_encode_args
+    e = _ecfg(cfg)
+    sc = e.get("shorts") or {}
+    i, j = rng_ij
+    a, b = bounds[i], bounds[j]
+    w, h = int(sc.get("width", 1080)), int(sc.get("height", 1920))
+    work = job_dir / "work" / f"short_{k:02d}"
+    work.mkdir(parents=True, exist_ok=True)
+    overlay = _short_overlay(plan[i]["heading"], w, h, work / "overlay.png")
+    # the deck is zoomed slightly (sides trimmed: only the frame ornaments sit
+    # in the outer 6%) so the slides read bigger on a phone
+    zoom = float(sc.get("deck_zoom", 1.15))
+    deck_w = int(round(w * zoom / 2)) * 2
+    deck_h = int(round(deck_w * 9 / 16 / 2)) * 2
+    y = int(h * float(sc.get("deck_center", 0.42)) - deck_h / 2)
+    enc = video_encode_args(cfg)
+    cap = str(e.get("max_bitrate", "")).strip()
+    if cap:
+        enc += ["-maxrate", cap, "-bufsize", cap]
+    portrait = work / "portrait.mp4"
+    run_ffmpeg(["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", track,
+                "-loop", "1", "-i", overlay,
+                "-filter_complex",
+                f"color=c=0x0e0c0a:s={w}x{h}:r={int(e.get('fps', 30))}[bg];"
+                f"[0:v]scale={deck_w}:{deck_h},crop={w}:{deck_h},setsar=1[d];"
+                f"[bg][d]overlay=0:{y}:shortest=1[v1];[v1][1:v]overlay=0:0:shortest=1[v]",
+                "-map", "[v]", "-t", f"{b - a:.3f}", "-an", *enc, portrait])
+    voice = create.slice_wav(audio, a, b, work / "voice.wav")
+    return create.finish_video(portrait, voice, create.slice_words(words, a, b),
+                               job_dir / f"clip_{k:02d}", cfg, captions=True,
+                               preset=str(sc.get("caption_preset", "karaoke-pop")),
+                               anchor=float(sc.get("caption_anchor", 0.64)),
+                               music_path=None, music_db=-24)
+
+
 # ------------------------------------------------------------------ one video
 
 def make_video(cfg: dict, topic: str, n_slides: int | None = None,
@@ -526,6 +635,33 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
                            "fact_check": script["fact_check"]}}
         job["clips"].append(create._write_clip(clip_dir, 0, final, meta, create._virality(cfg),
                                                "finance", "long", mock=resolved == "mock"))
+        (job_dir / "words.json").write_text(json.dumps(words), encoding="utf-8")
+
+        sc = e.get("shorts") or {}
+        if sc.get("enabled", True):
+            with stage_timer(log, "render_shorts", timings):
+                ranges = short_ranges(bounds, float(sc.get("min_s", 30)),
+                                      float(sc.get("max_s", 58)), int(sc.get("max", 3)))
+                for k, (i, j) in enumerate(ranges, 1):
+                    try:
+                        final_s = render_short(job_dir, k, plan, bounds, (i, j), words,
+                                               track, audio, cfg)
+                        smeta = {"title": plan[i]["heading"][:60] or script["title"],
+                                 "description": (f"{plan[i]['heading']}. From our video: "
+                                                 f"{script['title']}.\n\n{credits}"),
+                                 "hashtags": script["hashtags"], "format": "short",
+                                 "made_for_kids": False,
+                                 "create": {"topic": topic, "mode": "explain",
+                                            "slides": [i, j]}}
+                        job["clips"].append(create._write_clip(
+                            job_dir / f"clip_{k:02d}", k, final_s, smeta,
+                            create._virality(cfg), "finance", "short",
+                            mock=resolved == "mock"))
+                    except Exception as err:  # noqa: BLE001 - one bad Short never sinks the rest
+                        notes.append(f"short {k} failed: {err}")
+                        log.error("short %d failed: %s", k, err)
+        if resolved != "mock":            # a keyless test must not use up a real topic
+            mark_topic_used(topic, cfg)
         job["status"] = "done"
     except Exception as err:  # noqa: BLE001 - the job record must capture any failure
         job["status"] = "failed"
@@ -546,18 +682,40 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
 
 
 def main(argv: list[str] | None = None) -> int:
+    import random
+    import config as config_mod
+    import workspaces
     ap = argparse.ArgumentParser(description="ClipForge Explainer mode: PPT-style money "
                                              "explainers synced to narration")
-    ap.add_argument("--topic", required=True)
+    ap.add_argument("--topic", help="force a topic (otherwise the next unused one)")
+    ap.add_argument("--count", type=int, default=1, help="videos to make (default 1)")
     ap.add_argument("--slides", type=int, help="slide count (default explain.slides)")
     ap.add_argument("--provider", help="LLM provider override (mock|gemini|...)")
+    ap.add_argument("--workspace", help="library + YouTube channel (default explain.workspace)")
+    ap.add_argument("--no-shorts", action="store_true", help="skip the vertical Shorts")
     args = ap.parse_args(argv)
-    cfg = load_config()
+    if args.count < 1:
+        ap.error("--count must be at least 1")
+    base = load_config()
+    e = base.get("explain") or {}
+    ws = args.workspace or str(e.get("workspace", "default"))
+    workspaces.ensure_workspace(ws, str(e.get("workspace_name", ws.title())))
+    config_mod.current_workspace.set(ws)
+    cfg = load_config()                 # paths.output_dir now scoped to the workspace
+    if args.no_shorts:
+        cfg = {**cfg, "explain": {**cfg["explain"],
+                                  "shorts": {**(cfg["explain"].get("shorts") or {}),
+                                             "enabled": False}}}
     verify_ffmpeg(cfg)
-    job_dir = make_video(cfg, args.topic, args.slides, args.provider)
-    status = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))["status"]
-    print(f"{status}: {job_dir}")
-    return 0 if status == "done" else 1
+    rng = random.Random()
+    failed = 0
+    for n in range(args.count):
+        topic = args.topic if (args.topic and n == 0) else next_topic(cfg, rng)
+        job_dir = make_video(cfg, topic, args.slides, args.provider)
+        status = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))["status"]
+        print(f"[{n + 1}/{args.count}] {status}: {job_dir}")
+        failed += status != "done"
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

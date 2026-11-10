@@ -84,6 +84,24 @@ def create_workspace(name: str) -> dict:
     return {"id": wid, "name": name}
 
 
+def ensure_workspace(workspace_id: str, name: str) -> str:
+    """A fixed-id workspace (e.g. 'kids', 'money' for the Create channels),
+    created on first use; returns the id. 'default' always exists."""
+    if workspace_id == "default":
+        return workspace_id
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", workspace_id):
+        raise ConfigError(f"Workspace id '{workspace_id}' must be lowercase letters, "
+                          "digits and dashes.")
+    data = _load()
+    if workspace_id not in data.setdefault("workspaces", {}):
+        data["workspaces"][workspace_id] = {"name": name, "created_at": time.time()}
+        _save(data)
+        save_config({"upload": {"accounts": {"default": {}, workspace_id: {}}}})
+        log.info("created workspace '%s' (%s)", workspace_id, name)
+    output_dir_for(workspace_id).mkdir(parents=True, exist_ok=True)
+    return workspace_id
+
+
 def delete_workspace(workspace_id: str) -> None:
     """Deletes the workspace's videos/clips, its YouTube account config and
     cached OAuth token, and re-homes anything still pointing at it (queued

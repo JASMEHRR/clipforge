@@ -72,3 +72,11 @@ def test_cast_prompts_cover_every_mood():
     assert p.startswith("chibi 3d cartoon toy figure of a man with a red hoodie,")
     assert explain.MOOD_WORDS["shocked"] in p
     assert explain.MOOD_WORDS["thinking"] in explain.cast_prompt("x", "unknown")
+
+
+def test_short_ranges_take_whole_slides_within_limits():
+    # slides of 20, 15, 25, 70 (too long alone), 10, 30 s
+    b = [0, 20, 35, 60, 130, 140, 170]
+    assert explain.short_ranges(b, 30, 58, 3) == [(0, 2), (4, 6)]
+    assert explain.short_ranges(b, 30, 58, 1) == [(0, 2)]
+    assert explain.short_ranges([0, 10, 20], 30, 58, 3) == []          # too short overall

@@ -353,7 +353,44 @@ upload:
     duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
 explain:                         # explain.py - PPT-style money explainers synced to narration (second channel)
-  slides: 12                     # ~4-6 min; the AI writes 1-4 lines per slide
+  slides: 18                     # ~4.5 min (measured ~14.5 s per slide)
+  workspace: money               # library + YouTube channel these videos go to (created on first run)
+  workspace_name: Money
+  shorts:                        # vertical Shorts cut from each video: deck in the middle, hook on top, captions below
+    enabled: true
+    max: 3
+    min_s: 30
+    max_s: 58
+    width: 1080
+    height: 1920
+    deck_center: 0.42
+    caption_preset: karaoke-pop
+    caption_anchor: 0.64
+  topics:                        # rotated without repeats (cache/explain_topics_used.json); --topic overrides
+    - "buying a car: credit card vs lease vs loan"
+    - "how credit card interest really works"
+    - "renting vs buying a home"
+    - "how compound interest grows your money"
+    - "what a credit score is and how to raise it"
+    - "the 50/30/20 budget rule"
+    - "why an emergency fund matters and how big it should be"
+    - "paying off debt: avalanche vs snowball"
+    - "index funds vs picking individual stocks"
+    - "what inflation does to your savings"
+    - "buy now, pay later: what it really costs"
+    - "how a mortgage works: principal, interest and term"
+    - "student loans: what to pay off first"
+    - "the true cost of subscriptions"
+    - "high-yield savings accounts vs regular savings"
+    - "how taxes on a paycheck work"
+    - "why minimum payments keep you in debt"
+    - "car insurance: what you actually pay for"
+    - "retirement accounts: why starting early wins"
+    - "new car vs used car: the real cost"
+    - "how to negotiate a raise, with the numbers"
+    - "lifestyle creep: why a raise can leave you broke"
+    - "credit cards done right: rewards without interest"
+    - "how much house you can really afford"
   width: 1920
   height: 1080
   fps: 30
@@ -412,6 +449,8 @@ create:                          # Create mode (create.py): original kids explai
     caption_preset: karaoke-pop
     caption_anchor: 0.60         # caption block center (clamped to the 0.52-0.66 band)
   fps: 30
+  workspace: kids                # library + YouTube channel these videos go to (created on first run)
+  workspace_name: Kids
   visual_style: illustrated      # illustrated (AI cartoon pictures, animated - art.py) | animated (mascot + emoji + scenes) | footage (stock clips)
   animation:
     emoji_url: https://raw.githubusercontent.com/googlefonts/noto-emoji/main/2D/png/512/{name}  # Apache-2.0
