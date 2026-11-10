@@ -182,23 +182,46 @@ def write_shorts(script: dict, n: int, cfg: dict, provider: str | None) -> list[
     return data["shorts"][:n]
 
 
+def social_captions(reel_title: str, script: dict, youtube_url: str = "") -> dict:
+    """Pure. Ready-to-paste text for posting one reel on each platform (the
+    video file is the same everywhere). Instagram: up to 30 hashtags, links
+    are not clickable; Pinterest: title (100), description (500) and a link."""
+    tags = [t for t in script.get("hashtags", []) if t.startswith("#")]
+    where = (f"Full video on YouTube: {youtube_url}" if youtube_url
+             else "Full video on our YouTube channel (link in bio).")
+    desc = script.get("description", "").strip()
+    return {
+        "youtube_shorts": {"title": reel_title[:90],
+                           "description": (f"{desc}\n\nFull video: {script['title']}\n"
+                                           + " ".join(tags[:8] + ["#shorts"]))},
+        "instagram": {"caption": (f"{reel_title}\n\n{desc}\n\n{where}\n\n"
+                                  + " ".join(tags[:30]))},
+        "pinterest": {"title": reel_title[:100], "description": f"{desc} {where}"[:500],
+                      "link": youtube_url},
+    }
+
+
 def shorts_prompt(script: dict, n: int) -> str:
-    """Vertical Short teasers built ONLY from an already fact-checked script."""
+    """Vertical reels (one file for Shorts / Instagram / Pinterest) built ONLY
+    from an already fact-checked script."""
     slides = "\n".join(f"- [{s['layout']}] {s['heading']}: " + " ".join(s["lines"])
                        for s in script["slides"])
     cast = ", ".join(f"{c['name']} ({c['look']})" for c in script.get("cast", []))
     return (
         f"Below is the narration of a finished, fact-checked YouTube video titled "
-        f"\"{script['title']}\". Write {n} vertical YouTube Shorts (25-40 seconds each) "
-        "that tease it. Each Short takes a DIFFERENT angle (the most surprising number, a "
-        "costly mistake, a smart trick) and must make the viewer want the full video:\n"
+        f"\"{script['title']}\". Write {n} vertical reels (45-60 seconds each). The SAME "
+        "reel is posted on YouTube Shorts, Instagram Reels and Pinterest, so never say "
+        "'Short' or name the app the viewer is in. Each reel is a real mini-lesson on a "
+        "DIFFERENT angle of the video (the most surprising number, a costly mistake, a "
+        "smart trick): someone who only sees the reel must still learn something "
+        "complete and useful.\n"
         "- slide 1 is the hook: a surprising number or a sharp question in the first "
         "line, nothing generic;\n"
-        "- the middle gives 1-2 concrete facts with real numbers from the video;\n"
-        "- the LAST slide's last line sends them to the channel (for example 'The full "
-        "breakdown, with every number, is on our channel.') and its sticker is "
-        "'FULL VIDEO ON CHANNEL'.\n"
-        "2-4 slides per Short, 1-2 lines per slide, 6-16 words per line. Same tone as the "
+        "- the middle slides explain it properly: what happens, why, and what it costs, "
+        "with 3-4 concrete facts and real numbers from the video;\n"
+        "- the LAST slide's last line is: 'For the complete breakdown, watch the full "
+        "video on our YouTube channel.' and its sticker is 'FULL VIDEO ON YOUTUBE'.\n"
+        "5-6 slides per reel, 1-2 lines per slide, 8-16 words per line. Same tone as the "
         "video: confident, upbeat, plain words, no slang. Use ONLY facts and numbers that "
         "appear below - never add new ones. Phone screen: keep labels to 1-3 words, at "
         "most 3 items per slide; compare and flow slides have 2-3 items. Slide 1 should "
@@ -717,6 +740,9 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
                              "hashtags": script["hashtags"], "format": "short",
                              "made_for_kids": False,
                              "create": {"topic": topic, "mode": "explain", "short": k}}
+                    (sdir / "social.json").write_text(json.dumps(
+                        social_captions(short["title"], script, str(e.get("youtube_url", ""))),
+                        indent=2), encoding="utf-8")
                     job["clips"].append(create._write_clip(
                         sdir, k, final_s, smeta, create._virality(cfg), "finance", "short",
                         mock=resolved == "mock"))

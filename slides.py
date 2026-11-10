@@ -225,7 +225,7 @@ def cta_card(title: str, w: int, u: float):
            fill=RED + (255,), anchor="lm")
     y = draw_block(img, pad, pad + 2 * r + int(24 * u), title.upper(), "head", 400,
                    int(92 * u), INK, w - 2 * pad, 3, 1.06)
-    y = draw_block(img, pad, y + int(14 * u), "Every number, step by step. On the channel now.",
+    y = draw_block(img, pad, y + int(14 * u), "Every number, step by step. On our YouTube channel.",
                    "body", 600, int(36 * u), (70, 62, 52), w - 2 * pad, 2, 1.28)
     return img.crop((0, 0, w, int(y + pad)))
 

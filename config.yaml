@@ -356,9 +356,10 @@ explain:                         # explain.py - PPT-style money explainers synce
   slides: 18                     # ~4.5 min (measured ~14.5 s per slide)
   workspace: money               # library + YouTube channel these videos go to (created on first run)
   workspace_name: Money
+  youtube_url: ""                # your channel link; used in the Instagram and Pinterest text (social.json)
   shorts:                        # vertical teaser Shorts: own script, drawn natively at 9:16, end card sends viewers to the channel
     enabled: true
-    max: 3                       # teaser Shorts per video (each its own 25-40 s script)
+    max: 2                       # reels per video: 45-60 s mini-lessons, one file for Shorts + Instagram + Pinterest
     hook_s: 0.35                 # a Short's first item (the hook number) lands this fast
     width: 1080
     height: 1920

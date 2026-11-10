@@ -772,7 +772,7 @@ EXPLAINER_SHORTS = {
                       "properties": {
                           "title": {"type": "string", "minLength": 1, "maxLength": 60},
                           "slides": {"type": "array", "items": _EXPLAIN_SLIDE,
-                                     "minItems": 2, "maxItems": 5}},
+                                     "minItems": 2, "maxItems": 7}},
                       "required": ["title", "slides"], "additionalProperties": False},
             "minItems": 1,
             "maxItems": 4,
