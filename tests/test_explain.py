@@ -65,13 +65,19 @@ def test_sfx_cues_and_sounds():
         assert (snd == explain.synth_sfx(kind, 24000)).all()    # deterministic
 
 
-def test_cast_prompts_cover_every_mood():
+def test_cast_faces_cover_every_mood_and_people_differ():
     from schemas import EXPLAIN_MOODS
-    assert set(explain.MOOD_WORDS) == set(EXPLAIN_MOODS)
-    p = explain.cast_prompt("man with a red hoodie.", "shocked")
-    assert p.startswith("chibi 3d cartoon toy figure of a man with a red hoodie,")
-    assert explain.MOOD_WORDS["shocked"] in p
-    assert explain.MOOD_WORDS["thinking"] in explain.cast_prompt("x", "unknown")
+    assert set(explain.MOOD_FACES) == set(EXPLAIN_MOODS)
+    people = explain.cast_people([
+        {"name": "Maya", "look": "a woman in her 30s, yellow sweater"},
+        {"name": "Jake", "look": "Adult man with curly hair"},
+        {"name": "Ana", "look": "young woman, glasses"},
+        {"name": "Sam", "look": "adult in a green coat"}])
+    assert people == {"maya": ("Woman office worker", "Medium-Light"),
+                      "jake": ("Man technologist", "Medium-Dark"),
+                      "ana": ("Woman student", "Light"),
+                      "sam": ("Office worker", "Medium")}
+    assert len({p for p, _ in people.values()}) == 4                 # nobody looks alike
 
 
 def test_join_number_pieces():

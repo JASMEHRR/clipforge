@@ -314,8 +314,42 @@ def object_seed(obj: str) -> int:
     return int(hashlib.sha256(obj.strip().lower().encode("utf-8")).hexdigest()[:8], 16)
 
 
-_FLUENT = ("https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/"
-           "{folder}/3D/{file}_3d.png")      # MIT (Microsoft Fluent Emoji)
+_FLUENT_BASE = "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/"
+
+
+def fluent_png(name: str, cfg: dict, skin: str | None = None) -> str | None:
+    """Microsoft Fluent Emoji 3D PNG (MIT) for a CLDR name such as 'Worried
+    face'; people live under a skin-tone folder ('Default', 'Light',
+    'Medium-Light', 'Medium', 'Medium-Dark', 'Dark'). Cached in
+    cache/emoji/fluent; None when it doesn't exist or can't be fetched."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from config import ROOT
+    stem = name.lower().replace(" ", "_")
+    d = ROOT / cfg["paths"]["cache_dir"] / "emoji" / "fluent"
+    path = d / (f"{stem}_3d_{skin.lower()}.png" if skin else f"{stem}_3d.png")
+    miss = path.with_suffix(".missing")
+    if path.is_file():
+        return str(path)
+    if miss.exists():
+        return None
+    q = urllib.parse.quote
+    url = _FLUENT_BASE + (f"{q(name)}/{q(skin)}/3D/{q(stem)}_3d_{q(skin.lower())}.png"
+                          if skin else f"{q(name)}/3D/{q(stem)}_3d.png")
+    d.mkdir(parents=True, exist_ok=True)
+    part = path.with_suffix(".part")
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            part.write_bytes(resp.read())
+        part.replace(path)
+        return str(path)
+    except urllib.error.HTTPError as err:
+        if err.code == 404:
+            miss.touch()                  # no such Fluent asset: callers fall back
+    except OSError as err:
+        log.warning("Fluent download failed for %r: %s", name, err)
+    return None
 
 
 def icon_png(token: str, cfg: dict) -> str | None:
@@ -323,36 +357,16 @@ def icon_png(token: str, cfg: dict) -> str | None:
     matches the emoji's Unicode name, else Noto Emoji (Apache-2.0, via
     animate.icon_sprite's cache). None when neither exists - text-only card."""
     import unicodedata
-    import urllib.error
-    import urllib.parse
-    import urllib.request
     import animate
     from config import ROOT
     emoji = animate.resolve_emoji(token or "")
     if not emoji:
         return None
     folder = unicodedata.name(emoji[0], "").capitalize()
-    if folder and len(emoji.replace("️", "")) == 1:
-        d = ROOT / cfg["paths"]["cache_dir"] / "emoji" / "fluent"
-        stem = folder.lower().replace(" ", "_")
-        path = d / f"{stem}_3d.png"
-        miss = d / f"{stem}.missing"
-        if path.is_file():
-            return str(path)
-        if not miss.exists():
-            url = _FLUENT.format(folder=urllib.parse.quote(folder), file=urllib.parse.quote(stem))
-            d.mkdir(parents=True, exist_ok=True)
-            part = d / f"{stem}.part"
-            try:
-                with urllib.request.urlopen(url, timeout=30) as resp:
-                    part.write_bytes(resp.read())
-                part.replace(path)
-                return str(path)
-            except urllib.error.HTTPError as err:
-                if err.code == 404:
-                    miss.touch()          # its CLDR folder name differs: use Noto
-            except OSError as err:
-                log.warning("Fluent icon download failed for %r: %s", token, err)
+    if folder and len(emoji.replace("\ufe0f", "")) == 1:
+        found = fluent_png(folder, cfg)
+        if found:
+            return found
     if animate.icon_sprite(emoji, cfg) is not None:
         noto = ROOT / cfg["paths"]["cache_dir"] / "emoji" / animate.emoji_filename(emoji)
         if noto.is_file():
@@ -377,37 +391,70 @@ def draw_objects(names: list[str], cfg: dict) -> dict[str, str | None]:
     return out
 
 
-MOOD_WORDS = {
-    "happy": "big happy smile",
-    "confident": "big confident grin, thumbs up",
-    "worried": "nervous and sweating, worried frown",
-    "shocked": "screaming in shock, mouth wide open, hands on head",
-    "sad": "sad face, shoulders slumped, empty pockets",
-    "thinking": "thinking hard, hand on chin, one eyebrow raised",
-}
-CAST_STYLE = ("oversized head, tiny body, vinyl toy style, isolated on pure white "
-              "background")
-CAST_PX = (448, 576)     # GTX 16xx: 512x640 gives NaN latents in fp16, this size does not
+# PJ disliked the AI-drawn chibi figures (2026-11-10) and picked Microsoft's
+# 3D emoji people: crisp, consistent, same style as the icons.
+OUTFITS = ("office worker", "technologist", "student")
+TONES = ("Medium-Light", "Medium-Dark", "Light", "Medium")
+MOOD_FACES = {"happy": "Money-mouth face", "confident": "Smiling face with sunglasses",
+              "worried": "Worried face", "shocked": "Face screaming in fear",
+              "sad": "Crying face", "thinking": "Thinking face"}
 
 
-def cast_prompt(look: str, mood: str) -> str:
-    """Chibi toy-figure style: unmistakably cartoon (no realistic AI people),
-    expressive, and the same seed per name keeps a face across moods."""
-    return (f"chibi 3d cartoon toy figure of a {look.strip().rstrip('.')}, "
-            f"{MOOD_WORDS.get(mood, MOOD_WORDS['thinking'])}, {CAST_STYLE}")
+def cast_people(cast: list[dict]) -> dict[str, tuple[str, str]]:
+    """Pure. cast name -> (Fluent person, skin tone): gender read from the
+    look; every member gets the next outfit AND the next skin tone, so two
+    people in one video never look alike (at video size the same outfit and
+    tone read as one person)."""
+    out = {}
+    for k, c in enumerate(cast):
+        look = c.get("look", "").lower()
+        g = ("Woman " if re.search(r"\b(woman|female|girl|lady)\b", look)
+             else "Man " if re.search(r"\b(man|male|guy|boy)\b", look) else "")
+        outfit = OUTFITS[k % len(OUTFITS)]
+        out[c["name"].strip().lower()] = ((g + outfit).capitalize(), TONES[k % len(TONES)])
+    return out
+
+
+def compose_figure(person_png: str, face_png: str | None):
+    """The 3D person with a cream reaction bubble holding the mood face."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGBA", (600, 660), (0, 0, 0, 0))
+    person = Image.open(person_png).convert("RGBA").resize((440, 440), Image.LANCZOS)
+    if face_png:
+        d = ImageDraw.Draw(img)
+        cx, cy, r = 450, 120, 104
+        d.polygon([(cx - 70, cy + 60), (cx - 30, cy + 90), (cx - 120, cy + 150)],
+                  fill=(243, 233, 210, 255))
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(243, 233, 210, 255))
+        face = Image.open(face_png).convert("RGBA").resize((160, 160), Image.LANCZOS)
+        img.alpha_composite(face, (cx - 80, cy - 80))
+    img.alpha_composite(person, (10, 660 - 440))
+    return img
 
 
 def draw_cast(cast: list[dict], slides: list[dict], cfg: dict) -> dict[tuple, str]:
-    """(name, mood) -> cut-out PNG for every cast member a slide shows."""
-    looks = {c["name"].strip().lower(): c["look"] for c in cast}
+    """(name, mood) -> PNG of that cast member reacting, for every slide that
+    shows one. Cached per (person, face) in cache/explain_cast."""
+    from config import ROOT
+    people = cast_people(cast)
     need = sorted({(s["actor"].strip().lower(), s["mood"]) for s in slides
-                   if s.get("actor", "").strip().lower() in looks})
-    if not need:
-        return {}
-    pics = art.draw_images([(cast_prompt(looks[n], m), object_seed(n)) for n, m in need],
-                           cfg, size=CAST_PX)
-    return {key: art.cutout(pic, cfg, max_area=0.9)["fg"] or str(pic)
-            for key, pic in zip(need, pics)}
+                   if s.get("actor", "").strip().lower() in people})
+    d = ROOT / cfg["paths"]["cache_dir"] / "explain_cast"
+    out = {}
+    for name, mood in need:
+        (person, tone), face = people[name], MOOD_FACES.get(mood, MOOD_FACES["thinking"])
+        stem = f"{person}_{tone}__{face}".lower().replace(" ", "_")
+        path = d / f"{stem}.png"
+        if not path.is_file():
+            pp = fluent_png(person, cfg, skin=tone)
+            if not pp:
+                log.warning("no Fluent picture for %s - %s appears without a figure",
+                            person, name)
+                continue
+            d.mkdir(parents=True, exist_ok=True)
+            compose_figure(pp, fluent_png(face, cfg)).save(path)
+        out[(name, mood)] = str(path)
+    return out
 
 
 # ------------------------------------------------------------------ sound effects
