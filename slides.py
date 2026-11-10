@@ -204,10 +204,30 @@ def card_content(item: dict, w: int, u: float):
         y += int(104 * u)
     big = not item.get("picture") and num_y is None      # text-only: the words carry it
     y = draw_block(img, pad, y, item["label"].upper(), "head", 400,
-                   int((74 if big else 52) * u), INK, w - 2 * pad, 3 if big else 2, 1.08)
-    y = draw_block(img, pad, y + int(6 * u), item.get("detail", ""), "body", 500,
-                   int(29 * u), (70, 62, 52), w - 2 * pad, 3, 1.3)
+                   int((84 if big else 60) * u), INK, w - 2 * pad, 3 if big else 2, 1.08)
+    y = draw_block(img, pad, y + int(8 * u), item.get("detail", ""), "body", 500,
+                   int(35 * u), (70, 62, 52), w - 2 * pad, 3, 1.28)
     return img, int(y + pad), num_y
+
+
+def cta_card(title: str, w: int, u: float):
+    """End card of a Short (PIL image): a red play badge, 'FULL VIDEO', the
+    long video's title in big caps, and where to find it."""
+    from PIL import Image, ImageDraw
+    pad, r = int(40 * u), int(52 * u)
+    img = Image.new("RGBA", (w, int(1200 * u)), PAPER + (255,))
+    d = ImageDraw.Draw(img)
+    cx, cy = pad + r, pad + r
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=RED + (255,))
+    d.polygon([(cx - r * 0.30, cy - r * 0.46), (cx - r * 0.30, cy + r * 0.46),
+               (cx + r * 0.52, cy)], fill=PAPER + (255,))
+    d.text((cx + r + int(24 * u), cy), "FULL VIDEO", font=font("type", 400, int(54 * u)),
+           fill=RED + (255,), anchor="lm")
+    y = draw_block(img, pad, pad + 2 * r + int(24 * u), title.upper(), "head", 400,
+                   int(92 * u), INK, w - 2 * pad, 3, 1.06)
+    y = draw_block(img, pad, y + int(14 * u), "Every number, step by step. On the channel now.",
+                   "body", 600, int(36 * u), (70, 62, 52), w - 2 * pad, 2, 1.28)
+    return img.crop((0, 0, w, int(y + pad)))
 
 
 def _dress(card, angle: float, u: float) -> np.ndarray:
@@ -241,18 +261,20 @@ def row_sprite(item: dict, w: int, h: int, number: int, u: float) -> np.ndarray:
     d.rectangle((0, 0, int(8 * u), h), fill=GOLD + (255,))
     pad = int(30 * u)
     num = f"#{number:02d}"
-    d.text((pad + int(8 * u), h / 2), num, font=font("head", 400, int(64 * u)),
-           fill=GOLD + (255,), anchor="lm")
-    x = pad + int(8 * u) + int(_measure(num, font("head", 400, int(64 * u)))) + int(26 * u)
-    pic = _picture(item.get("picture"), int(h * 0.62), int(h * 0.62))
+    k = min(1.0, h / (180 * u))                 # text scales with the row height
+    f_num = font("head", 400, int(78 * u * k))
+    d.text((pad + int(8 * u), h / 2), num, font=f_num, fill=GOLD + (255,), anchor="lm")
+    x = pad + int(8 * u) + int(_measure(num, f_num)) + int(26 * u)
+    pic = _picture(item.get("picture"), int(h * 0.66), int(h * 0.66))
     if pic is not None:
         img.alpha_composite(pic, (x, (h - pic.height) // 2))
-        x += pic.width + int(24 * u)
+        x += pic.width + int(26 * u)
     has_detail = bool(item.get("detail", "").strip())
-    y = h / 2 - (int(46 * u) if has_detail else int(28 * u))
-    y = draw_block(img, x, y, item["label"].upper(), "head", 400, int(50 * u), CREAM,
+    px_l, px_d = int(62 * u * k), int(36 * u * k)
+    y = h / 2 - ((px_l * 1.15 + px_d * 1.2) / 2 if has_detail else px_l * 0.6)
+    y = draw_block(img, x, y, item["label"].upper(), "head", 400, px_l, CREAM,
                    w - x - pad, 1)
-    draw_block(img, x, y + int(2 * u), item.get("detail", ""), "body", 500, int(29 * u),
+    draw_block(img, x, y + int(2 * u), item.get("detail", ""), "body", 500, px_d,
                MUTED, w - x - pad, 1)
     return pil_to_sprite(img)
 
@@ -360,7 +382,8 @@ class Slide:
         self.spec, self.p, self.index = spec, page, index
         p, u = page, page.u
         self.u = u
-        self.layout = spec["layout"]
+        # a Short's last slide: the 'full video on the channel' end card
+        self.layout = "cta" if (spec.get("cta") and page.portrait) else spec["layout"]
         self.items = spec["items"]
         self.bill = bill
         n = max(1, len(self.items))
@@ -368,7 +391,7 @@ class Slide:
         self.x0 = p.cx0
         fig_path = spec.get("figure")
         if fig_path and p.portrait:          # phone: big, standing under the captions
-            pic = _picture(fig_path, int(0.46 * p.w), int(0.30 * p.h))
+            pic = _picture(fig_path, int(0.60 * p.w), int(0.32 * p.h))
             if pic is not None:
                 self.figure = pil_to_sprite(pic)
         elif fig_path:                       # the cast member stands bottom-left
@@ -397,13 +420,19 @@ class Slide:
             else None
         self.parts: list[tuple] = []   # (sprite, cx, cy, at, style, number spot | None, item)
 
-        if self.layout in ("title", "compare", "flow"):
+        if self.layout == "cta":
+            card = cta_card(str(spec["cta"]), cw, u)
+            spr = _dress(card, -2.0, u)
+            at = self.items[0]["at"] if self.items else 0.0
+            self.parts.append((spr, p.w / 2, p.cy0 + card.height / 2, at, "pop", None,
+                               self.items[0] if self.items else {}))
+        elif self.layout in ("title", "compare", "flow"):
             gap = int((110 if self.layout == "flow" else 46) * u)
             w_card = int((cw - gap * (n - 1)) / n)
             built = [card_content(it, w_card, u) for it in self.items]
             avail = p.cy1 - p.cy0
             need = max(hh for _, hh, _ in built)
-            floor = (0.50 if self.layout == "flow" else 0.66) * avail
+            floor = (0.62 if self.layout == "flow" else 0.74) * avail
             h_card = int(min(avail - 40 * u, max(need, floor)))
             top = p.cy0 + (avail - h_card) / 2
             self.centres = []
@@ -419,7 +448,7 @@ class Slide:
         elif self.layout == "list":
             gap = int(20 * u)
             avail = p.cy1 - p.cy0
-            rh = int(min(140 * u, (avail - gap * (n - 1)) / n))
+            rh = int(min((200 if p.portrait else 180) * u, (avail - gap * (n - 1)) / n))
             for k, it in enumerate(self.items):
                 spr = row_sprite(it, cw, rh, k + 1, u)
                 self.parts.append((spr, self.x0 + cw / 2, p.cy0 + rh / 2 + k * (rh + gap),
@@ -431,7 +460,8 @@ class Slide:
             self.num_w = int(cw * (0.58 if has_pic else 1.0))
             self.big_label = text_sprite(it["label"].upper(), "type", 400, int(46 * u), MUTED)
             final = fmt_value(float(it["value"]), it["unit"], float(it["value"]))
-            self.num_px = int(260 * u)               # the final number must fit its column
+            # as big as its column allows (a phone gets the whole width)
+            self.num_px = int((360 if p.portrait else 260) * u)
             while (self.num_px > 60 * u and
                    _measure(final, font("head", 400, self.num_px)) > self.num_w - 30 * u):
                 self.num_px = int(self.num_px * 0.93)
@@ -462,7 +492,7 @@ class Slide:
             self.bar_x = [self.x0 + chart_w * (k + 0.5) / n for k in range(n)]
             self.base_y = p.cy1 - int(60 * u)
             self.bar_h = self.base_y - (p.cy0 + int(90 * u))
-            self.bar_labels = [text_sprite(it["label"].upper(), "head", 400, int(40 * u), CREAM)
+            self.bar_labels = [text_sprite(it["label"].upper(), "head", 400, int(46 * u), CREAM)
                                for it in self.items]
 
     def _heading(self, text: str, a: int, b: int, px: int):
@@ -555,7 +585,7 @@ class Slide:
                 if 0 <= ha < 0.4:
                     hop = math.sin(math.pi * ha / 0.4) * 46 * u
             breathe = 1 + 0.012 * math.sin(2 * math.pi * 0.5 * t)
-            fx = p.w * 0.30 if p.portrait else p.cx0 + fw / 2 - 20 * u
+            fx = p.w * 0.33 if p.portrait else p.cx0 + fw / 2 - 20 * u
             fy = p.h * 0.985 - fh / 2 + (1 - q) * fh * 1.1 - hop
             blit(frame, transform(self.figure, breathe, 1.5 * math.sin(1.3 * t)), fx, fy)
 
@@ -566,8 +596,10 @@ class Slide:
             if style == "pop":                       # flies in from below, spinning down
                 q = ease_out_back(age / 0.5)
                 spin = (1 - clamp01(age / 0.5)) * (22 if k % 2 else -22)
-                blit(frame, transform(spr, 0.85 + 0.15 * clamp01(q), spin),
-                     cx, cy + (1 - q) * 0.6 * p.h)
+                scale = 0.85 + 0.15 * clamp01(q)
+                if self.layout == "cta":             # the end card keeps pulsing: tap me
+                    scale *= 1 + 0.018 * math.sin(2 * math.pi * 1.1 * t)
+                blit(frame, transform(spr, scale, spin), cx, cy + (1 - q) * 0.6 * p.h)
             else:
                 q = ease_out_cubic(age / POP_S)
                 blit(frame, spr, cx - (1 - q) * 0.8 * p.w, cy)

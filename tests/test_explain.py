@@ -1,4 +1,6 @@
 """Explainer mode: pure-logic checks (cue sync, number format, mock script)."""
+import pytest
+
 import explain
 import llm
 import slides
@@ -92,3 +94,13 @@ def test_join_number_pieces():
     assert out[1]["start"] == 0.3 and out[1]["end"] == 0.9
     assert explain.join_number_pieces([{"word": " a", "start": 0, "end": 1},
                                        {"word": ".", "start": 1, "end": 2}])[1]["word"] == "."
+
+
+def test_tighten_times_removes_dead_air_but_never_delays():
+    # first item late, a long wait before the third
+    assert explain.tighten_times([4.0, 5.0, 12.0], 1.0, 0.9, 4.5) == [1.9, 5.0, 9.5]
+    # already tight: untouched
+    assert explain.tighten_times([1.2, 2.0], 1.0, 0.9, 4.5) == [1.2, 2.0]
+    # a pulled-forward first item drags a far-away second one to within max_gap
+    assert explain.tighten_times([9.0, 9.1], 1.0, 0.35, 4.5) == pytest.approx([1.35, 5.85])
+    assert explain.tighten_times([], 1.0, 0.9, 4.5) == []

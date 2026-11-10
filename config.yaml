@@ -356,14 +356,12 @@ explain:                         # explain.py - PPT-style money explainers synce
   slides: 18                     # ~4.5 min (measured ~14.5 s per slide)
   workspace: money               # library + YouTube channel these videos go to (created on first run)
   workspace_name: Money
-  shorts:                        # vertical Shorts cut from each video: deck in the middle, hook on top, captions below
+  shorts:                        # vertical teaser Shorts: own script, drawn natively at 9:16, end card sends viewers to the channel
     enabled: true
-    max: 3
-    min_s: 30
-    max_s: 58
+    max: 3                       # teaser Shorts per video (each its own 25-40 s script)
+    hook_s: 0.35                 # a Short's first item (the hook number) lands this fast
     width: 1080
     height: 1920
-    deck_center: 0.42
     caption_preset: karaoke-pop
     caption_anchor: 0.64
   topics:                        # rotated without repeats (cache/explain_topics_used.json); --topic overrides
@@ -399,6 +397,8 @@ explain:                         # explain.py - PPT-style money explainers synce
     - gemini-flash-latest
     - gemini-flash-lite-latest   # fast but bland - last resort
   writer_timeout_s: 900
+  first_item_s: 0.9              # no empty slides: the first item is on screen this soon after a slide starts
+  max_item_gap_s: 4.5            # ...and no later item waits longer than this after the one before
   max_bitrate: 6M                # encoder cap (film grain + camera drift balloon constant-quality files)
   line_gap_s: 0.2
   slide_gap_s: 0.6

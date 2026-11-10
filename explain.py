@@ -114,8 +114,13 @@ def script_prompt(topic: str, slides: int) -> str:
         "otherwise 0 and \"none\";\n"
         "  cue: a word or short phrase copied EXACTLY from this slide's lines; the "
         "item appears when it is spoken. Cues must follow the order the items are "
-        "listed.\n"
+        "listed, and the FIRST item's cue must come from the slide's first line so "
+        "the screen is never empty.\n"
         "- facts: every factual claim the slide makes.\n\n"
+        "Numbers: ALWAYS write them as digits, everywhere - in the lines, headings, "
+        "labels and cues ('$21,000', '24%', '7%', '5 years'), never spelled out "
+        "('twenty-one thousand dollars'). A heading with a number shows the digits "
+        "('$21,000 IN INTEREST').\n\n"
         "Accuracy: only well-established, widely documented facts. Numbers are "
         "illustrative examples ('for example', 'around', 'can'), round and realistic; "
         "never present today's rates, averages or prices as facts (no 'average rate "
@@ -196,7 +201,11 @@ def shorts_prompt(script: dict, n: int) -> str:
         "2-4 slides per Short, 1-2 lines per slide, 6-16 words per line. Same tone as the "
         "video: confident, upbeat, plain words, no slang. Use ONLY facts and numbers that "
         "appear below - never add new ones. Phone screen: keep labels to 1-3 words, at "
-        "most 3 items per slide; compare and flow slides have 2-3 items.\n"
+        "most 3 items per slide; compare and flow slides have 2-3 items. Slide 1 should "
+        "be a big_number or bars slide whenever the hook is a number.\n"
+        "Numbers: ALWAYS digits, in lines, headings, labels and cues ('$21,000', '24%', "
+        "'5 years'), never spelled out. The first item's cue comes from the slide's "
+        "first line.\n"
         f"Cast you may use as actor: {cast or 'none'}.\n"
         "Slide fields are the same as the video's: layout, kicker, heading (max 5 words), "
         "highlight (words copied from the heading), sticker, actor, mood, lines, items "
@@ -252,6 +261,18 @@ def _find(toks: list[str], cue: list[str], pos: int) -> int | None:
         if all(_same(toks[i + j], c) for j, c in enumerate(cue)):
             return i
     return None
+
+
+def tighten_times(times: list[float], start: float, first_by: float,
+                  max_gap: float) -> list[float]:
+    """Pure. No dead air: the first item is on screen within `first_by` seconds
+    of the slide start and no later item waits more than `max_gap` after the
+    one before it. Items only ever move EARLIER, so increasing input (what
+    cue_times returns) stays increasing with its spacing intact."""
+    out: list[float] = []
+    for k, t in enumerate(times):
+        out.append(min(t, start + first_by if k == 0 else out[-1] + max_gap))
+    return out
 
 
 def join_number_pieces(words: list[dict]) -> list[dict]:
@@ -567,10 +588,12 @@ def next_topic(cfg: dict, rng) -> str:
 
 def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
             size: tuple[int, int], cfg: dict, timings: dict, tag: str, *,
-            captions: bool, preset: str, anchor: float | None):
+            captions: bool, preset: str, anchor: float | None, cta: str | None = None):
     """Slides -> finished clip: narration, pictures, word timings, cue sync,
     deck render (landscape or vertical by `size`), sound effects, mux.
-    Returns (final path, plan, bounds, words)."""
+    `cta` (Shorts) = the long video's title: the last slide becomes the
+    'full video on the channel' end card. Returns (final path, plan, bounds,
+    words)."""
     import transcribe
     e = _ecfg(cfg)
     w, h = size
@@ -599,7 +622,12 @@ def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
     plan = []
     for i, s in enumerate(slides):
         times = cue_times(words, bounds[i], bounds[i + 1], [it["cue"] for it in s["items"]])
+        # a Short's first slide is the hook: its number is up almost at once
+        first_by = float((e.get("shorts") or {}).get("hook_s", 0.35)) if (h > w and i == 0) \
+            else float(e.get("first_item_s", 0.9))
+        times = tighten_times(times, bounds[i], first_by, float(e.get("max_item_gap_s", 4.5)))
         plan.append({"layout": s["layout"], "heading": s["heading"],
+                     "cta": cta if (cta and i == len(slides) - 1) else None,
                      "kicker": s["kicker"], "highlight": s["highlight"],
                      "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
                      "figure": figures.get((s.get("actor", "").strip().lower(),
@@ -682,7 +710,7 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
                         sdir, (int(sc.get("width", 1080)), int(sc.get("height", 1920))), cfg,
                         timings, f"short_{k}", captions=True,
                         preset=str(sc.get("caption_preset", "karaoke-pop")),
-                        anchor=float(sc.get("caption_anchor", 0.64)))
+                        anchor=float(sc.get("caption_anchor", 0.64)), cta=script["title"])
                     smeta = {"title": short["title"][:60],
                              "description": (f"{short['title']}. Full video on the channel: "
                                              f"{script['title']}.\n\n{credits}"),
