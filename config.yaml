@@ -356,6 +356,8 @@ explain:                         # explain.py - PPT-style money explainers synce
   slides: 18                     # ~4.5 min (measured ~14.5 s per slide)
   workspace: money               # library + YouTube channel these videos go to (created on first run)
   workspace_name: Money
+  story_workspace: trending      # funny viral-post reels (explain.py --story) go to their own library + channel
+  story_workspace_name: Trending
   youtube_url: ""                # your channel link; used in the Instagram and Pinterest text (social.json)
   shorts:                        # vertical teaser Shorts: own script, drawn natively at 9:16, end card sends viewers to the channel
     enabled: true

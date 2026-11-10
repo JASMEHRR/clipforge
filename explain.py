@@ -611,7 +611,8 @@ def next_topic(cfg: dict, rng) -> str:
 
 def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
             size: tuple[int, int], cfg: dict, timings: dict, tag: str, *,
-            captions: bool, preset: str, anchor: float | None, cta: str | None = None):
+            captions: bool, preset: str, anchor: float | None, cta: str | None = None,
+            post: dict | None = None):
     """Slides -> finished clip: narration, pictures, word timings, cue sync,
     deck render (landscape or vertical by `size`), sound effects, mux.
     `cta` (Shorts) = the long video's title: the last slide becomes the
@@ -651,6 +652,7 @@ def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
         times = tighten_times(times, bounds[i], first_by, float(e.get("max_item_gap_s", 4.5)))
         plan.append({"layout": s["layout"], "heading": s["heading"],
                      "cta": cta if (cta and i == len(slides) - 1) else None,
+                     "post": post if i == 0 else None,     # story reels open on the post
                      "kicker": s["kicker"], "highlight": s["highlight"],
                      "sticker": s["sticker"], "start": bounds[i], "end": bounds[i + 1],
                      "figure": figures.get((s.get("actor", "").strip().lower(),
@@ -770,6 +772,106 @@ def make_video(cfg: dict, topic: str, n_slides: int | None = None,
     return job_dir
 
 
+# ------------------------------------------------------------------ story reels
+
+STORY_CAST = [{"name": "Narrator", "look": "a person"}]
+
+
+def story_prompt(post: dict, context: str) -> str:
+    """A funny commentary reel about ONE real viral post or news item."""
+    return (
+        "Write ONE vertical reel (30-45 seconds) for a funny commentary page that turns "
+        "viral posts and tech/business news into short animated stories. It is posted on "
+        "YouTube Shorts, Instagram Reels and Pinterest, so never name the app.\n\n"
+        f"The post (shown on screen on slide 1, already drawn - do not repeat it word "
+        f"for word):\nPosted by: {post['author']} ({post['source']})\n"
+        f"Text: {post['text']}\n\nVerified background you may use:\n{context}\n\n"
+        "TONE: a witty friend reacting to it - dry, playful, quick. Find what is "
+        "genuinely funny or surprising about the situation and build to a punchline or "
+        "a takeaway. Light teasing is fine; no insults, nothing mean about how anyone "
+        "looks, no politics-bashing, no swearing.\n"
+        "FACTS - strict: use ONLY the facts in the post and the background above. Do "
+        "not invent quotes, numbers, motives or events, and do not guess what a real "
+        "person thinks or feels; jokes must be clearly jokes about the situation.\n\n"
+        "Return {\"shorts\": [one reel]} with title (max 60 characters) and 4-5 slides:\n"
+        "- slide 1 (layout title): the hook - the narrator sets up the post in 1-2 "
+        "lines while it shows on screen;\n"
+        "- middle slides: the story beats, each with 1-3 items (compare, list, flow, "
+        "big_number or bars) that pop up on their cue;\n"
+        "- last slide: the punchline or takeaway, then 'Follow for more.'\n"
+        "1-2 lines per slide, 8-16 words per line. Numbers ALWAYS as digits ('1978', "
+        "'$4 trillion'). Every slide: layout, kicker (1-3 words), heading (max 5 words), "
+        "highlight (words from the heading), sticker (a 1-2 word stamp on some slides, "
+        "else \"\"), actor \"Narrator\" with a mood (happy, confident, worried, shocked, "
+        "sad, thinking) that fits the beat, lines, items (label 1-3 words, detail, "
+        "object \"\", icon = one emoji, value 0, unit \"none\" unless it is a number "
+        "slide, cue copied exactly from the slide's lines; the first cue from the first "
+        "line), facts.\nReturn only JSON matching the schema."
+    )
+
+
+def make_story(cfg: dict, post: dict, context: str, provider: str | None = None,
+               script: dict | None = None) -> Path:
+    """One funny reel from a viral post. `post` = {author, source, text};
+    `script` (optional) = a ready {"title", "slides"} instead of asking the
+    LLM. Returns the job dir; the reel waits for approval like every clip."""
+    from pipeline import new_job_dir
+    import llm
+    e = _ecfg(cfg)
+    sc = e.get("shorts") or {}
+    resolved = llm.resolve_provider(cfg, provider)
+    create._benched.clear()
+    job_dir = new_job_dir(cfg, f"story-{post['author']}")
+    fh = add_file_handler(job_dir / "explain.log")
+    timings: dict = {}
+    notes: list[str] = []
+    job = {"job_id": uuid.uuid4().hex[:12],
+           "created": dt.datetime.now().isoformat(timespec="seconds"),
+           "source": f"story:{post['author']}", "status": "running",
+           "settings": {"mode": "story", "provider": resolved},
+           "stages": {}, "clips": [], "notes": notes}
+    try:
+        if script is None:
+            with stage_timer(log, "script", timings):
+                data = create.ask("explainer_shorts", story_prompt(post, context),
+                                  writer_cfg(cfg), resolved,
+                                  {"topic": post["text"][:80], "shorts": 1})
+                script = data["shorts"][0]
+        (job_dir / "script.json").write_text(json.dumps({"post": post, "context": context,
+                                                         **script}, indent=2), encoding="utf-8")
+        clip_dir = job_dir / "clip_00"
+        final, _, _, _ = produce(script["slides"], STORY_CAST, job_dir / "work", clip_dir,
+                                 (int(sc.get("width", 1080)), int(sc.get("height", 1920))),
+                                 cfg, timings, "story", captions=True,
+                                 preset=str(sc.get("caption_preset", "karaoke-pop")),
+                                 anchor=float(sc.get("caption_anchor", 0.64)), post=post)
+        tags = ["#Tech", "#Business", "#Funny", "#News", "#Viral", "#Explained", "#Story",
+                "#DidYouKnow"]
+        meta = {"title": script["title"][:60],
+                "description": (f"{script['title']}. Based on a public post by "
+                                f"{post['author']} ({post['source']}). Commentary; narration "
+                                "is an AI voice."),
+                "hashtags": tags, "format": "short", "made_for_kids": False,
+                "create": {"mode": "story", "post": post}}
+        (clip_dir / "social.json").write_text(json.dumps(social_captions(
+            script["title"], {"title": script["title"], "description": meta["description"],
+                              "hashtags": tags}, str(e.get("youtube_url", ""))), indent=2),
+            encoding="utf-8")
+        job["clips"].append(create._write_clip(clip_dir, 0, final, meta, create._virality(cfg),
+                                               "news", "short", mock=resolved == "mock"))
+        job["status"] = "done"
+    except Exception as err:  # noqa: BLE001 - the job record must capture any failure
+        job["status"] = "failed"
+        notes.append(f"job failed: {err}")
+        log.error("story job failed: %s", err)
+    finally:
+        job["stages"] = timings
+        validate(job, "job_record")
+        (job_dir / "job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
+        remove_file_handler(fh)
+    return job_dir
+
+
 def main(argv: list[str] | None = None) -> int:
     import random
     import config as config_mod
@@ -782,12 +884,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--provider", help="LLM provider override (mock|gemini|...)")
     ap.add_argument("--workspace", help="library + YouTube channel (default explain.workspace)")
     ap.add_argument("--no-shorts", action="store_true", help="skip the vertical Shorts")
+    ap.add_argument("--story", help="make ONE funny reel from this viral post's text")
+    ap.add_argument("--author", default="Someone", help="--story: who posted it")
+    ap.add_argument("--source", default="", help="--story: where (e.g. 'LinkedIn', 'X')")
+    ap.add_argument("--context", default="", help="--story: verified background facts")
     args = ap.parse_args(argv)
     if args.count < 1:
         ap.error("--count must be at least 1")
     base = load_config()
     e = base.get("explain") or {}
-    ws = args.workspace or str(e.get("workspace", "default"))
+    ws = args.workspace or str(e.get("story_workspace" if args.story else "workspace",
+                                     "default"))
+    if args.story:
+        workspaces.ensure_workspace(ws, str(e.get("story_workspace_name", ws.title())))
+        config_mod.current_workspace.set(ws)
+        cfg = load_config()
+        verify_ffmpeg(cfg)
+        job_dir = make_story(cfg, {"author": args.author, "source": args.source,
+                                   "text": args.story}, args.context, args.provider)
+        status = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))["status"]
+        print(f"{status}: {job_dir}")
+        return 0 if status == "done" else 1
     workspaces.ensure_workspace(ws, str(e.get("workspace_name", ws.title())))
     config_mod.current_workspace.set(ws)
     cfg = load_config()                 # paths.output_dir now scoped to the workspace

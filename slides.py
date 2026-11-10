@@ -210,6 +210,32 @@ def card_content(item: dict, w: int, u: float):
     return img, int(y + pad), num_y
 
 
+def post_card(post: dict, w: int, u: float):
+    """A viral post redrawn as a card (PIL image): avatar initial, name,
+    where it was posted, and the post text in big type. Drawn, never a
+    screenshot - the wording comes from explain's story input."""
+    from PIL import Image, ImageDraw
+    pad, r = int(40 * u), int(50 * u)
+    img = Image.new("RGBA", (w, int(1400 * u)), PAPER + (255,))
+    d = ImageDraw.Draw(img)
+    cx, cy = pad + r, pad + r
+    name = str(post.get("author", "")).strip() or "Someone"
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=INK + (255,))
+    d.text((cx, cy), name[:1].upper(), font=font("head", 400, int(60 * u)),
+           fill=GOLD + (255,), anchor="mm")
+    tx = cx + r + int(22 * u)
+    d.text((tx, cy - int(22 * u)), name, font=font("body", 800, int(40 * u)),
+           fill=INK + (255,), anchor="lm")
+    d.text((tx, cy + int(26 * u)), str(post.get("source", "")).strip(),
+           font=font("body", 500, int(30 * u)), fill=(110, 100, 86, 255), anchor="lm")
+    y = pad + 2 * r + int(26 * u)
+    paras = [t for t in str(post.get("text", "")).splitlines() if t.strip()][:3]
+    for para in paras:                       # each line of the post keeps its own line
+        y = draw_block(img, pad, y, para, "body", 600, int(46 * u), INK, w - 2 * pad,
+                       max(2, 5 // max(1, len(paras))), 1.3) + int(14 * u)
+    return img.crop((0, 0, w, int(y + pad)))
+
+
 def cta_card(title: str, w: int, u: float):
     """End card of a Short (PIL image): a red play badge, 'FULL VIDEO', the
     long video's title in big caps, and where to find it."""
@@ -384,6 +410,8 @@ class Slide:
         self.u = u
         # a Short's last slide: the 'full video on the channel' end card
         self.layout = "cta" if (spec.get("cta") and page.portrait) else spec["layout"]
+        if spec.get("post") and page.portrait:      # a story reel opens on the post itself
+            self.layout = "post"
         self.items = spec["items"]
         self.bill = bill
         n = max(1, len(self.items))
@@ -420,8 +448,9 @@ class Slide:
             else None
         self.parts: list[tuple] = []   # (sprite, cx, cy, at, style, number spot | None, item)
 
-        if self.layout == "cta":
-            card = cta_card(str(spec["cta"]), cw, u)
+        if self.layout in ("cta", "post"):
+            card = (cta_card(str(spec["cta"]), cw, u) if self.layout == "cta"
+                    else post_card(spec["post"], cw, u))
             spr = _dress(card, -2.0, u)
             at = self.items[0]["at"] if self.items else 0.0
             self.parts.append((spr, p.w / 2, p.cy0 + card.height / 2, at, "pop", None,
