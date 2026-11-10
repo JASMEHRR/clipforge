@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/screens.css">
+<link rel="stylesheet" href="css/studio.css">
 </head>
 <body>
 <header class="topbar">
@@ -17,18 +18,13 @@
      title="Switch workspace" style="display:none"></a>
   <span class="spacer"></span>
   <nav>
-    <a href="#/">New clips</a>
-    <a href="#/activity">Activity</a>
-    <a href="#/queue">Queue</a>
-    <a href="#/history">History</a>
-    <a href="#/library">Library</a>
-    <a href="#/presets">Presets</a>
-    <a href="#/channels">Channels</a>
-    <a href="#/youtube">YouTube</a>
-    <a href="#/analytics">Analytics</a>
-    <a href="#/settings">Settings</a>
+    <a href="#/" data-group="make">Make</a>
+    <a href="#/youtube" data-group="review">Review</a>
+    <a href="#/library" data-group="library">Library</a>
+    <a href="#/settings" data-group="settings">Settings</a>
   </nav>
 </header>
+<div id="subnav" class="subnav"></div>
 <main id="view"></main>
 <script type="module" src="js/app.js"></script>
 </body>

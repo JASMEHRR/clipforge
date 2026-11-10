@@ -131,3 +131,17 @@ def test_scout_rank_and_parsers():
     hn = scout.parse_hn(b'{"hits": [{"objectID": "1", "title": "Low", "points": 5, "url": "u"},'
                         b' {"objectID": "2", "title": "High", "points": 50}]}')
     assert [h["title"] for h in hn] == ["High", "Low"]
+
+
+def test_studio_commands():
+    from server.routes_studio import StudioRun, command, readable
+    assert command(StudioRun(kind="money"))[1:] == ["explain.py", "--count", "1"]
+    assert command(StudioRun(kind="money", topic=" debt "))[-2:] == ["--topic", "debt"]
+    assert command(StudioRun(kind="trending", count=3))[1:] == ["scout.py", "--make", "3"]
+    story = command(StudioRun(kind="story", text="a post", author=""))
+    assert story[1:4] == ["explain.py", "--story", "a post"] and "Someone" in story
+    with pytest.raises(ValueError):
+        command(StudioRun(kind="story", text="  "))
+    with pytest.raises(ValueError):
+        command(StudioRun(kind="nope"))
+    assert readable(["", "x ffmpeg error -i a.mp4", "stage voice: done"]) == ["stage voice: done"]

@@ -69,11 +69,12 @@ def create_app() -> FastAPI:
     from server import (routes_analytics, routes_channels,
                         routes_edit, routes_library, routes_presets,
                         routes_run, routes_settings, routes_upload,
-                        routes_workspaces)
+                        routes_studio, routes_workspaces)
     app.include_router(routes_run.router)
     app.include_router(routes_presets.router)
     app.include_router(routes_channels.router)
     app.include_router(routes_workspaces.router)
+    app.include_router(routes_studio.router)
     app.include_router(routes_library.router)
     app.include_router(routes_edit.router)
     app.include_router(routes_upload.router)

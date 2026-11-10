@@ -18,6 +18,7 @@ import { mountPublishTiming } from "./publish_timing_panel.js";
 import { mountPresets } from "./presets_panel.js";
 import { mountChannels } from "./channels_panel.js";
 import { mountPostQueue } from "./post_queue_panel.js";
+import { mountStudio } from "./studio.js";
 
 const view = document.getElementById("view");
 let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
@@ -25,7 +26,8 @@ let cleanup = null; // per-view teardown (websockets, dot-matrix rafs, timers)
 // -------------------------------------------------------------- router ----
 
 const routes = {
-  "": renderHome,
+  "": renderStudio,
+  clip: renderHome,
   run: renderRun,
   activity: renderActivity,
   results: renderResults,
@@ -41,6 +43,29 @@ const routes = {
   workspaces: renderWorkspaceSelect,
 };
 
+// Four top tabs; every older screen lives inside one of them.
+const GROUPS = {
+  make: [["#/", "Studio"], ["#/clip", "Clip a video"], ["#/activity", "Activity"]],
+  review: [["#/youtube", "Approve & post"], ["#/queue", "Queue"], ["#/history", "History"]],
+  library: [["#/library", "Library"], ["#/analytics", "Analytics"]],
+  settings: [["#/settings", "Settings"], ["#/channels", "Channels"],
+             ["#/presets", "Presets"], ["#/workspaces", "Workspaces"]],
+};
+const GROUP_OF = { "": "make", clip: "make", run: "make", activity: "make", results: "make",
+  edit: "make", youtube: "review", queue: "review", history: "review", library: "library",
+  analytics: "library", settings: "settings", channels: "settings", presets: "settings",
+  workspaces: "settings" };
+
+function renderStudio() {
+  cleanup = mountStudio(view, {
+    openWorkspace(id, name) {           // jump straight to that channel's approvals
+      localStorage.setItem(WORKSPACE_KEY, id);
+      localStorage.setItem(WORKSPACE_NAME_KEY, name);
+      location.hash = "#/youtube";
+    },
+  });
+}
+
 const WORKSPACE_KEY = "clipforge_workspace";
 const WORKSPACE_NAME_KEY = "clipforge_workspace_name";
 
@@ -52,10 +77,18 @@ function navigate() {
     return;
   }
   if (cleanup) { cleanup(); cleanup = null; }
+  const group = GROUP_OF[name] || "make";
   document.querySelectorAll(".topbar nav a").forEach((a) => {
-    a.toggleAttribute("aria-current",
-      a.getAttribute("href") === `#/${name}` || (!name && a.hash === "#/"));
+    a.toggleAttribute("aria-current", a.dataset.group === group);
   });
+  // second row: the pages inside the current tab (hidden on the workspace picker)
+  const sub = document.getElementById("subnav");
+  sub.replaceChildren(...(name === "workspaces" && !localStorage.getItem(WORKSPACE_KEY)
+    ? [] : GROUPS[group].map(([href, label]) => {
+      const a = el("a", { href }, label);
+      if (href === `#/${name}`) a.setAttribute("aria-current", "page");
+      return a;
+    })));
   updateWorkspaceBadge();
   view.replaceChildren();
   (routes[name] || renderHome)(...rest.map(decodeURIComponent));
@@ -540,7 +573,7 @@ function renderRun(runId) {
     },
     onCancelled: () => {
       toast("Stopped. Finished clips are kept.");
-      location.hash = "#/";
+      location.hash = "#/clip";
     },
     onError: (message) => {
       dm.update({ state: "error" });
@@ -549,7 +582,7 @@ function renderRun(runId) {
       cancelBtn.removeEventListener("click", onCancel);
       cancelBtn.textContent = "Back";
       cancelBtn.disabled = false;
-      cancelBtn.onclick = () => { location.hash = "#/"; };
+      cancelBtn.onclick = () => { location.hash = "#/clip"; };
     },
   });
 
@@ -578,7 +611,7 @@ function renderRun(runId) {
       location.hash = `#/results/${encodeURIComponent(runId)}`;
     } catch {
       toast("That run isn't active anymore — check your finished clips.");
-      location.hash = "#/";
+      location.hash = "#/clip";
     }
   });
 
@@ -680,7 +713,7 @@ async function renderResults(jobName) {
         ytBtn,
         el("a", { class: "btn", href: `/api/jobs/${encodeURIComponent(jobName)}/zip` },
           "Download everything"),
-        el("a", { class: "btn btn-ghost", href: "#/" }, "Make more clips"))),
+        el("a", { class: "btn btn-ghost", href: "#/clip" }, "Make more clips"))),
     grid));
 
   const dots = [];
@@ -1634,7 +1667,7 @@ async function renderHistory() {
         el("h1", { class: "t-display" }, "Past runs")),
       el("div", { class: "field-inline" },
         backfillBtn,
-        el("a", { class: "btn btn-ghost", href: "#/" }, "Make new clips"))),
+        el("a", { class: "btn btn-ghost", href: "#/clip" }, "Make new clips"))),
     filterRow, grid));
 
   let jobs = [];
