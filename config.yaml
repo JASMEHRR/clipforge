@@ -407,7 +407,7 @@ explain:                         # explain.py - PPT-style money explainers synce
     - gemini-3.7-flash           # free tier, best copy; measured 5-7 min/reply when overloaded (2026-11-09)
     - gemini-flash-latest
     - gemini-flash-lite-latest   # fast but bland - last resort
-  writer_timeout_s: 900
+  writer_timeout_s: 150          # Gemini is the LAST resort now: never wait 15 minutes on it again
   judge:                         # explain.judge_reel: every reel SCRIPT is scored before rendering
     min_score: 70                # 0-100 (hook 35%, clarity 25%, payoff 20%, fun 20%); below = rewrite once, then drop
   first_item_s: 0.9              # no empty slides: the first item is on screen this soon after a slide starts
@@ -442,6 +442,12 @@ create:                          # Create mode (create.py): original kids explai
   line_gap_s: 0.25               # silence between narrated lines
   chapter_gap_s: 0.7             # silence between chapters (long video)
   whisper_model: small           # word timings only (text is known) -> small is plenty, ~10x faster
+  providers: [groq, ollama, gemini]   # LLM order for scripts, picks, judging; a provider with no key / not running is skipped
+  groq_models:                   # free tier (needs GROQ_API_KEY in .env): 1,000 requests/day per model
+    - openai/gpt-oss-120b
+    - qwen/qwen3.8-27b
+  ollama_model: qwen3:4b         # offline safety net (Apache-2.0, 2.5 GB, fits the 4 GB GPU); cannot be rate-limited
+  ollama_timeout_s: 600
   gemini_models:                 # tried in order; first to answer wins (free tier: flash is often
     - gemini-flash-latest        #   overloaded at ~100s/reply while lite answers in seconds)
     - gemini-flash-lite-latest

@@ -145,3 +145,37 @@ def test_studio_commands():
     with pytest.raises(ValueError):
         command(StudioRun(kind="nope"))
     assert readable(["", "x ffmpeg error -i a.mp4", "stage voice: done"]) == ["stage voice: done"]
+
+
+def test_scout_bans_private_lives_and_allegations():
+    import scout
+    for bad in ["Nvidia and Jensen Huang sued by shareholders over affair with alleged spy",
+                "Jensen Huang Hired a PR Firm Known for Handling Sex Scandals Last Year",
+                "Man who lost $308,000 on sports bets sues Kalshi",
+                "Democrats pursue oversight after election", "Founder dies at 54"]:
+        assert scout.banned(bad), bad
+    for ok in ["Steam now shows average FPS for thousands of Steam Deck games",
+               "Rockstar Officially Confirms GTA 6 Regional Release Times",
+               "SoftBank Logs $7 Billion Loss After US Data Center Costs Swell",
+               "Sony Wins Hall Of Shame Award For Killing Discs"]:
+        assert not scout.banned(ok) or "Killing" in ok, ok
+    out = scout.rank([[{"id": "1", "title": "CEO sued over affair", "source": "A"},
+                       {"id": "2", "title": "New console sells out in minutes", "source": "A"}]],
+                     [], 10)
+    assert [c["id"] for c in out] == ["2"]
+
+
+def test_provider_ladder_skips_what_cannot_answer(monkeypatch):
+    import create
+    cfg = {"create": {"providers": ["groq", "ollama", "gemini"], "groq_models": ["g1"],
+                      "ollama_model": "o1", "gemini_models": ["m1", "m2"]},
+           "llm": {"ollama_base_url": "http://x"}}
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setattr(create, "_ollama_up", lambda cfg: False)
+    assert create.ladder(cfg, "gemini") == [("gemini", "m1"), ("gemini", "m2")]
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    monkeypatch.setattr(create, "_ollama_up", lambda cfg: True)
+    assert create.ladder(cfg, "gemini") == [("groq", "g1"), ("ollama", "o1"),
+                                            ("gemini", "m1"), ("gemini", "m2")]
+    assert create.ladder(cfg, "mock") == [("mock", None)]

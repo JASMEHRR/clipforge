@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import random
 import shutil
 import sys
@@ -162,7 +163,7 @@ def script_prompt(topic: str, cfg: dict) -> str:
     )
 
 
-def llm_cfg(cfg: dict, model: str | None = None) -> dict:
+def llm_cfg(cfg: dict, model: str | None = None, provider: str = "gemini") -> dict:
     """Config copy with Create mode's LLM settings: a whole video script is a
     long generation (needs more than the 45s default timeout), and nested
     minItems/maxItems make Gemini reject the request outright (400), so those
@@ -175,37 +176,72 @@ def llm_cfg(cfg: dict, model: str | None = None) -> dict:
             "backoff_base_seconds": float(c.get("llm_backoff_s", 5)),
             "gemini_strip_keys": ["minItems", "maxItems"]}
     if model:
-        over["gemini_model"] = model
+        over[f"{provider}_model"] = model
+    if provider == "ollama":
+        over["ollama_timeout_s"] = float(c.get("ollama_timeout_s", 600))
     return {**cfg, "llm": {**cfg["llm"], **over}}
 
 
-_benched: set[str] = set()
+_benched: set = set()
+_ollama_ok: dict[str, bool] = {}
+
+
+def _ollama_up(cfg: dict) -> bool:
+    """Is the local Ollama server answering? Checked once per process."""
+    base = os.environ.get("OLLAMA_BASE_URL",
+                          cfg["llm"].get("ollama_base_url", "http://localhost:11434"))
+    if base not in _ollama_ok:
+        try:
+            import requests
+            _ollama_ok[base] = requests.get(f"{base}/api/tags", timeout=3).status_code == 200
+        except Exception:  # noqa: BLE001 - any failure means "not available"
+            _ollama_ok[base] = False
+        if not _ollama_ok[base]:
+            log.warning("ollama is not running at %s - skipping the offline model", base)
+    return _ollama_ok[base]
+
+
+def ladder(cfg: dict, provider: str | None) -> list[tuple[str, str | None]]:
+    """[(provider, model)] to try, in order. An explicit non-gemini provider
+    (mock, a test) is used alone. Otherwise create.providers decides: a cloud
+    provider without its key and an Ollama that is not running are skipped,
+    so the list is only what can actually answer right now."""
+    c = _ccfg(cfg)
+    if provider != "gemini":
+        return [(provider, None)]
+    out: list[tuple[str, str | None]] = []
+    for name in c.get("providers") or ["gemini"]:
+        if name == "groq" and os.environ.get("GROQ_API_KEY"):
+            out += [("groq", str(m)) for m in c.get("groq_models") or []]
+        elif name == "ollama" and c.get("ollama_model") and _ollama_up(cfg):
+            out.append(("ollama", str(c["ollama_model"])))
+        elif name == "gemini" and os.environ.get("GEMINI_API_KEY"):
+            out += [("gemini", str(m)) for m in c.get("gemini_models") or []]
+    return out or [("gemini", None)]
 
 
 def ask(task: str, prompt: str, cfg: dict, provider: str | None,
         context: dict) -> dict:
-    """llm.complete_json (schema name == task) over create.gemini_models: the
-    first model that answers wins. On the free tier the best model is often
-    overloaded (503/504, or ~100 s per reply) while a lighter one answers in
-    seconds, so an unattended night run falls back instead of failing.
-    Non-Gemini providers make one call. Raises the last LLMError."""
-    models = ([str(m) for m in _ccfg(cfg).get("gemini_models") or []]
-              if provider == "gemini" else [])
-    # a model that just failed with overload/timeout/quota is benched for the
-    # rest of this video (create_video clears the bench) - retrying it on every
-    # chapter cost minutes each; the last model is always tried
-    usable = [m for m in models if m not in _benched] or models[-1:]
+    """llm.complete_json (schema name == task) down the provider ladder: the
+    first one that answers wins. Free cloud tiers get overloaded (Gemini
+    answered 503/504 for whole nights), so an unattended run falls through to
+    the next provider and finally to the offline model, which cannot be
+    rate-limited. A provider/model that fails with a retryable error is
+    benched for the rest of this video. Raises the last LLMError."""
+    steps = ladder(cfg, provider)
+    usable = [s for s in steps if s not in _benched] or steps[-1:]
     last: LLMError | None = None
-    for i, model in enumerate(usable or [None]):
+    for i, (name, model) in enumerate(usable):
         try:
-            return llm.complete_json(task, task, prompt, provider=provider,
-                                     cfg=llm_cfg(cfg, model), context=context)
+            return llm.complete_json(task, task, prompt, provider=name,
+                                     cfg=llm_cfg(cfg, model, name), context=context)
         except LLMError as e:
             last = e
-            if model and e.retryable and i + 1 < len(usable):
-                _benched.add(model)
-                log.warning("%s: %s failed (%s) - benched for this video, using %s",
-                            task, model, e.message, usable[i + 1])
+            if i + 1 < len(usable):
+                if e.retryable:
+                    _benched.add((name, model))
+                log.warning("%s: %s/%s failed (%s) - trying %s/%s", task, name, model,
+                            e.message, *usable[i + 1])
     raise last
 
 

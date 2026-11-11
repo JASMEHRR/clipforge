@@ -234,6 +234,9 @@ def upload_media(path, cfg=None, timeout_s: float = 120.0):
     return f
 
 
+SCHEMA_NOTE = "\n\nReturn ONLY a JSON object that matches this JSON schema:\n"
+
+
 def _groq_complete(schema, prompt, cfg):
     import requests  # always installed, still lazy for import-speed
     key = os.environ.get("GROQ_API_KEY")
@@ -243,10 +246,12 @@ def _groq_complete(schema, prompt, cfg):
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json={"model": cfg["llm"]["groq_model"],
-              "messages": [{"role": "user", "content": prompt}],
+              # json_object mode has no schema argument: the schema rides in the prompt
+              "messages": [{"role": "user", "content": prompt + SCHEMA_NOTE
+                            + json.dumps(_strip_unsupported(schema))}],
               "response_format": {"type": "json_object"},
-              "temperature": 0.4},
-        timeout=60,
+              "temperature": float(cfg["llm"].get("temperature", 0.4))},
+        timeout=float(cfg["llm"].get("groq_timeout_s", 60)),
     )
     if r.status_code != 200:
         raise LLMError(f"groq HTTP {r.status_code}", detail=r.text[:500])
@@ -300,8 +305,11 @@ def _ollama_complete(schema, prompt, cfg):
     r = requests.post(
         f"{base}/api/generate",
         json={"model": cfg["llm"]["ollama_model"], "prompt": prompt,
-              "format": _strip_unsupported(schema), "stream": False},
-        timeout=300,
+              "format": _strip_unsupported(schema), "stream": False,
+              # room for a long prompt + a whole script; the default 4k context cut both
+              "options": {"num_ctx": int(cfg["llm"].get("ollama_num_ctx", 8192)),
+                          "temperature": float(cfg["llm"].get("temperature", 0.4))}},
+        timeout=float(cfg["llm"].get("ollama_timeout_s", 300)),
     )
     if r.status_code != 200:
         raise LLMError(f"ollama HTTP {r.status_code}", detail=r.text[:500])

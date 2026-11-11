@@ -130,6 +130,22 @@ def fetch_candidates(cfg: dict) -> list[list[dict]]:
 
 # ------------------------------------------------------------------ rank
 
+# Hard gate, in code, before any model sees a story: an LLM picker missed a
+# "CEO sued over affair" headline once. Private lives, allegations against
+# people, death, violence and party politics never become a joke reel.
+_BANNED = re.compile(
+    r"\b(affair|scandal|sex(ual)?|mistress|divorce|dating|lawsuit|sued?|sues|suing|alleg\w*|"
+    r"accus\w*|arrest\w*|indict\w*|convict\w*|charged|fraud|spy|espionage|dies|died|dead|"
+    r"death|kill\w*|murder\w*|shoot\w*|suicide|rape\w*|assault\w*|abus\w*|harass\w*|"
+    r"cancer|diagnos\w*|hospitali[sz]ed|war|invasion|missile|election|democrats?|"
+    r"republicans?|trump|biden|congress|senate)\b", re.I)
+
+
+def banned(title: str) -> bool:
+    """Pure. True when a headline must never be turned into a funny reel."""
+    return bool(_BANNED.search(title))
+
+
 def _key(title: str) -> frozenset[str]:
     return frozenset(w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 3)
 
@@ -147,7 +163,7 @@ def rank(lists: list[list[dict]], used: list[str], limit: int) -> list[dict]:
                 continue
             c, k = src[depth], _key(src[depth]["title"])
             dup = any(k and len(k & o) / max(1, min(len(k), len(o))) >= 0.6 for o in keys)
-            if c["id"] in seen or dup:
+            if c["id"] in seen or dup or banned(c["title"]):
                 continue
             seen.add(c["id"])
             keys.append(k)
