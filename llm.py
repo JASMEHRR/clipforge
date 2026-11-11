@@ -306,6 +306,8 @@ def _ollama_complete(schema, prompt, cfg):
         f"{base}/api/generate",
         json={"model": cfg["llm"]["ollama_model"], "prompt": prompt,
               "format": _strip_unsupported(schema), "stream": False,
+              # qwen3 "thinks" before answering by default: a script took >10 min
+              "think": False,
               # room for a long prompt + a whole script; the default 4k context cut both
               "options": {"num_ctx": int(cfg["llm"].get("ollama_num_ctx", 8192)),
                           "temperature": float(cfg["llm"].get("temperature", 0.4))}},
