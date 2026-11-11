@@ -921,6 +921,10 @@ def make_story(cfg: dict, post: dict, context: str, provider: str | None = None,
                     if v2 is None or v2["score"] > verdict["score"]:
                         script, verdict = again, v2
             (job_dir / "judge.json").write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+            # kept even when rejected, so a dropped script can still be read
+            (job_dir / "script.json").write_text(json.dumps({"post": post, "context": context,
+                                                             **script}, indent=2),
+                                                 encoding="utf-8")
             if not passes(verdict, cfg):          # not good enough: no render time spent
                 raise ExplainError(f"script scored {verdict['score']:.0f}/100, below the bar",
                                    detail="; ".join(verdict["problems"])[:400], retryable=False)

@@ -248,12 +248,18 @@ def _groq_complete(schema, prompt, cfg):
         json={"model": cfg["llm"]["groq_model"],
               # json_object mode has no schema argument: the schema rides in the prompt
               "messages": [{"role": "user", "content": prompt + SCHEMA_NOTE
-                            + json.dumps(_strip_unsupported(schema))}],
+                            # compact: the free tier allows only ~8k tokens a minute
+                            + json.dumps(_strip_unsupported(schema, ("minLength", "maxLength",
+                                                                     "minimum", "maximum")),
+                                         separators=(",", ":"))}],
               "response_format": {"type": "json_object"},
               "temperature": float(cfg["llm"].get("temperature", 0.4))},
         timeout=float(cfg["llm"].get("groq_timeout_s", 60)),
     )
     if r.status_code != 200:
+        if r.status_code == 429:         # per-minute limit: wait it out, then retry
+            m = re.search(r"try again in ([\d.]+)s", r.text)
+            time.sleep(min(float(m.group(1)) + 1 if m else 20.0, 45.0))
         raise LLMError(f"groq HTTP {r.status_code}", detail=r.text[:500])
     return r.json()["choices"][0]["message"]["content"]
 
