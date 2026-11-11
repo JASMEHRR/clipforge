@@ -711,7 +711,7 @@ _EXPLAIN_ITEM = {
         "icon": {"type": "string", "maxLength": 16},       # one emoji, or ""
         "value": {"type": "number"},
         "unit": {"type": "string", "enum": ["none", "$", "%"]},   # Gemini rejects an empty enum value
-        "cue": {"type": "string", "minLength": 1, "maxLength": 40},
+        "cue": {"type": "string", "minLength": 1, "maxLength": 160},   # models often quote the whole line; cue_times matches it word by word
     },
     "required": ["label", "detail", "object", "icon", "value", "unit", "cue"],
     "additionalProperties": False,
