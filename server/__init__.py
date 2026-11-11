@@ -10,6 +10,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+import re
+
+_WS_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 from config import ROOT
 from logutil import get_logger
@@ -59,7 +62,11 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def _workspace_scope(request, call_next):
         import config
-        ws = request.headers.get("x-workspace") or "default"
+        # <video src> and download links cannot send headers: they carry the cookie
+        ws = (request.headers.get("x-workspace")
+              or request.cookies.get("clipforge_workspace") or "default")
+        if not _WS_ID.fullmatch(ws):     # it becomes a folder name: no '..', no slashes
+            ws = "default"
         token = config.current_workspace.set(ws)
         try:
             return await call_next(request)

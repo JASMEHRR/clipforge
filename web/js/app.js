@@ -90,6 +90,8 @@ function navigate() {
       return a;
     })));
   updateWorkspaceBadge();
+  // media requests (video, downloads) cannot send the X-Workspace header
+  document.cookie = `clipforge_workspace=${encodeURIComponent(localStorage.getItem(WORKSPACE_KEY) || "default")}; path=/; SameSite=Strict`;
   view.replaceChildren();
   (routes[name] || renderHome)(...rest.map(decodeURIComponent));
 }
