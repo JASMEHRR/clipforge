@@ -286,6 +286,18 @@ def _find(toks: list[str], cue: list[str], pos: int) -> int | None:
     return None
 
 
+_RANGE = re.compile(r"(\d[\d,.]*\s*[%a-zA-Z]*)\s*[-‐-―]\s*(\$?\d)")
+
+
+def speakable(line: str) -> str:
+    """Pure. A line as the voice should read it: '$70-$78' -> '$70 to $78'
+    (models write ranges with hyphens or odd Unicode dashes, which TTS reads
+    as a minus or skips, and the captions then show nonsense), and dashes
+    elsewhere become commas."""
+    line = _RANGE.sub(r"\1 to \2", line)
+    return re.sub(r"\s*[–—―]\s*", ", ", line).replace("‑", "-")
+
+
 def tighten_times(times: list[float], start: float, first_by: float,
                   max_gap: float) -> list[float]:
     """Pure. No dead air: the first item is on screen within `first_by` seconds
@@ -624,7 +636,7 @@ def produce(slides: list[dict], cast: list[dict], work: Path, clip_dir: Path,
     sections = [{"key": f"s{i}", "title": s["heading"],
                  "lines": [{"text": t, "visual": ""} for t in s["lines"]]}
                 for i, s in enumerate(slides)]
-    texts = [t for s in slides for t in s["lines"]]
+    texts = [speakable(t) for s in slides for t in s["lines"]]
     with stage_timer(log, f"voice_{tag}", timings):
         vcfg = {**cfg, "create": {**cfg["create"],
                                   "voice": {**cfg["create"]["voice"], **e.get("voice", {})}}}
@@ -891,7 +903,8 @@ def story_prompt(post: dict, context: str) -> str:
         "else \"\"), actor \"Narrator\" with a mood (happy, confident, worried, shocked, "
         "sad, thinking) that fits the beat, lines, items (label 1-3 words, detail, "
         "object \"\", icon = one emoji, value 0, unit \"none\" unless it is a number "
-        "slide, cue copied exactly from the slide's lines; the first cue from the first "
+        "slide, written as the FULL number (1750000000 for $1.75 billion, never 1.75), "
+        "cue copied exactly from the slide's lines; the first cue from the first "
         "line), facts.\nReturn only JSON matching the schema."
     )
 

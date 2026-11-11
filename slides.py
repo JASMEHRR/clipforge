@@ -137,7 +137,11 @@ def fmt_value(v: float, unit: str, target: float | None = None) -> str:
     """Pure. 30000, '$' -> '$30,000'; 4.5, '%' -> '4.5%'. Decimals follow
     `target` (the final value) so a count-up to 22 never shows '21.7'."""
     ref = v if target is None else target
-    s = f"{v:,.0f}" if abs(ref) >= 100 or float(ref).is_integer() else f"{v:,.1f}"
+    if abs(ref) >= 100 or float(ref).is_integer():
+        s = f"{v:,.0f}"
+    else:                                   # 1.75 stays 1.75, 4.5 stays 4.5
+        s = f"{v:,.2f}".rstrip("0").rstrip(".") if target is None else \
+            f"{v:,.{len(repr(float(ref)).split('.')[1][:2])}f}"
     return f"${s}" if unit == "$" else f"{s}%" if unit == "%" else s
 
 
@@ -305,10 +309,17 @@ def row_sprite(item: dict, w: int, h: int, number: int, u: float) -> np.ndarray:
     return pil_to_sprite(img)
 
 
+def stamp_text(text: str) -> str:
+    """Pure. The stamp's drawable words: Anton has no emoji or symbols, so
+    anything outside plain Latin would draw as a box. '' = no stamp at all."""
+    return " ".join("".join(ch for ch in str(text).upper() if ch.isascii() and
+                            (ch.isalnum() or ch in " !?$%&'.,-")).split())
+
+
 def stamp_sprite(text: str, u: float, seed: int) -> np.ndarray:
     """Red rubber stamp: double border, caps, ink speckle, tilted."""
     from PIL import Image, ImageDraw
-    t = text.upper().strip()
+    t = stamp_text(text) or "NOTE"
     f = font("head", 400, int(70 * u))
     tw = _measure(t, f)
     px, py, b1, b2, gap = int(34 * u), int(14 * u), int(7 * u), int(3 * u), int(9 * u)
@@ -444,8 +455,8 @@ class Slide:
                 px = int(px * 0.94)
             self.heading, self.hl = self._heading(heading, a, b, px)
         self.head_y = int(0.085 * p.h) + self.kicker.shape[0] + int(14 * u)
-        self.stamp = stamp_sprite(spec["sticker"], u, index) if spec.get("sticker", "").strip() \
-            else None
+        self.stamp = (stamp_sprite(spec["sticker"], u, index)
+                      if stamp_text(spec.get("sticker", "")) else None)
         self.parts: list[tuple] = []   # (sprite, cx, cy, at, style, number spot | None, item)
 
         if self.layout in ("cta", "post"):

@@ -179,3 +179,23 @@ def test_provider_ladder_skips_what_cannot_answer(monkeypatch):
     assert create.ladder(cfg, "gemini") == [("groq", "g1"), ("ollama", "o1"),
                                             ("gemini", "m1"), ("gemini", "m2")]
     assert create.ladder(cfg, "mock") == [("mock", None)]
+
+
+def test_speakable_ranges_and_dashes():
+    assert explain.speakable("Share price range: $70‑$78.") == "Share price range: $70 to $78."
+    assert explain.speakable("from 2019-2024 it grew") == "from 2019 to 2024 it grew"
+    assert explain.speakable("an island—maybe.") == "an island, maybe."
+    assert explain.speakable("plain line") == "plain line"
+
+
+def test_fmt_value_keeps_two_decimals_and_stamp_text_is_drawable():
+    assert slides.fmt_value(1.75, "$", 1.75) == "$1.75"
+    assert slides.fmt_value(1.7, "$", 1.75) == "$1.70"
+    assert slides.fmt_value(1750000000, "$") == "$1,750,000,000"
+    import numpy as np
+    assert isinstance(slides.stamp_sprite("\U0001F4B0 PAYDAY!", 1.0, 1), np.ndarray)
+
+
+def test_emoji_only_sticker_means_no_stamp():
+    assert slides.stamp_text("\U0001F4B0\U0001F911") == ""
+    assert slides.stamp_text("Pay‑day \U0001F4B0!") == "PAYDAY !"
