@@ -352,6 +352,14 @@ upload:
     text: "ClipForge"            # wordmark on the end card (Doto brand font)
     duration_s: 1.2              # 0.5-3.0s; length of the appended end card
 
+loop:                            # loop.py - results -> brief -> reels -> post packages -> Muse posts -> results
+  make_per_day: 2                # reels scout makes per cycle (nightly.bat runs one cycle)
+  ideas: 3                       # ideas written into the brief (cache/loop/brief.md)
+  lookback_days: 28              # results older than this don't steer the brief
+  package_days: 7                # package videos finished in the last N days
+  handoff_folder: ""             # a folder Muse can read (a Google Drive or OneDrive synced folder); empty = packages wait in cache/loop/outbox
+  results_folder: ""             # where Muse drops result files (schema loop_results); cache/loop/inbox is always read too
+
 scout:                           # scout.py - finds today's stories for the funny-reel channel (free sources only)
   subreddits: [technology, nvidia, gaming, business, pcmasterrace]   # top-of-day Atom feeds
   hacker_news: true

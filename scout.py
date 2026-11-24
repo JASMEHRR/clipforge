@@ -193,10 +193,22 @@ def mark_used(ids: list[str], cfg: dict) -> None:
 
 # ------------------------------------------------------------------ pick + read
 
-def pick_prompt(cands: list[dict], n: int) -> str:
+def loop_note() -> str:
+    """What the content loop learned from real results (cache/loop/brief.json),
+    as one line for the picker. '' when there is no brief or too little data."""
+    try:
+        from loop_logic import prompt_note
+        brief = json.loads((ROOT / "cache" / "loop" / "brief.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, ImportError):
+        return ""
+    return prompt_note(brief)
+
+
+def pick_prompt(cands: list[dict], n: int, note: str = "") -> str:
     rows = "\n".join(f"{i}. [{c['source']}] {c['title']}" + (f" - {c['summary']}" if c["summary"]
                                                             else "") for i, c in enumerate(cands))
-    return (
+    learned = f"What your own channel's results say: {note}\n\n" if note else ""
+    return learned + (
         f"These are today's most discussed tech, business and gaming stories. Pick the {n} "
         "that would make the best 30-45 second funny commentary reel: something surprising, "
         "ironic or absurd that a casual viewer gets in one sentence (a company doing "
@@ -217,7 +229,7 @@ def pick(cands: list[dict], n: int, cfg: dict, provider: str | None) -> list[dic
     import create
     if provider != "mock":
         try:
-            data = create.ask("story_picks", pick_prompt(cands, n), cfg, provider,
+            data = create.ask("story_picks", pick_prompt(cands, n, loop_note()), cfg, provider,
                               {"candidates": len(cands)})
             idx = [p["index"] for p in data["picks"] if 0 <= p["index"] < len(cands)]
             chosen = [cands[i] for i in dict.fromkeys(idx)][:n]

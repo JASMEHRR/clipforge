@@ -813,7 +813,70 @@ REEL_JUDGE = {
     "additionalProperties": False,
 }
 
+# Content loop (loop.py). Results Muse sends back after posting, one file per
+# batch: never trusted blindly, since another system writes it.
+LOOP_RESULTS = {
+    "type": "object",
+    "properties": {
+        "posts": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "platform": {"type": "string", "enum": ["youtube", "instagram", "linkedin"]},
+                    "key": {"type": "string", "maxLength": 300},
+                    "title": {"type": "string", "maxLength": 300},
+                    "topic": {"type": "string", "maxLength": 80},
+                    "format": {"type": "string", "maxLength": 30},
+                    "url": {"type": "string", "maxLength": 500},
+                    "posted_at": {"type": "string", "maxLength": 40},
+                    "views": {"type": "number", "minimum": 0},
+                    "likes": {"type": "number", "minimum": 0},
+                    "comments": {"type": "number", "minimum": 0},
+                    "shares": {"type": "number", "minimum": 0},
+                    "saves": {"type": "number", "minimum": 0},
+                    "watch_pct": {"type": "number", "minimum": 0, "maximum": 100},
+                },
+                "required": ["platform", "key", "posted_at"],
+            },
+        },
+    },
+    "required": ["posts"],
+}
+
+# One post package handed to Muse: the same video with text and a time per platform.
+_PLATFORM_POST = {"type": "object", "properties": {"post_at": {"type": "string"}}, "required": ["post_at"]}
+LOOP_POST = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1},
+        "video": {"type": "string"},
+        "title": {"type": "string"},
+        "format": {"type": "string"},
+        "approval": {"type": "string", "enum": ["approved", "pending", "rejected"]},
+        "made_at": {"type": "string"},
+        "platforms": {
+            "type": "object",
+            "properties": {
+                "youtube": {**_PLATFORM_POST, "properties": {"title": {"type": "string", "maxLength": 100},
+                                                             "description": {"type": "string"}, "post_at": {"type": "string"}}},
+                "instagram": {**_PLATFORM_POST, "properties": {"caption": {"type": "string", "maxLength": 2200},
+                                                               "post_at": {"type": "string"}}},
+                "linkedin": {**_PLATFORM_POST, "properties": {"text": {"type": "string", "maxLength": 3000},
+                                                              "post_at": {"type": "string"}}},
+            },
+            "required": ["youtube", "instagram", "linkedin"],
+        },
+        "status": {"type": "string", "enum": ["ready", "handed_off", "posted", "skipped"]},
+    },
+    "required": ["id", "key", "video", "approval", "platforms", "status"],
+}
+
 SCHEMAS: dict[str, dict] = {
+    "loop_results": LOOP_RESULTS,
+    "loop_post": LOOP_POST,
     "ingest_info": INGEST_INFO,
     "transcript": TRANSCRIPT,
     "scene_list": SCENE_LIST,
