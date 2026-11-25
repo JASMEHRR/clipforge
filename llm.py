@@ -410,6 +410,9 @@ def _mock_complete(task, schema, prompt, context):
     if task == "fact_check":
         # Keyless runs exercise the full render path; the mock never edits facts.
         return {"verdict": "pass", "issues": []}
+    if task == "blocky_story":
+        return _mock_blocky_story(str(context.get("premise") or "In this town, "
+                                      "every time you yawn, you shrink."))
     if task == "explainer_script" and context.get("topic"):
         return _mock_explainer_script(str(context["topic"]))
     if task == "explainer_shorts" and context.get("topic"):
@@ -418,6 +421,47 @@ def _mock_complete(task, schema, prompt, context):
                 "lines": ["The full breakdown is on our channel."]}
         return {"shorts": [{"title": "Mock short", "slides": [s[2], s[4], last]}]}
     return synthesize_from_schema(schema, seed=task)
+
+
+def _mock_blocky_story(premise: str) -> dict:
+    """Deterministic, schema-valid blocky story (exercises every camera and
+    several actions) for keyless runs."""
+    cast = [
+        {"id": "milo", "name": "Milo", "shape": "person", "shirt": "red",
+         "pants": "navy", "skin": "yellow", "hair": "short", "hair_color": "brown",
+         "size": "kid", "extras": []},
+        {"id": "gran", "name": "Grandma", "shape": "person", "shirt": "purple",
+         "pants": "grey", "skin": "light", "hair": "bun", "hair_color": "white",
+         "size": "adult", "extras": ["glasses"]},
+    ]
+    beats = [
+        ("top_down", "street", "idle", "neutral", "group", "whoosh", premise),
+        ("push_in", "street", "walk", "smile", "milo", "none",
+         "Milo has never yawned in his whole life."),
+        ("close_up", "classroom", "talk", "worried", "milo", "none",
+         "Then math class starts, and his mouth begins to open."),
+        ("shake", "classroom", "shrink", "shock", "milo", "pop",
+         "He yawns, and he shrinks to the size of a pencil."),
+        ("orbit", "house", "wave", "laugh", "gran", "ding",
+         "Grandma has a plan, and she brings a giant pizza."),
+        *[("player", "house", "idle", "smile", "group", "none",
+           f"Try {n}. We eat pizza and stay wide awake.")
+          for n in ("one", "two", "three", "four", "five", "six")],
+        ("reveal", "house", "celebrate", "grin", "group", "riser",
+         "Would you stay awake in this town?"),
+    ]
+    shots = []
+    for cam, place, action, face, focus, sfx, text in beats:
+        who = ["milo", "gran"] if focus == "group" else [focus]
+        shots.append({"text": text, "place": place, "camera": cam, "focus": focus,
+                      "actors": [{"id": w, "action": action, "face": face,
+                                  "prop": "pizza" if w == "gran" else "none"}
+                                 for w in who],
+                      "sfx": sfx, "emphasis": [], "sign": ""})
+    return {"title": "Mock blocky story", "premise": premise[:160],
+            "description": "mock: a blocky story for keyless runs.",
+            "hashtags": [f"#mock{k}" for k in range(8)], "cast": cast,
+            "shots": shots}
 
 
 def _mock_explainer_script(topic: str) -> dict:

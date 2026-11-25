@@ -874,7 +874,118 @@ LOOP_POST = {
     "required": ["id", "key", "video", "approval", "platforms", "status"],
 }
 
+# --- Blocky mode (blocky.py): toy-brick 3D story Shorts ---------------------
+# Every enum below is something assets/blocky/blocky.js can draw; keep the two
+# in step (tests/test_blocky.py checks the JS lists against these).
+BLOCKY_PLACES = ("street", "house", "school", "park", "shop", "city", "room",
+                 "classroom", "kitchen")
+BLOCKY_CAMERAS = ("player", "wide", "push_in", "close_up", "orbit", "low_angle", "top_down",
+                  "pan", "shake", "whip", "reveal")
+BLOCKY_ACTIONS = ("idle", "walk", "run", "sneak", "jump", "celebrate", "wave",
+                  "dance", "shock", "cry", "fall", "spin", "point", "sit", "shrink",
+                  "grow", "float", "talk", "lose_part")
+BLOCKY_FACES = ("neutral", "smile", "grin", "laugh", "shock", "sad", "angry",
+                "worried", "smug", "cry", "love", "cool", "ko")
+BLOCKY_COLORS = ("red", "blue", "green", "yellow", "orange", "purple", "pink",
+                 "white", "black", "brown", "grey", "teal", "navy", "gold", "lime",
+                 "cyan")
+BLOCKY_SKINS = ("yellow", "light", "tan", "brown", "dark")
+BLOCKY_HAIR = ("none", "short", "long", "bun", "spiky", "cap", "tophat", "crown",
+               "bow")
+BLOCKY_SHAPES = ("person", "house", "car", "phone", "fridge", "tree", "cake", "dog",
+                 "cat")
+BLOCKY_SIZES = ("baby", "kid", "adult", "giant")
+BLOCKY_PROPS = ("none", "phone", "pizza", "book", "money", "gift", "ball", "trophy",
+                "icecream", "burger")
+BLOCKY_EXTRAS = ("glasses", "mustache", "blush", "tie")
+BLOCKY_SFX = ("none", "pop", "whoosh", "ding", "riser")
+BLOCKY_ID = "^[a-z][a-z0-9_]{0,15}$"
+
+# Option fields are loose strings on purpose: free models often swap two lists
+# (a face in the action slot) and one slip must not throw away a whole story.
+# blocky.clean_story maps every value onto the BLOCKY_* lists above.
+_BLOCKY_WORD = {"type": "string", "minLength": 1, "maxLength": 24}
+
+_BLOCKY_CAST = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "pattern": BLOCKY_ID},
+        "name": {"type": "string", "minLength": 1, "maxLength": 24},
+        "shape": _BLOCKY_WORD,
+        "shirt": _BLOCKY_WORD,
+        "pants": _BLOCKY_WORD,
+        "skin": _BLOCKY_WORD,
+        "hair": _BLOCKY_WORD,
+        "hair_color": _BLOCKY_WORD,
+        "size": _BLOCKY_WORD,
+        "extras": {"type": "array",
+                   "items": _BLOCKY_WORD,
+                   "maxItems": 3},
+    },
+    "required": ["id", "name", "shape", "shirt", "pants", "skin", "hair",
+                 "hair_color", "size"],
+    "additionalProperties": False,
+}
+
+_BLOCKY_SHOT = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 200},
+        "place": _BLOCKY_WORD,
+        "camera": _BLOCKY_WORD,
+        "focus": {"type": "string", "minLength": 1, "maxLength": 16},
+        "actors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "pattern": BLOCKY_ID},
+                    "action": _BLOCKY_WORD,
+                    "face": _BLOCKY_WORD,
+                    "prop": _BLOCKY_WORD,
+                },
+                "required": ["id", "action", "face", "prop"],
+                "additionalProperties": False,
+            },
+            "minItems": 1,
+            "maxItems": 4,
+        },
+        "sfx": _BLOCKY_WORD,
+        "emphasis": {"type": "array",
+                     "items": {"type": "string", "minLength": 1, "maxLength": 24},
+                     "maxItems": 3},
+        "sign": {"type": "string", "maxLength": 24},
+    },
+    "required": ["text", "place", "camera", "focus", "actors", "sfx", "emphasis",
+                 "sign"],
+    "additionalProperties": False,
+}
+
+# LLM output (or a hand-written --story-file): one blocky story Short. `focus`
+# is a cast id, "group" or "sign"; `sign` is "" for none. title/hashtags follow
+# CLIP_METADATA's limits so metadata.json is accepted by the Library/uploads.
+BLOCKY_STORY = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 60},
+        "premise": {"type": "string", "minLength": 1, "maxLength": 160},
+        "description": {"type": "string", "minLength": 1, "maxLength": 600},
+        # loose on purpose: a missing '#' must not throw away a whole story;
+        # blocky.clean_hashtags turns these into CLIP_METADATA-valid tags
+        "hashtags": {"type": "array",
+                     "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                     "minItems": 1, "maxItems": 15},
+        "cast": {"type": "array", "items": _BLOCKY_CAST, "minItems": 1,
+                 "maxItems": 6},
+        "shots": {"type": "array", "items": _BLOCKY_SHOT, "minItems": 12,
+                  "maxItems": 40},
+    },
+    "required": ["title", "premise", "description", "hashtags", "cast", "shots"],
+    "additionalProperties": False,
+}
+
 SCHEMAS: dict[str, dict] = {
+    "blocky_story": BLOCKY_STORY,
     "loop_results": LOOP_RESULTS,
     "loop_post": LOOP_POST,
     "ingest_info": INGEST_INFO,

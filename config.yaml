@@ -134,6 +134,19 @@ captions:
       uppercase: false
       highlight_scale: 100
       style: box
+    word-pop:                        # blocky story Shorts: one word at a time, popping in
+      font: Montserrat Black
+      font_size: 118
+      primary_color: "&H00FFFFFF"
+      highlight_color: "&H0000E1FF"  # emphasis words: warm yellow (BGR)
+      outline_color: "&H00000000"
+      outline: 9
+      shadow: 2
+      uppercase: true
+      highlight_scale: 100
+      pop_scale: 128
+      max_words: 1
+      style: pop
 
 reframe:
   output: { width: 1080, height: 1920 }
@@ -439,6 +452,63 @@ explain:                         # explain.py - PPT-style money explainers synce
     fallback_speed: 1.0
   object_px: 512                 # square flat object pictures (art.py; cached per object name)
   object_style: "flat vector illustration, simple bold shapes, bright clean colors, centered, isolated on a plain white background, no text"
+
+blocky:                          # Blocky mode (blocky.py): toy-brick 3D story Shorts ("What if..." / "In this town...")
+  workspace: blocky              # library + YouTube channel these go to (created on first run)
+  workspace_name: Blocky Stories
+  made_for_kids: true            # blocky cartoons read as child-directed on YouTube; set false only if the channel is not for kids
+  width: 1080
+  height: 1920
+  fps: 30
+  words_min: 180                 # narration length: ~180-280 words = ~50-75 s at ~3.9 words/s
+  words_max: 280                 # (hits run 56-180 s, median ~100 s; shorter tested well for new channels)
+  shots_min: 20                  # one sentence per shot, a cut every ~2 s
+  shots_max: 32
+  line_gap_s: 0.12               # silence between narrated lines (snappy)
+  tail_s: 1.2                    # hold after the last line (the question to viewers)
+  whisper_model: small
+  caption_preset: word-pop
+  caption_anchor: 0.62
+  music_tracks: [sneaky_snitch, carefree]   # mischief comedy beds; picked per video
+  music_volume_db: -20
+  sfx_max: 14
+  sfx_volume_db: -8
+  virality_score: 60
+  premises:                      # seed ideas; with none left, the model invents one
+    - "What if your house followed you to school?"
+    - "In this town, every time you lie, a brick falls off your body."
+    - "What if your shadow went to school instead of you?"
+    - "In this town, whoever yawns first has to shrink."
+    - "What if your pet dog became the mayor?"
+    - "In this town, you can only say three words a day."
+    - "What if your fridge got jealous of your new microwave?"
+    - "In this town, every time you laugh, you float a little higher."
+    - "What if your phone ran away because you used it too much?"
+    - "In this town, the oldest person has to be the youngest."
+  voice:                         # used instead of create.voice for these videos
+    # Hits run 3.5-4.7 words/s at a 170-213 Hz median pitch (lively storyteller).
+    # elevenlabs: needs ELEVENLABS_API_KEY in .env (free tier ~10k chars/month,
+    # ~8-10 videos); without the key every run falls back to the edge voice below.
+    engine: elevenlabs
+    elevenlabs_voice_id: TX3LPaxmHKxFdv7VOQHJ   # "Liam", young energetic narrator (premade)
+    elevenlabs_model: eleven_multilingual_v2
+    elevenlabs_speed: 1.1
+    stability: 0.4
+    similarity_boost: 0.8
+    style: 0.35
+    edge_fallback_voice: en-US-GuyNeural
+    voice: en-US-GuyNeural       # free edge voice, measured 2026-11-25 at +35%/+15Hz: 3.85 w/s, ~174 Hz
+    rate: "+35%"
+    pitch: "+15Hz"
+    fallback_voice: am_puck      # local Kokoro voice for the whole video if edge-tts fails
+    fallback_speed: 1.08
+    lang: en-us
+    model_dir: cache/models/kokoro
+    model_url: https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+    voices_url: https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+  browser_channels: [chrome, msedge]   # installed browser that draws the 3D frames (headless)
+  jpeg_quality: 0.93
+  frame_timeout_s: 60
 
 create:                          # Create mode (create.py): original kids explainer videos from scratch
   audience: "children aged 5 to 9"

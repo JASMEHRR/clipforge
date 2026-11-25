@@ -212,7 +212,8 @@ Style: Base,{family},{preset['font_size']},{preset['primary_color']},{preset['hi
                    f"{margin_v},1\n")
     header += "\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
-    lines = build_caption_lines(words, int(ccfg["max_words_per_line"]))
+    lines = build_caption_lines(words, int(preset.get("max_words",
+                                                      ccfg["max_words_per_line"])))
     events = []
     for line in lines:
         tokens = [_esc(w["word"].upper() if preset.get("uppercase")
@@ -220,6 +221,16 @@ Style: Base,{family},{preset['font_size']},{preset['primary_color']},{preset['hi
         if style_kind == "fade":
             events.append((line["start"], line["end"],
                            r"{\fad(150,150)}" + " ".join(tokens)))
+            continue
+        if style_kind == "pop":
+            # The line pops in (overshoot, settles in 90 ms); a line holding a
+            # word marked "emph" takes the highlight colour.
+            pop = int(preset.get("pop_scale", 125))
+            tint = (r"\c" + preset["highlight_color"] + "&"
+                    if any(w.get("emph") for w in line["words"]) else "")
+            events.append((line["start"], line["end"],
+                           "{" + tint + rf"\fscx{pop}\fscy{pop}"
+                           + r"\t(0,90,\fscx100\fscy100)}" + " ".join(tokens)))
             continue
         for k, w in enumerate(line["words"]):
             start = line["start"] if k == 0 else w["start"]

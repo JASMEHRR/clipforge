@@ -525,8 +525,9 @@ def render_track(shots: list[dict], bounds: list[float], w: int, h: int,
 def finish_video(track: Path, audio: Path, words: list[dict], clip_dir: Path,
                  cfg: dict, *, captions: bool, preset: str,
                  anchor: float | None, music_path: Path | None,
-                 music_db: float) -> Path:
-    """Mux narration, burn captions, mix music + loudnorm → clip_dir/final.mp4."""
+                 music_db: float, sfx_cues: list[dict] | None = None) -> Path:
+    """Mux narration, burn captions, mix music (+ optional sound effects,
+    music.mix_audio cues) + loudnorm → clip_dir/final.mp4."""
     from captions import caption_clip
     clip_dir.mkdir(parents=True, exist_ok=True)
     muxed = clip_dir / "muxed.mp4"
@@ -540,7 +541,7 @@ def finish_video(track: Path, audio: Path, words: list[dict], clip_dir: Path,
         stage = captioned
     final = clip_dir / "final.mp4"
     mixed = music.mix_audio(stage, final, cfg, music_path=music_path,
-                            volume_db=music_db)
+                            volume_db=music_db, sfx_cues=sfx_cues)
     if mixed is None:
         shutil.copyfile(stage, final)
     for tmp in (muxed, clip_dir / "captioned.mp4"):

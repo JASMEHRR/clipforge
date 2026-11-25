@@ -108,11 +108,13 @@ def _edge_lines(texts: list[str], out_dir: Path, v: dict) -> list[dict]:
     from ffutil import run_ffmpeg
     voice = str(v.get("voice", "en-US-AvaMultilingualNeural"))
     rate = str(v.get("rate", "+0%"))
+    pitch = str(v.get("pitch", "+0Hz"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    log.info("tts: %d line(s) via edge-tts (voice=%s, rate=%s)", len(texts), voice, rate)
+    log.info("tts: %d line(s) via edge-tts (voice=%s, rate=%s, pitch=%s)",
+             len(texts), voice, rate, pitch)
 
     async def one(text: str, mp3: Path) -> None:
-        await edge_tts.Communicate(text, voice, rate=rate).save(str(mp3))
+        await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(mp3))
 
     results = []
     for i, text in enumerate(texts):
@@ -134,6 +136,54 @@ def _edge_lines(texts: list[str], out_dir: Path, v: dict) -> list[dict]:
     return results
 
 
+def _elevenlabs_lines(texts: list[str], out_dir: Path, v: dict) -> list[dict]:
+    """ElevenLabs text-to-speech (needs ELEVENLABS_API_KEY in .env; the free
+    tier is about 10,000 characters a month). Each line -> 24 kHz mono wav.
+    Raises VoiceError on a missing key or any API failure (callers fall back)."""
+    import os
+    try:
+        import requests
+        import soundfile as sf
+    except ImportError as e:
+        raise VoiceError("requests / soundfile not installed",
+                         detail="pip install -r requirements.txt") from e
+    from ffutil import run_ffmpeg
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        raise VoiceError("ELEVENLABS_API_KEY is not set in .env")
+    voice_id = str(v.get("elevenlabs_voice_id", "pNInz6obpgDQGcFmaJgB"))
+    model = str(v.get("elevenlabs_model", "eleven_multilingual_v2"))
+    settings = {"stability": float(v.get("stability", 0.4)),
+                "similarity_boost": float(v.get("similarity_boost", 0.8)),
+                "style": float(v.get("style", 0.3)), "use_speaker_boost": True,
+                "speed": float(v.get("elevenlabs_speed", 1.1))}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log.info("tts: %d line(s) via ElevenLabs (voice=%s, model=%s)", len(texts),
+             voice_id, model)
+    results = []
+    for i, text in enumerate(texts):
+        mp3, wav = out_dir / f"line_{i:02d}.mp3", out_dir / f"line_{i:02d}.wav"
+        try:
+            r = requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                params={"output_format": "mp3_44100_128"},
+                headers={"xi-api-key": key, "Accept": "audio/mpeg"},
+                json={"text": text, "model_id": model, "voice_settings": settings},
+                timeout=90)
+        except requests.RequestException as e:
+            raise VoiceError(f"ElevenLabs request failed on line {i}",
+                             detail=str(e)[:300]) from e
+        if r.status_code != 200 or not r.content:
+            raise VoiceError(f"ElevenLabs HTTP {r.status_code} on line {i}",
+                             detail=r.text[:300])
+        mp3.write_bytes(r.content)
+        run_ffmpeg(["-i", mp3, "-ac", "1", "-ar", "24000", wav])
+        mp3.unlink(missing_ok=True)
+        info = sf.info(str(wav))
+        results.append({"path": str(wav), "duration_s": round(info.frames / info.samplerate, 3)})
+    return results
+
+
 def synthesize_lines(lines: list[str], out_dir: str | Path,
                      cfg: dict | None = None) -> list[dict]:
     """Synthesize each line to `out_dir/line_NN.wav`.
@@ -146,6 +196,15 @@ def synthesize_lines(lines: list[str], out_dir: str | Path,
     if not texts or any(not t for t in texts):
         raise VoiceError("synthesize_lines needs a non-empty text for every line")
     v = _vcfg(cfg)
+    if str(v.get("engine", "kokoro")) == "elevenlabs":
+        try:
+            return _elevenlabs_lines(texts, Path(out_dir), v)
+        except VoiceError as e:
+            # whole batch falls back to the free edge voice, never a mix
+            log.warning("ElevenLabs voice failed (%s) - using edge voice '%s' instead",
+                        e.message, v.get("edge_fallback_voice", "en-US-GuyNeural"))
+            v = {**v, "engine": "edge",
+                 "voice": v.get("edge_fallback_voice", "en-US-GuyNeural")}
     if str(v.get("engine", "kokoro")) == "edge":
         try:
             return _edge_lines(texts, Path(out_dir), v)
