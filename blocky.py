@@ -20,6 +20,8 @@ CLI:
   .venv/Scripts/python.exe blocky.py --premise "What if your house followed you to school?"
   .venv/Scripts/python.exe blocky.py --story-file my_story.json   # story written elsewhere (e.g. Claude)
   .venv/Scripts/python.exe blocky.py --provider mock              # keyless render check
+  .venv/Scripts/python.exe blocky.py --story-file v1.json --revise-notes "Slower ending"
+      # next version of that story, rewritten to answer review notes (laptop bridge redo)
 """
 from __future__ import annotations
 
@@ -200,6 +202,34 @@ def write_story(premise: str | None, avoid: list[str], cfg: dict,
                 provider: str | None) -> dict:
     return create.ask("blocky_story", story_prompt(premise, avoid, cfg), cfg,
                       provider, {"premise": premise or ""})
+
+
+REVISE_NOTES_MAX = 3000
+
+
+def revise_prompt(story: dict, notes: str, cfg: dict) -> str:
+    """The writer's brief for the next version of ONE story: the same rules and
+    options as story_prompt, the previous version, and the reviewer's notes.
+    Narrow on purpose: it rewrites this story to answer these notes, nothing else."""
+    previous = {k: story.get(k) for k in ("title", "premise", "description", "hashtags",
+                                          "cast", "shots")}
+    return (
+        story_prompt(str(story.get("premise") or ""), [], cfg)
+        + "\n\nTHIS IS A REVISION, not a new story. Below is the previous version and a "
+        "reviewer's notes on it. Write the next version of the SAME story: keep the "
+        "premise, the cast and everything the notes do not mention, and change what the "
+        "notes ask for. Every rule above still applies.\n\n"
+        f"REVIEWER NOTES:\n{notes.strip()[:REVISE_NOTES_MAX]}\n\n"
+        f"PREVIOUS VERSION (JSON):\n{json.dumps(previous, ensure_ascii=False)}\n\n"
+        "Return only the full new story as JSON matching the schema."
+    )
+
+
+def revise_story(story: dict, notes: str, cfg: dict, provider: str | None) -> dict:
+    if not notes.strip():
+        raise BlockyError("revise notes are empty", retryable=False)
+    return create.ask("blocky_story", revise_prompt(story, notes, cfg), cfg, provider,
+                      {"premise": str(story.get("premise") or "")})
 
 
 def load_story_file(path: str | Path) -> dict:
@@ -711,15 +741,20 @@ def _music(b: dict, rng: random.Random, notes: list[str]) -> tuple[Path | None, 
 
 def make_video(cfg: dict, provider: str | None = None, premise: str | None = None,
                story_file: str | Path | None = None,
-               rng: random.Random | None = None) -> Path:
+               rng: random.Random | None = None,
+               revise_notes: str | None = None) -> Path:
     """Make one blocky story Short. Returns the job directory; job.json always
-    records the outcome (done / failed)."""
+    records the outcome (done / failed). With `revise_notes` (needs `story_file`)
+    the story is first rewritten by the LLM to answer the notes."""
     from pipeline import new_job_dir
     import transcribe
 
     b = _bcfg(cfg)
     rng = rng or random.Random()
-    resolved = "file" if story_file else llm.resolve_provider(cfg, provider)
+    if revise_notes and not story_file:
+        raise BlockyError("revise notes need the story file they are about", retryable=False)
+    resolved = ("file" if story_file and not revise_notes
+                else llm.resolve_provider(cfg, provider))
     fps = int(b.get("fps", 30))
     w, h = int(b.get("width", 1080)), int(b.get("height", 1920))
     if not premise and not story_file:
@@ -739,6 +774,13 @@ def make_video(cfg: dict, provider: str | None = None, premise: str | None = Non
         with stage_timer(log, "script", timings):
             raw = (load_story_file(story_file) if story_file
                    else write_story(premise, load_used(), cfg, resolved))
+            if revise_notes:
+                notes.append(f"revised to answer review notes: {revise_notes[:200]}")
+                raw = revise_story(raw, revise_notes, cfg, resolved)
+            # The story as written (schema format, before clean_story's renderer
+            # mappings): a later --revise-notes or --story-file run starts from it.
+            (job_dir / "story_raw.json").write_text(json.dumps(raw, indent=2),
+                                                    encoding="utf-8")
             story = clean_story(raw)
         premise = story["premise"]
         job["source"] = f"blocky:{premise}"
@@ -854,7 +896,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--count", type=int, default=1, help="videos to make (default 1)")
     ap.add_argument("--provider", help="LLM provider override (mock|gemini|groq|ollama)")
     ap.add_argument("--workspace", help="library + YouTube channel (default blocky.workspace)")
+    ap.add_argument("--revise-notes", help="review notes for the next version of the story "
+                                           "in --story-file (the LLM rewrites it, then it renders)")
     args = ap.parse_args(argv)
+    if args.revise_notes is not None and not args.story_file:
+        ap.error("--revise-notes needs --story-file (the version the notes are about)")
+    if args.revise_notes is not None and not args.revise_notes.strip():
+        ap.error("--revise-notes is empty")
     if args.count < 1:
         ap.error("--count must be at least 1")
     if args.story_file and args.count != 1:
@@ -872,7 +920,8 @@ def main(argv: list[str] | None = None) -> int:
     for n in range(args.count):
         job_dir = make_video(cfg, provider=args.provider,
                              premise=args.premise if n == 0 else None,
-                             story_file=args.story_file)
+                             story_file=args.story_file,
+                             revise_notes=args.revise_notes)
         status = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))["status"]
         print(f"[{n + 1}/{args.count}] {status}: {job_dir}")
         failed += status != "done"
