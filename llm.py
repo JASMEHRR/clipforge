@@ -308,17 +308,23 @@ def _ollama_complete(schema, prompt, cfg):
     import requests
     base = os.environ.get("OLLAMA_BASE_URL", cfg["llm"].get(
         "ollama_base_url", "http://localhost:11434"))
-    r = requests.post(
-        f"{base}/api/generate",
-        json={"model": cfg["llm"]["ollama_model"], "prompt": prompt,
-              "format": _strip_unsupported(schema), "stream": False,
-              # qwen3 "thinks" before answering by default: a script took >10 min
-              "think": False,
-              # room for a long prompt + a whole script; the default 4k context cut both
-              "options": {"num_ctx": int(cfg["llm"].get("ollama_num_ctx", 8192)),
-                          "temperature": float(cfg["llm"].get("temperature", 0.4))}},
-        timeout=float(cfg["llm"].get("ollama_timeout_s", 300)),
-    )
+    try:
+        r = requests.post(
+            f"{base}/api/generate",
+            json={"model": cfg["llm"]["ollama_model"], "prompt": prompt,
+                  "format": _strip_unsupported(schema), "stream": False,
+                  # qwen3 "thinks" before answering by default: a script took >10 min
+                  "think": False,
+                  # room for a long prompt + a whole script; the default 4k context cut both
+                  "options": {"num_ctx": int(cfg["llm"].get("ollama_num_ctx", 8192)),
+                              "temperature": float(cfg["llm"].get("temperature", 0.4))}},
+            timeout=float(cfg["llm"].get("ollama_timeout_s", 300)),
+        )
+    except requests.RequestException as e:
+        # A slow local model (a read timeout on the 4 GB GPU) must count as a failed
+        # provider, so create.ask moves on down the ladder instead of failing the video.
+        raise LLMError(f"ollama request failed: {type(e).__name__}", detail=str(e)[:500],
+                       retryable=True) from e
     if r.status_code != 200:
         raise LLMError(f"ollama HTTP {r.status_code}", detail=r.text[:500])
     return r.json()["response"]
